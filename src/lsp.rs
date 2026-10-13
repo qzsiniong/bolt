@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
@@ -56,21 +56,38 @@ pub struct LspClient {
 
 impl LspClient {
     /// Spawn `typescript-language-server --stdio` rooted at `scripts_dir` and
-    /// run the initialize handshake. Returns `None` when the binary is not
-    /// installed or the handshake fails/times out — the caller degrades
-    /// gracefully to a syntax-highlighting-only editor.
-    pub fn spawn(scripts_dir: &Path) -> Option<Self> {
-        let mut child = Command::new("typescript-language-server")
+    /// run the initialize handshake. Returns `Err` with the reason when the
+    /// binary is not installed or the handshake fails/times out — the caller
+    /// degrades gracefully to a syntax-highlighting-only editor.
+    pub fn spawn(scripts_dir: &Path) -> Result<Self, String> {
+        let server = find_server_binary()?;
+        let mut command = Command::new(&server);
+        command
             .arg("--stdio")
             .current_dir(scripts_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::null());
+        // The server script's shebang (`#!/usr/bin/env node`) needs `node` on
+        // PATH. When the app is launched from Finder the inherited PATH is
+        // minimal, so prepend the directory the server was found in (fnm/nvm
+        // version bin dirs contain `node` as well).
+        if let Some(bin_dir) = server.parent() {
+            let inherited = std::env::var("PATH").unwrap_or_default();
+            command.env("PATH", format!("{}:{inherited}", bin_dir.display()));
+        }
+        let mut child = command
             .spawn()
-            .ok()?;
+            .map_err(|e| format!("failed to spawn {}: {e}", server.display()))?;
 
-        let stdin: ChildStdin = child.stdin.take()?;
-        let stdout = child.stdout.take()?;
+        let stdin: ChildStdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "server stdin unavailable".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "server stdout unavailable".to_string())?;
 
         let (diagnostics_tx, diagnostics_rx) = unbounded();
         let (writer_tx, writer_rx) = unbounded::<String>();
@@ -139,11 +156,18 @@ impl LspClient {
             inner,
             diagnostics_rx,
         };
-        if client.initialize(scripts_dir) {
-            Some(client)
-        } else {
-            None // dropping kills the child process
-        }
+        // The server resolves the TypeScript compiler relative to the
+        // workspace, which usually has no node_modules. Resolve the server's
+        // real location (through version-manager symlinks) and point it at
+        // the sibling `typescript` package it was installed with.
+        let server_real = std::fs::canonicalize(&server).unwrap_or_else(|_| server.clone());
+        let tsserver = server_real.ancestors().find_map(|dir| {
+            let tsserver = dir.join("node_modules/typescript/lib/tsserver.js");
+            tsserver.is_file().then_some(tsserver)
+        });
+        client.initialize(scripts_dir, tsserver.as_deref())?;
+        eprintln!("LSP: ready ({})", server.display());
+        Ok(client)
     }
 
     pub fn is_alive(&self) -> bool {
@@ -159,20 +183,65 @@ impl LspClient {
         out
     }
 
-    fn initialize(&self, root: &Path) -> bool {
+    fn initialize(&self, root: &Path, tsserver_path: Option<&Path>) -> Result<(), String> {
+        let mut initialization_options = json!({});
+        if let Some(tsserver) = tsserver_path {
+            initialization_options["tsserver"] = json!({ "path": tsserver });
+        }
+        // Client capabilities matter: `textDocument.publishDiagnostics` is
+        // what makes typescript-language-server forward tsserver diagnostics
+        // to us at all (features.diagnosticsSupport in its source).
         let params = json!({
             "processId": std::process::id(),
             "rootUri": path_to_uri(root),
-            "capabilities": {},
-            "initializationOptions": {},
+            "capabilities": {
+                "workspace": {
+                    "applyEdit": true,
+                    "workspaceEdit": { "documentChanges": false },
+                    "didChangeConfiguration": { "dynamicRegistration": false },
+                    "configuration": true,
+                },
+                "textDocument": {
+                    "synchronization": {
+                        "dynamicRegistration": false,
+                        "willSave": false,
+                        "didSave": true,
+                    },
+                    "publishDiagnostics": {
+                        "relatedInformation": true,
+                        "versionSupport": false,
+                    },
+                    "hover": {
+                        "contentFormat": ["markdown", "plaintext"],
+                    },
+                    "completion": {
+                        "completionItem": {
+                            "snippetSupport": false,
+                            "commitCharactersSupport": true,
+                            "documentationFormat": ["markdown", "plaintext"],
+                            "labelDetailsSupport": false,
+                        },
+                    },
+                    "definition": {
+                        "linkSupport": true,
+                    },
+                    "codeAction": {
+                        "dynamicRegistration": false,
+                        "isPreferredSupport": true,
+                        "codeActionLiteralSupport": {
+                            "codeActionKind": {
+                                "valueSet": ["", "quickfix", "refactor", "source"],
+                            },
+                        },
+                    },
+                },
+            },
+            "initializationOptions": initialization_options,
         });
-        match self.request_with_timeout("initialize", params, INITIALIZE_TIMEOUT) {
-            Ok(_) => {
+        self.request_with_timeout("initialize", params, INITIALIZE_TIMEOUT)
+            .map(|_| {
                 self.notify("initialized", json!({}));
-                true
-            }
-            Err(_) => false,
-        }
+            })
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value, String> {
@@ -331,6 +400,51 @@ fn mark_dead(inner: &Inner) {
     inner.alive.store(false, Ordering::SeqCst);
 }
 
+/// Locate the `typescript-language-server` binary. GUI launches inherit a
+/// minimal PATH (`/usr/bin:/bin`…), so besides the current PATH also probe
+/// the well-known locations of version managers (fnm, nvm, volta) and
+/// global npm prefixes.
+fn find_server_binary() -> Result<PathBuf, String> {
+    const NAME: &str = "typescript-language-server";
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+
+    if let Ok(path_env) = std::env::var("PATH") {
+        dirs.extend(std::env::split_paths(&path_env));
+    }
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
+
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".npm-global/bin"));
+        dirs.push(home.join(".volta/bin"));
+        // fnm: ~/.local/share/fnm/node-versions/<ver>/installation/bin
+        let fnm_dir = std::env::var_os("FNM_DIR")
+            .map(PathBuf::from)
+            .or_else(|| Some(home.join(".local/share/fnm")));
+        if let Some(fnm) = fnm_dir {
+            push_version_bins(&fnm.join("node-versions"), "installation/bin", &mut dirs);
+        }
+        // nvm: ~/.nvm/versions/node/<ver>/bin
+        push_version_bins(&home.join(".nvm/versions/node"), "bin", &mut dirs);
+    }
+
+    dirs.into_iter()
+        .map(|dir| dir.join(NAME))
+        .find(|p| p.is_file())
+        .ok_or_else(|| {
+            "typescript-language-server not found (searched PATH, fnm, nvm, volta, homebrew)"
+                .to_string()
+        })
+}
+
+/// Add `<root>/<version>/<suffix>` for every version directory under `root`.
+fn push_version_bins(root: &Path, suffix: &str, dirs: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            dirs.push(entry.path().join(suffix));
+        }
+    }
+}
+
 /// Classify an inbound server message: response to our request, a server
 /// request (answered with a null result), or a notification.
 fn dispatch(msg: Value, inner: &Inner, reply_tx: &Sender<String>) {
@@ -484,7 +598,7 @@ mod tests {
     #[test]
     fn initialize_diagnostics_hover_completion() {
         let dir = unique_temp_dir("init");
-        let Some(client) = LspClient::spawn(&dir) else {
+        let Ok(client) = LspClient::spawn(&dir) else {
             eprintln!("SKIP: typescript-language-server not installed");
             return;
         };
@@ -523,7 +637,7 @@ mod tests {
         );
 
         // Hover over `console` should produce something.
-        client.did_open(&uri, "typescript", "console.log(1);\n");
+        client.did_change(&uri, 1, "console.log(1);\n");
         std::thread::sleep(Duration::from_millis(500));
         let hover = client
             .hover(&uri, position(0, 3))
@@ -531,7 +645,7 @@ mod tests {
         assert!(hover.is_some(), "expected hover info for `console`");
 
         // Completion after `console.` should contain `log`.
-        client.did_open(&uri, "typescript", "console.\n");
+        client.did_change(&uri, 2, "console.\n");
         std::thread::sleep(Duration::from_millis(500));
         let completions = client
             .completion(&uri, position(0, 8), None)

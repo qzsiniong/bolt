@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::base::dock::PanelEvent;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
@@ -298,6 +299,12 @@ impl Render for EditorPanel {
             .unwrap_or_else(|| "No script selected".to_string());
         let dirty = self.dirty;
 
+        let theme = cx.theme();
+        let border = theme.border;
+        let muted_fg = theme.muted_foreground;
+        let fg = theme.foreground;
+        let warning = theme.warning;
+
         let toolbar = div()
             .flex()
             .items_center()
@@ -305,7 +312,7 @@ impl Render for EditorPanel {
             .px_3()
             .py_2()
             .border_b_1()
-            .border_color(gpui::hsla(0., 0., 0.5, 0.2))
+            .border_color(border)
             .child(
                 Button::new("run")
                     .icon(IconName::Play)
@@ -329,15 +336,15 @@ impl Render for EditorPanel {
             .child(
                 div()
                     .text_sm()
-                    .text_color(gpui::hsla(0., 0., 0.7, 1.))
+                    .text_color(if self.current_script.is_some() {
+                        fg
+                    } else {
+                        muted_fg
+                    })
                     .child(title),
             )
             .child(if dirty {
-                div()
-                    .size_2()
-                    .rounded_full()
-                    .bg(gpui::hsla(0.13, 0.8, 0.55, 1.))
-                    .into_any_element()
+                div().size_2().rounded_full().bg(warning).into_any_element()
             } else {
                 div().into_any_element()
             });

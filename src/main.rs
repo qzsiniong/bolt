@@ -33,16 +33,22 @@ fn main() {
     let registry = Arc::new(registry);
 
     // Spawn the language server before the UI so the editor gets diagnostics,
-    // completions and hover from the start. Degrades to highlighting-only
-    // when typescript-language-server is not installed.
+    // completions and hover from the start. Failure reason is surfaced in the
+    // Console; the editor degrades to highlighting-only.
     let lsp_client = lsp::LspClient::spawn(&scripts_dir).map(Arc::new);
+    if let Err(reason) = &lsp_client {
+        eprintln!("LSP init failed: {reason}");
+    }
 
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
+    gpui_kit::application()
+        // Register the embedded icon/SVG bundle (required for Icon rendering).
+        .with_assets(gpui_kit::assets::Assets::new(""))
+        .run(move |cx| {
+            gpui_kit::init(cx);
 
-        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-            cx.new(|cx| workspace::Workspace::new(window, cx, registry.clone(), lsp_client))
-        })
-        .expect("Failed to open window");
-    });
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| workspace::Workspace::new(window, cx, registry.clone(), lsp_client))
+            })
+            .expect("Failed to open window");
+        });
 }

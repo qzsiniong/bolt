@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gpui_kit::*;
 use gpui_kit::base::dock::PanelEvent;
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 
@@ -129,6 +130,13 @@ impl Focusable for ScriptListPanel {
 
 impl Render for ScriptListPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let border = theme.border;
+        let muted_fg = theme.muted_foreground;
+        let danger = theme.danger;
+        let accent = theme.accent;
+        let muted = theme.muted;
+
         let header = div()
             .flex()
             .items_center()
@@ -136,7 +144,7 @@ impl Render for ScriptListPanel {
             .px_3()
             .py_2()
             .border_b_1()
-            .border_color(gpui::hsla(0., 0., 0.5, 0.2))
+            .border_color(border)
             .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Scripts"))
             .child(
                 Button::new("header-new")
@@ -153,7 +161,7 @@ impl Render for ScriptListPanel {
                 div()
                     .p_4()
                     .text_xs()
-                    .text_color(gpui::hsla(0., 0., 0.6, 1.))
+                    .text_color(muted_fg)
                     .child("No scripts yet. Click + to create one."),
             );
         } else {
@@ -164,11 +172,7 @@ impl Render for ScriptListPanel {
                 let ext = script.language.extension();
                 let name = script.name.clone();
 
-                let row_bg = if is_selected {
-                    gpui::hsla(0., 0., 0.5, 0.18)
-                } else {
-                    gpui::hsla(0., 0., 0., 0.)
-                };
+                let row_bg = if is_selected { accent.opacity(0.15) } else { gpui::transparent_black() };
 
                 let delete_cell: AnyElement = if is_confirming {
                     let fn_confirm = file_name.clone();
@@ -181,8 +185,7 @@ impl Render for ScriptListPanel {
                             div()
                                 .id(("del-confirm", idx))
                                 .text_xs()
-                                .text_color(gpui::hsla(0., 0.8, 0.55, 1.))
-                                .hover(|s| s.text_color(gpui::hsla(0., 0.9, 0.65, 1.)))
+                                .text_color(danger)
                                 .child("delete?")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.confirm_delete(fn_confirm.clone(), cx);
@@ -192,7 +195,7 @@ impl Render for ScriptListPanel {
                             div()
                                 .id(("del-cancel", idx))
                                 .text_xs()
-                                .text_color(gpui::hsla(0., 0., 0.6, 1.))
+                                .text_color(muted_fg)
                                 .child("cancel")
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     let _ = &fn_cancel;
@@ -201,18 +204,9 @@ impl Render for ScriptListPanel {
                         )
                         .into_any_element()
                 } else {
-                    let fn_req = file_name.clone();
-                    div()
-                        .id(("del", idx))
-                        .text_xs()
-                        .text_color(gpui::hsla(0., 0.7, 0.5, 1.))
-                        .hover(|s| s.text_color(gpui::hsla(0., 0.8, 0.55, 1.)))
-                        .child("✕")
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.request_delete(fn_req.clone(), cx);
-                        }))
-                        .into_any_element()
+                    div().into_any_element()
                 };
+                let fn_req = file_name.clone();
                 let fn_select = file_name.clone();
 
                 let row = div()
@@ -220,7 +214,7 @@ impl Render for ScriptListPanel {
                     .px_3()
                     .py_1p5()
                     .bg(row_bg)
-                    .hover(|s| s.bg(gpui::hsla(0., 0., 0.5, 0.1)).cursor_pointer())
+                    .hover(|s| s.bg(muted.opacity(0.5)).cursor_pointer())
                     .flex()
                     .items_center()
                     .justify_between()
@@ -232,13 +226,28 @@ impl Render for ScriptListPanel {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(div().text_sm().child(name))
+                            // Delete icon sits next to the script name.
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(gpui::hsla(0., 0., 0.6, 1.))
-                                    .child(ext.to_uppercase()),
-                            ),
+                                    .id(("del", idx))
+                                    .child(
+                                        gpui_kit::component::Icon::new(
+                                            gpui_kit::assets::IconName::Trash,
+                                        )
+                                        .size_3p5()
+                                        .text_color(muted_fg),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.request_delete(fn_req.clone(), cx);
+                                    })),
+                            )
+                            .child(
+                                gpui_kit::component::Icon::new(gpui_kit::assets::IconName::FileCode)
+                                    .size_4()
+                                    .text_color(muted_fg),
+                            )
+                            .child(div().text_sm().child(name))
+                            .child(div().text_xs().text_color(muted_fg).child(ext)),
                     )
                     .child(delete_cell);
                 list = list.child(row);

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use gpui_kit::component::dock::{DockArea, DockLayout, DockSkin, panel_handle};
 use gpui_kit::*;
-use gpui_kit::component::dock::{panel_handle, DockArea, DockLayout, DockSkin};
 
 use crate::console_channel::ConsoleChannel;
 use crate::host_module::HostRegistry;
@@ -34,7 +34,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         registry: Arc<HostRegistry>,
-        lsp: Option<Arc<crate::lsp::LspClient>>,
+        lsp: Result<Arc<crate::lsp::LspClient>, String>,
     ) -> Self {
         let scripts_dir = crate::script_store::scripts_dir();
 
@@ -45,26 +45,33 @@ impl Workspace {
             KeyBinding::new("cmd-n", NewScript, None),
         ]);
 
-        let dock_area = cx.new(|cx| {
-            DockArea::new("main", Some(1), window, cx).with_renderer(DockSkin::new(cx))
-        });
+        let dock_area = cx
+            .new(|cx| DockArea::new("main", Some(1), window, cx).with_renderer(DockSkin::new(cx)));
 
         let script_list = cx.new(|cx| ScriptListPanel::new(window, cx));
         let (console_channel, console_rx) = ConsoleChannel::new();
-        if lsp.is_none() {
-            console_channel.warn(
-                "LSP unavailable — install with: npm i -g typescript-language-server typescript",
-            );
+        match &lsp {
+            Ok(_) => {
+                console_channel.info("LSP: typescript-language-server connected");
+            }
+            Err(reason) => {
+                console_channel.warn(&format!(
+                    "LSP unavailable: {reason} — install with: npm i -g typescript-language-server typescript"
+                ));
+            }
         }
         let console = cx.new(|cx| ConsolePanel::new(window, console_rx, cx));
-        let editor = cx.new(|cx| EditorPanel::new(window, cx, lsp));
+        let editor = cx.new(|cx| EditorPanel::new(window, cx, lsp.ok()));
 
         // Script selection -> load into the editor (deferred to render, which
         // owns the window that EditorState::set_value requires).
-        let sub_select = cx.subscribe(&script_list, move |this, _list, event: &ScriptSelected, cx| {
-            this.editor
-                .update(cx, |ed, cx| ed.queue_load(event.0.clone(), cx));
-        });
+        let sub_select = cx.subscribe(
+            &script_list,
+            move |this, _list, event: &ScriptSelected, cx| {
+                this.editor
+                    .update(cx, |ed, cx| ed.queue_load(event.0.clone(), cx));
+            },
+        );
 
         // Run request -> execute the script via rquickjs on a worker thread.
         let sub_run = cx.subscribe(&editor, move |this, _ed, event: &RunRequested, _cx| {
@@ -76,7 +83,12 @@ impl Workspace {
             let registry = this.registry.clone();
             std::thread::spawn(move || {
                 crate::runner::run_script(
-                    &content, language, &file_name, scripts_dir, &registry, console,
+                    &content,
+                    language,
+                    &file_name,
+                    scripts_dir,
+                    &registry,
+                    console,
                 );
             });
         });

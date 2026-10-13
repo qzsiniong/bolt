@@ -1,5 +1,4 @@
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use gpui_kit::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Severity of a console line. Drives the color in the Console panel.
@@ -12,12 +11,14 @@ pub enum ConsoleLevel {
 }
 
 impl ConsoleLevel {
-    pub fn color(self) -> Hsla {
+    pub const ALL: [Self; 4] = [Self::Log, Self::Info, Self::Warn, Self::Error];
+
+    pub fn label(self) -> &'static str {
         match self {
-            Self::Log => hsla(0., 0., 0.85, 1.),
-            Self::Info => hsla(0.58, 0.7, 0.7, 1.),
-            Self::Warn => hsla(0.13, 0.85, 0.6, 1.),
-            Self::Error => hsla(0., 0.8, 0.6, 1.),
+            Self::Log => "Log",
+            Self::Info => "Info",
+            Self::Warn => "Warn",
+            Self::Error => "Error",
         }
     }
 
