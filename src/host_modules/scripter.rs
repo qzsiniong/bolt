@@ -97,9 +97,10 @@ fn format_value<'js>(v: &Value<'js>) -> String {
     }
     // Fall back to JS String() coercion.
     if let Ok(to_str) = ctx.globals().get::<_, Function>("String")
-        && let Ok(s) = to_str.call::<_, String>((v.clone(),)) {
-            return s;
-        }
+        && let Ok(s) = to_str.call::<_, String>((v.clone(),))
+    {
+        return s;
+    }
     "[object]".into()
 }
 
@@ -137,17 +138,14 @@ fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
 // ── Async functions ─────────────────────────────────────────────────────────
 
 async fn fetch_url<'js>(ctx: Ctx<'js>, url: String) -> Result<Value<'js>> {
-    let resp = reqwest::get(&url).await.map_err(|e| {
-        Error::Io(std::io::Error::other(
-            e.to_string(),
-        ))
-    })?;
+    let resp = reqwest::get(&url)
+        .await
+        .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
     let status = resp.status().as_u16() as i32;
-    let body = resp.text().await.map_err(|e| {
-        Error::Io(std::io::Error::other(
-            e.to_string(),
-        ))
-    })?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| Error::Io(std::io::Error::other(e.to_string())))?;
 
     let obj = Object::new(ctx.clone())?;
     obj.set("status", status)?;

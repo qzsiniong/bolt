@@ -455,18 +455,19 @@ fn dispatch(msg: Value, inner: &Inner, reply_tx: &Sender<String>) {
 
     // Response to one of our requests.
     if let Some(id) = id
-        && msg.get("method").is_none() {
-            let responder = inner.pending.lock().remove(&id);
-            let result = if let Some(err) = msg.get("error") {
-                Err(err.to_string())
-            } else {
-                Ok(msg.get("result").cloned().unwrap_or(Value::Null))
-            };
-            if let Some(tx) = responder {
-                let _ = tx.send(result);
-            }
-            return;
+        && msg.get("method").is_none()
+    {
+        let responder = inner.pending.lock().remove(&id);
+        let result = if let Some(err) = msg.get("error") {
+            Err(err.to_string())
+        } else {
+            Ok(msg.get("result").cloned().unwrap_or(Value::Null))
+        };
+        if let Some(tx) = responder {
+            let _ = tx.send(result);
         }
+        return;
+    }
 
     match msg.get("method").and_then(Value::as_str) {
         // Server-initiated request: reply with an empty result so the server
@@ -659,6 +660,96 @@ mod tests {
         assert!(
             items.iter().any(|i| i.label == "log"),
             "expected `log` in completions, got: {:?}",
+            items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Regression test: when the user types after a member-access trigger, the
+    /// tsserver must still return useful completions even if the LSP client
+    /// sends a multi-character trigger_character (gpui editor sends the whole
+    /// query as trigger_character). The provider's own filtering should then
+    /// narrow the list to matching members.
+    #[test]
+    fn completion_after_continued_typing() {
+        let dir = unique_temp_dir("completion");
+        let Ok(client) = LspClient::spawn(&dir) else {
+            eprintln!("SKIP: typescript-language-server not installed");
+            return;
+        };
+
+        let uri = path_to_uri(&dir.join("test.ts"));
+        client.did_open(&uri, "typescript", "console.\n");
+        std::thread::sleep(Duration::from_secs(1));
+
+        // 1) After `.` — tsserver should return member completions with `log`.
+        let resp = client
+            .completion(
+                &uri,
+                position(0, 8),
+                Some(lsp_types::CompletionContext {
+                    trigger_kind: lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                    trigger_character: Some(".".to_string()),
+                }),
+            )
+            .expect("completion failed");
+        let items = match resp {
+            lsp_types::CompletionResponse::Array(items) => items,
+            lsp_types::CompletionResponse::List(list) => list.items,
+        };
+        assert!(
+            items.iter().any(|i| i.label == "log"),
+            "expected `log` after `console.` trigger={:?}",
+            items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
+        );
+
+        // 2) After `console.l` — tsserver may receive trigger_character `.l`.
+        //    It should still return members (or a subset); client-side filtering
+        //    must then keep `log`.
+        client.did_change(&uri, 2, "console.l\n");
+        std::thread::sleep(Duration::from_millis(500));
+        let resp = client
+            .completion(
+                &uri,
+                position(0, 9),
+                Some(lsp_types::CompletionContext {
+                    trigger_kind: lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                    trigger_character: Some(".l".to_string()),
+                }),
+            )
+            .expect("completion failed");
+        let items = match resp {
+            lsp_types::CompletionResponse::Array(items) => items,
+            lsp_types::CompletionResponse::List(list) => list.items,
+        };
+        assert!(
+            items.iter().any(|i| i.label == "log"),
+            "expected `log` after `console.l` trigger={:?}",
+            items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
+        );
+
+        // 3) After `console` — plain-word trigger. tsserver returns scope-wide
+        //    identifiers. Client-side filtering should keep only `console`.
+        client.did_change(&uri, 3, "console\n");
+        std::thread::sleep(Duration::from_millis(500));
+        let resp = client
+            .completion(
+                &uri,
+                position(0, 7),
+                Some(lsp_types::CompletionContext {
+                    trigger_kind: lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER,
+                    trigger_character: Some("console".to_string()),
+                }),
+            )
+            .expect("completion failed");
+        let items = match resp {
+            lsp_types::CompletionResponse::Array(items) => items,
+            lsp_types::CompletionResponse::List(list) => list.items,
+        };
+        assert!(
+            items.iter().any(|i| i.label == "console"),
+            "expected `console` after plain-word trigger={:?}",
             items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
         );
 
