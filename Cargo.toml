@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui-kit = "0.7"
+# gpui-kit = "0.7"
+gpui-kit = { version = "0.7.1", features = [
+	"tree-sitter-javascript",
+	"tree-sitter-typescript",
+] }
 parking_lot = "0.12"
 dirs = "5"
 thiserror = "2"
