@@ -224,7 +224,7 @@ impl Render for ScriptListPanel {
                 let name = script.name.clone();
 
                 let row_bg = if is_selected {
-                    accent.opacity(0.15)
+                    muted_fg.opacity(0.15)
                 } else {
                     gpui::transparent_black()
                 };
