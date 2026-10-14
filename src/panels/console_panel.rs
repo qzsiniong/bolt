@@ -281,7 +281,6 @@ impl Render for ConsolePanel {
                 list = list.child(
                     div()
                         .flex()
-                        .items_baseline()
                         .gap_2()
                         .px_3()
                         .py_0p5()
