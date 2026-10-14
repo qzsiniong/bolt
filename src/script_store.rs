@@ -56,7 +56,9 @@ pub fn create_script(dir: &Path, name: &str, language: Language) -> Result<Scrip
     }
     let starter = match language {
         Language::JavaScript => "// new JavaScript script\nconsole.log('hello');\n",
-        Language::TypeScript => "// new TypeScript script\nconst greet = (name: string): string => `hello ${name}`;\nconsole.log(greet('world'));\n",
+        Language::TypeScript => {
+            "// new TypeScript script\nconst greet = (name: string): string => `hello ${name}`;\nconsole.log(greet('world'));\n"
+        }
     };
     std::fs::write(&path, starter).map_err(|e| e.to_string())?;
     Script::read(&path)
@@ -75,7 +77,12 @@ pub fn save_script(dir: &Path, file_name: &str, content: &str) -> Result<(), Str
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
-pub fn rename_script(dir: &Path, old: &str, new_name: &str, language: Language) -> Result<Script, String> {
+pub fn rename_script(
+    dir: &Path,
+    old: &str,
+    new_name: &str,
+    language: Language,
+) -> Result<Script, String> {
     let old_path = dir.join(old);
     let new_file = format!("{}.{}", new_name, language.extension());
     let new_path = dir.join(&new_file);

@@ -128,11 +128,17 @@ mod tests {
     use super::*;
     use crate::host_modules;
 
-    fn drain(rx: &crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>) -> Vec<String> {
+    fn drain(
+        rx: &crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>,
+    ) -> Vec<String> {
         rx.try_iter().map(|e| e.text).collect()
     }
 
-    fn make_runner() -> (Arc<HostRegistry>, ConsoleChannel, crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>) {
+    fn make_runner() -> (
+        Arc<HostRegistry>,
+        ConsoleChannel,
+        crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>,
+    ) {
         let mut registry = HostRegistry::new();
         host_modules::register_all(&mut registry);
         let registry = Arc::new(registry);

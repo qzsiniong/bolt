@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use gpui_kit::*;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
+use gpui_kit::*;
 
 use crate::script::{Language, Script};
 use crate::script_store;
@@ -54,7 +54,12 @@ impl ScriptListPanel {
             return;
         }
         self.selected_file = Some(file_name.clone());
-        if let Some(script) = self.scripts.iter().find(|s| s.file_name == file_name).cloned() {
+        if let Some(script) = self
+            .scripts
+            .iter()
+            .find(|s| s.file_name == file_name)
+            .cloned()
+        {
             cx.emit(ScriptSelected(script));
         }
         cx.notify();
@@ -67,7 +72,11 @@ impl ScriptListPanel {
         loop {
             let candidate = format!("{base}-{idx}");
             if !self.scripts.iter().any(|s| s.name == candidate) {
-                match script_store::create_script(&self.scripts_dir, &candidate, Language::TypeScript) {
+                match script_store::create_script(
+                    &self.scripts_dir,
+                    &candidate,
+                    Language::TypeScript,
+                ) {
                     Ok(script) => {
                         let file_name = script.file_name.clone();
                         self.refresh(cx);
@@ -145,7 +154,12 @@ impl Render for ScriptListPanel {
             .py_2()
             .border_b_1()
             .border_color(border)
-            .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child("Scripts"))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Scripts"),
+            )
             .child(
                 Button::new("header-new")
                     .icon(gpui_kit::component::IconName::Plus)
@@ -172,7 +186,11 @@ impl Render for ScriptListPanel {
                 let ext = script.language.extension();
                 let name = script.name.clone();
 
-                let row_bg = if is_selected { accent.opacity(0.15) } else { gpui::transparent_black() };
+                let row_bg = if is_selected {
+                    accent.opacity(0.15)
+                } else {
+                    gpui::transparent_black()
+                };
 
                 let delete_cell: AnyElement = if is_confirming {
                     let fn_confirm = file_name.clone();
@@ -242,9 +260,11 @@ impl Render for ScriptListPanel {
                                     })),
                             )
                             .child(
-                                gpui_kit::component::Icon::new(gpui_kit::assets::IconName::FileCode)
-                                    .size_4()
-                                    .text_color(muted_fg),
+                                gpui_kit::component::Icon::new(
+                                    gpui_kit::assets::IconName::FileCode,
+                                )
+                                .size_4()
+                                .text_color(muted_fg),
                             )
                             .child(div().text_sm().child(name))
                             .child(div().text_xs().text_color(muted_fg).child(ext)),

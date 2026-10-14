@@ -7,11 +7,11 @@ use std::ops::Range;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use gpui_kit::{App, AppContext, Entity, SharedString, Task, Window};
 use gpui_kit::component::input::{
     CodeActionProvider, CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope,
     RopeExt,
 };
+use gpui_kit::{App, AppContext, Entity, SharedString, Task, Window};
 use lsp_types::{CodeAction, CompletionContext, CompletionResponse, Hover, Position};
 use parking_lot::Mutex;
 
@@ -43,7 +43,11 @@ impl LspBridge {
         let client = self.client.as_ref()?;
         let doc = self.doc.lock();
         let doc = doc.as_ref()?;
-        Some((client.clone(), doc.uri.clone(), text.offset_to_position(offset)))
+        Some((
+            client.clone(),
+            doc.uri.clone(),
+            text.offset_to_position(offset),
+        ))
     }
 }
 
@@ -86,9 +90,7 @@ impl HoverProvider for LspBridge {
         let Some((client, uri, position)) = self.active(text, offset) else {
             return Task::ready(Ok(None));
         };
-        cx.background_spawn(async move {
-            client.hover(&uri, position).map_err(anyhow::Error::msg)
-        })
+        cx.background_spawn(async move { client.hover(&uri, position).map_err(anyhow::Error::msg) })
     }
 }
 

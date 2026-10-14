@@ -4,12 +4,10 @@
 //! `import` statements are preserved so rquickjs's module loader can resolve
 //! them at runtime. No ES version downleveling is performed.
 
-use swc_common::{
-    sync::Lrc, FileName, Globals, Mark, SourceMap, GLOBALS,
-};
+use swc_common::{FileName, GLOBALS, Globals, Mark, SourceMap, sync::Lrc};
 use swc_ecma_ast::{EsVersion, Program};
 use swc_ecma_codegen::to_code_default;
-use swc_ecma_parser::{parse_file_as_program, Syntax, TsSyntax};
+use swc_ecma_parser::{Syntax, TsSyntax, parse_file_as_program};
 use swc_ecma_transforms_base::{fixer::fixer, resolver};
 use swc_ecma_transforms_typescript::strip;
 
@@ -33,10 +31,7 @@ pub fn strip_typescript(ts_source: &str) -> Result<String, String> {
     .map_err(|e| format!("TS parse error: {e:?}"))?;
 
     if !recovered.is_empty() {
-        let msgs: Vec<String> = recovered
-            .iter()
-            .map(|e| format!("{e:?}"))
-            .collect();
+        let msgs: Vec<String> = recovered.iter().map(|e| format!("{e:?}")).collect();
         return Err(format!("TS parse errors:\n{}", msgs.join("\n")));
     }
 

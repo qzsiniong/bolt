@@ -7,14 +7,12 @@ use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use lsp_types::{
-    CodeAction, CompletionResponse, Hover, LocationLink, PublishDiagnosticsParams,
-};
+use lsp_types::{CodeAction, CompletionResponse, Hover, LocationLink, PublishDiagnosticsParams};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -343,8 +341,10 @@ impl LspClient {
     }
 
     pub fn hover(&self, uri: &str, position: lsp_types::Position) -> Result<Option<Hover>, String> {
-        let value =
-            self.request("textDocument/hover", json!({"textDocument": {"uri": uri}, "position": position}))?;
+        let value = self.request(
+            "textDocument/hover",
+            json!({"textDocument": {"uri": uri}, "position": position}),
+        )?;
         serde_json::from_value::<Option<Hover>>(value).map_err(|e| e.to_string())
     }
 
@@ -380,7 +380,10 @@ impl LspClient {
                 .into_iter()
                 .filter_map(|item| serde_json::from_value::<CodeAction>(item).ok())
                 .collect()),
-            value => Ok(serde_json::from_value::<CodeAction>(value).ok().into_iter().collect()),
+            value => Ok(serde_json::from_value::<CodeAction>(value)
+                .ok()
+                .into_iter()
+                .collect()),
         }
     }
 

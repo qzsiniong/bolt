@@ -122,7 +122,10 @@ pub struct HostLoader {
 
 impl HostLoader {
     pub fn new(registry: Arc<HostRegistry>, scripts_dir: PathBuf) -> Self {
-        Self { registry, scripts_dir }
+        Self {
+            registry,
+            scripts_dir,
+        }
     }
 }
 
@@ -140,9 +143,7 @@ impl Loader for HostLoader {
             let source = if exports.is_empty() {
                 "// empty host module".to_string()
             } else {
-                format!(
-                    "const {{ {exports} }} = globalThis.{global};\nexport {{ {exports} }};\n"
-                )
+                format!("const {{ {exports} }} = globalThis.{global};\nexport {{ {exports} }};\n")
             };
             return Module::declare(ctx.clone(), name, source);
         }
