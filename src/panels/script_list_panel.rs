@@ -259,21 +259,43 @@ impl Render for ScriptListPanel {
                         )
                         .into_any_element()
                 } else {
+                    let fn_req = file_name.clone();
                     let fn_reveal = file_name.clone();
                     div()
-                        .id(("reveal", idx))
+                        .flex()
+                        .items_center()
+                        .gap_2()
                         .child(
-                            gpui_kit::component::Icon::new(gpui_kit::assets::IconName::FolderOpen)
-                                .size_3p5()
-                                .text_color(muted_fg),
+                            div()
+                                .id(("del", idx))
+                                .child(
+                                    gpui_kit::component::Icon::new(
+                                        gpui_kit::assets::IconName::Trash,
+                                    )
+                                    .size_3p5()
+                                    .text_color(muted_fg),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.request_delete(fn_req.clone(), cx);
+                                })),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.reveal_script(fn_reveal.clone(), cx);
-                        }))
+                        .child(
+                            div()
+                                .id(("reveal", idx))
+                                .child(
+                                    gpui_kit::component::Icon::new(
+                                        gpui_kit::assets::IconName::FolderOpen,
+                                    )
+                                    .size_3p5()
+                                    .text_color(muted_fg),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.reveal_script(fn_reveal.clone(), cx);
+                                })),
+                        )
                         .into_any_element()
                 };
-                let fn_req = file_name.clone();
                 let fn_select = file_name.clone();
 
                 let row = div()
@@ -294,20 +316,20 @@ impl Render for ScriptListPanel {
                             .items_center()
                             .gap_2()
                             // Delete icon sits next to the script name.
-                            .child(
-                                div()
-                                    .id(("del", idx))
-                                    .child(
-                                        gpui_kit::component::Icon::new(
-                                            gpui_kit::assets::IconName::Trash,
-                                        )
-                                        .size_3p5()
-                                        .text_color(muted_fg),
-                                    )
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.request_delete(fn_req.clone(), cx);
-                                    })),
-                            )
+                            // .child(
+                            //     div()
+                            //         .id(("del", idx))
+                            //         .child(
+                            //             gpui_kit::component::Icon::new(
+                            //                 gpui_kit::assets::IconName::Trash,
+                            //             )
+                            //             .size_3p5()
+                            //             .text_color(muted_fg),
+                            //         )
+                            //         .on_click(cx.listener(move |this, _, _, cx| {
+                            //             this.request_delete(fn_req.clone(), cx);
+                            //         })),
+                            // )
                             .child(
                                 gpui_kit::component::Icon::new(
                                     gpui_kit::assets::IconName::FileCode,
