@@ -54,7 +54,7 @@ pub fn run_script(
 
     tokio_rt.block_on(async move {
         if let Err(e) = run_async(&js_code, file_name, scripts_dir, registry, &console).await {
-            console.error(format!("{e}"));
+            console.error(e.to_string());
         }
     });
 }

@@ -78,10 +78,10 @@ pub fn generate_project_files(dir: &Path, registry: &HostRegistry) -> Result<(),
 }
 
 fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
-    if let Ok(existing) = std::fs::read_to_string(path) {
-        if existing == content {
-            return Ok(());
-        }
+    if let Ok(existing) = std::fs::read_to_string(path)
+        && existing == content
+    {
+        return Ok(());
     }
     std::fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))
 }

@@ -55,7 +55,7 @@ impl Workspace {
                 console_channel.info("LSP: typescript-language-server connected");
             }
             Err(reason) => {
-                console_channel.warn(&format!(
+                console_channel.warn(format!(
                     "LSP unavailable: {reason} — install with: npm i -g typescript-language-server typescript"
                 ));
             }

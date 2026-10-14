@@ -454,8 +454,8 @@ fn dispatch(msg: Value, inner: &Inner, reply_tx: &Sender<String>) {
     let id = msg.get("id").and_then(Value::as_i64);
 
     // Response to one of our requests.
-    if let Some(id) = id {
-        if msg.get("method").is_none() {
+    if let Some(id) = id
+        && msg.get("method").is_none() {
             let responder = inner.pending.lock().remove(&id);
             let result = if let Some(err) = msg.get("error") {
                 Err(err.to_string())
@@ -467,7 +467,6 @@ fn dispatch(msg: Value, inner: &Inner, reply_tx: &Sender<String>) {
             }
             return;
         }
-    }
 
     match msg.get("method").and_then(Value::as_str) {
         // Server-initiated request: reply with an empty result so the server
@@ -544,7 +543,7 @@ pub fn path_to_uri(path: &Path) -> String {
 pub fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let decoded: String = rest
-        .split(|c| c == '/' || c == '?')
+        .split(['/', '?'])
         .map(|seg| {
             let mut bytes = Vec::new();
             let mut chars = seg.bytes();

@@ -96,29 +96,28 @@ fn format_value<'js>(v: &Value<'js>) -> String {
         return s;
     }
     // Fall back to JS String() coercion.
-    if let Ok(to_str) = ctx.globals().get::<_, Function>("String") {
-        if let Ok(s) = to_str.call::<_, String>((v.clone(),)) {
+    if let Ok(to_str) = ctx.globals().get::<_, Function>("String")
+        && let Ok(s) = to_str.call::<_, String>((v.clone(),)) {
             return s;
         }
-    }
     "[object]".into()
 }
 
 // ── Sync functions ─────────────────────────────────────────────────────────
 
 fn read_file(path: String) -> Result<String> {
-    std::fs::read_to_string(&path).map_err(|e| Error::Io(e))
+    std::fs::read_to_string(&path).map_err(Error::Io)
 }
 
 fn write_file(path: String, content: String) -> Result<()> {
-    std::fs::write(&path, content).map_err(|e| Error::Io(e))
+    std::fs::write(&path, content).map_err(Error::Io)
 }
 
 fn list_dir(path: String) -> Result<Vec<String>> {
-    let entries = std::fs::read_dir(&path).map_err(|e| Error::Io(e))?;
+    let entries = std::fs::read_dir(&path).map_err(Error::Io)?;
     let mut out = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| Error::Io(e))?;
+        let entry = entry.map_err(Error::Io)?;
         out.push(entry.file_name().to_string_lossy().into_owned());
     }
     Ok(out)
@@ -139,15 +138,13 @@ fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
 
 async fn fetch_url<'js>(ctx: Ctx<'js>, url: String) -> Result<Value<'js>> {
     let resp = reqwest::get(&url).await.map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Error::Io(std::io::Error::other(
             e.to_string(),
         ))
     })?;
     let status = resp.status().as_u16() as i32;
     let body = resp.text().await.map_err(|e| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Error::Io(std::io::Error::other(
             e.to_string(),
         ))
     })?;

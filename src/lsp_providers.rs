@@ -146,21 +146,19 @@ impl CodeActionProvider for LspBridge {
         cx: &mut App,
     ) -> Task<anyhow::Result<()>> {
         // Apply the workspace edit for the current document on the UI thread.
-        if let Some(edit) = action.edit {
-            if let Some(changes) = edit.changes {
+        if let Some(edit) = action.edit
+            && let Some(changes) = edit.changes {
                 let doc_uri = self.doc.lock().as_ref().map(|d| d.uri.clone());
-                if let Some(uri_str) = doc_uri {
-                    if let Ok(uri) = lsp_types::Uri::from_str(&uri_str) {
-                        if let Some(text_edits) = changes.get(&uri) {
-                            let text_edits = text_edits.clone();
-                            state.update(cx, |state, cx| {
-                                state.apply_lsp_edits(&text_edits, window, cx);
-                            });
-                        }
-                    }
+                if let Some(uri_str) = doc_uri
+                    && let Ok(uri) = lsp_types::Uri::from_str(&uri_str)
+                    && let Some(text_edits) = changes.get(&uri)
+                {
+                    let text_edits = text_edits.clone();
+                    state.update(cx, |state, cx| {
+                        state.apply_lsp_edits(&text_edits, window, cx);
+                    });
                 }
             }
-        }
 
         // Delegate command-only actions (e.g. Organize Imports) to the server.
         if let Some(command) = action.command {
