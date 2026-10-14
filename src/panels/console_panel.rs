@@ -157,8 +157,12 @@ impl Render for ConsolePanel {
         // Follow mode: auto-scroll to the newest entry as long as the user
         // hasn't scrolled away from the bottom (checked against the previous
         // frame's scroll state, before new entries shift the content).
-        let at_bottom = self.scroll_handle.offset().y >= self.scroll_handle.max_offset().y - px(4.);
-
+        //
+        // GPUI scroll offsets are NEGATIVE: 0 at the top, -max_offset at the
+        // bottom (see ScrollHandle::set_offset docs). So distance-from-bottom
+        // is `max_offset + offset`, not `max_offset - offset`.
+        let at_bottom =
+            (self.scroll_handle.max_offset().y + self.scroll_handle.offset().y) <= px(2.);
         // Drain anything that arrived since the last render too, so typing in
         // the editor immediately surfaces pending output without waiting.
         while let Ok(entry) = self.rx.try_recv() {
@@ -302,14 +306,24 @@ impl Render for ConsolePanel {
         }
 
         div().size_full().flex().flex_col().child(toolbar).child(
+            // The scrollbar layer must be a child of a NON-scrolling relative
+            // wrapper (gpui-component's popup_menu pattern): children of a
+            // scrolled element are translated by the scroll offset, so putting
+            // `vertical_scrollbar` on the scrolling div itself makes the
+            // overlay move with the content (thumb drifts opposite to scroll).
             div()
-                .id("console-list")
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scroll()
-                .track_scroll(&self.scroll_handle)
-                .vertical_scrollbar(&self.scroll_handle)
-                .child(list),
+                .relative()
+                .child(
+                    div()
+                        .id("console-list")
+                        .size_full()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.scroll_handle)
+                        .child(list),
+                )
+                .vertical_scrollbar(&self.scroll_handle),
         )
     }
 }
