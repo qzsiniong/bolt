@@ -13,6 +13,28 @@ pub fn ensure_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create scripts dir: {e}"))
 }
 
+/// Show `path` in Finder. A directory is opened directly; a file is selected
+/// in its parent folder (`open -R`). Uses the absolute `/usr/bin/open` since
+/// apps launched from Finder inherit only a minimal PATH.
+pub fn reveal_in_finder(path: &Path, select: bool) -> Result<(), String> {
+    if !path.exists() {
+        return Err(format!("path does not exist: {}", path.display()));
+    }
+    let mut cmd = std::process::Command::new("/usr/bin/open");
+    if select {
+        cmd.arg("-R");
+    }
+    let status = cmd
+        .arg(path)
+        .status()
+        .map_err(|e| format!("failed to open Finder: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("open exited with {status}"))
+    }
+}
+
 pub fn list_scripts(dir: &Path) -> Vec<Script> {
     let mut scripts = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {

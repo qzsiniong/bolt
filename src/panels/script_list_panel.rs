@@ -98,6 +98,21 @@ impl ScriptListPanel {
         cx.notify();
     }
 
+    /// Open the scripts directory in Finder.
+    fn reveal_scripts_dir(&mut self, _cx: &mut Context<Self>) {
+        if let Err(e) = script_store::reveal_in_finder(&self.scripts_dir, false) {
+            eprintln!("reveal scripts dir: {e}");
+        }
+    }
+
+    /// Select a script file in Finder.
+    fn reveal_script(&mut self, file_name: String, _cx: &mut Context<Self>) {
+        let path = self.scripts_dir.join(file_name);
+        if let Err(e) = script_store::reveal_in_finder(&path, true) {
+            eprintln!("reveal script: {e}");
+        }
+    }
+
     fn cancel_delete(&mut self, cx: &mut Context<Self>) {
         self.confirming_delete = None;
         cx.notify();
@@ -161,12 +176,26 @@ impl Render for ScriptListPanel {
                     .child("Scripts"),
             )
             .child(
-                Button::new("header-new")
-                    .icon(gpui_kit::component::IconName::Plus)
-                    .compact()
-                    .ghost()
-                    .tooltip("New script")
-                    .on_click(cx.listener(|this, _, _, cx| this.create_new(cx))),
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        Button::new("header-reveal")
+                            .icon(gpui_kit::component::IconName::FolderOpen)
+                            .compact()
+                            .ghost()
+                            .tooltip("Reveal in Finder")
+                            .on_click(cx.listener(|this, _, _, cx| this.reveal_scripts_dir(cx))),
+                    )
+                    .child(
+                        Button::new("header-new")
+                            .icon(gpui_kit::component::IconName::Plus)
+                            .compact()
+                            .ghost()
+                            .tooltip("New script")
+                            .on_click(cx.listener(|this, _, _, cx| this.create_new(cx))),
+                    ),
             );
 
         let mut list = div().flex().flex_col();
@@ -192,7 +221,7 @@ impl Render for ScriptListPanel {
                     gpui::transparent_black()
                 };
 
-                let delete_cell: AnyElement = if is_confirming {
+                let row_action: AnyElement = if is_confirming {
                     let fn_confirm = file_name.clone();
                     let fn_cancel = file_name.clone();
                     div()
@@ -222,7 +251,21 @@ impl Render for ScriptListPanel {
                         )
                         .into_any_element()
                 } else {
-                    div().into_any_element()
+                    let fn_reveal = file_name.clone();
+                    div()
+                        .id(("reveal", idx))
+                        .child(
+                            gpui_kit::component::Icon::new(
+                                gpui_kit::assets::IconName::FolderOpen,
+                            )
+                            .size_3p5()
+                            .text_color(muted_fg),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.reveal_script(fn_reveal.clone(), cx);
+                        }))
+                        .into_any_element()
                 };
                 let fn_req = file_name.clone();
                 let fn_select = file_name.clone();
@@ -269,7 +312,7 @@ impl Render for ScriptListPanel {
                             .child(div().text_sm().child(name))
                             .child(div().text_xs().text_color(muted_fg).child(ext)),
                     )
-                    .child(delete_cell);
+                    .child(row_action);
                 list = list.child(row);
             }
         }
