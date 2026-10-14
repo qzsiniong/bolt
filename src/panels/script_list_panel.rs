@@ -181,6 +181,14 @@ impl Render for ScriptListPanel {
                     .items_center()
                     .gap_1()
                     .child(
+                        Button::new("header-refresh")
+                            .icon(gpui_kit::component::IconName::RefreshCw)
+                            .compact()
+                            .ghost()
+                            .tooltip("Refresh")
+                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                    )
+                    .child(
                         Button::new("header-reveal")
                             .icon(gpui_kit::component::IconName::FolderOpen)
                             .compact()
@@ -255,11 +263,9 @@ impl Render for ScriptListPanel {
                     div()
                         .id(("reveal", idx))
                         .child(
-                            gpui_kit::component::Icon::new(
-                                gpui_kit::assets::IconName::FolderOpen,
-                            )
-                            .size_3p5()
-                            .text_color(muted_fg),
+                            gpui_kit::component::Icon::new(gpui_kit::assets::IconName::FolderOpen)
+                                .size_3p5()
+                                .text_color(muted_fg),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
