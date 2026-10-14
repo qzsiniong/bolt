@@ -4,6 +4,8 @@
 //! blocks user scripts need. Sync functions are registered directly; `fetch`
 //! and `exec` are async (return Promises) and run on the rquickjs scheduler.
 
+use std::time::Duration;
+
 use rquickjs::prelude::{Async, Rest};
 use rquickjs::{Ctx, Error, Function, IntoJs, Object, Result, Value};
 
@@ -11,6 +13,8 @@ use crate::console_channel::ConsoleChannel;
 use crate::host_module::{HostModule, HostRegistry};
 
 const DECLARATION: &str = r#"
+  /** Sleep for the given number of milliseconds. */
+  export function sleep(ms: number): Promise<void>;
   /** Read a UTF-8 text file synchronously. */
   export function readFile(path: string): string;
   /** Write a UTF-8 text file synchronously. */
@@ -31,6 +35,7 @@ pub fn register(registry: &mut HostRegistry) {
     registry.register(
         HostModule::new("scripter")
             .declaration(DECLARATION)
+            .export("sleep")
             .export("readFile")
             .export("writeFile")
             .export("listDir")
@@ -46,6 +51,7 @@ pub fn register(registry: &mut HostRegistry) {
 fn install<'js>(ctx: &Ctx<'js>) -> Result<()> {
     let g = Object::new(ctx.clone())?;
 
+    g.set("sleep", Function::new(ctx.clone(), Async(sleep))?)?;
     g.set("readFile", Function::new(ctx.clone(), read_file)?)?;
     g.set("writeFile", Function::new(ctx.clone(), write_file)?)?;
     g.set("listDir", Function::new(ctx.clone(), list_dir)?)?;
@@ -136,6 +142,14 @@ fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
 }
 
 // ── Async functions ─────────────────────────────────────────────────────────
+
+/// `sleep(ms) -> Promise<void>`
+///
+/// 走 tokio 定时器，不占用线程；等待期间引擎会继续驱动其他 JS 任务，
+/// 因此 `Promise.all` 里的多个 `sleep` 是并行的。
+pub async fn sleep<'js>(ctx: Ctx<'js>, ms: u64) {
+    tokio::time::sleep(Duration::from_millis(ms)).await;
+}
 
 async fn fetch_url<'js>(ctx: Ctx<'js>, url: String) -> Result<Value<'js>> {
     let resp = reqwest::get(&url)
