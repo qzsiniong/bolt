@@ -81,6 +81,10 @@ async fn run_async(
         if let Err(e) = scripter::install_console(&ctx, console) {
             console.error(format!("console install: {e}"));
         }
+        // timer globals (setTimeout / clearTimeout / setInterval / clearInterval)
+        if let Err(e) = scripter::install_timers(&ctx, console) {
+            console.error(format!("timer install: {e}"));
+        }
         // host module globals
         if let Err(e) = registry.install_globals(&ctx) {
             console.error(format!("module install: {e}"));
@@ -109,7 +113,7 @@ async fn run_async(
     Ok(())
 }
 
-fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) {
+pub(crate) fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) {
     match err {
         rquickjs::CaughtError::Exception(ex) => {
             console.error(ex.to_string());
@@ -213,5 +217,61 @@ mod tests {
             lines.iter().any(|l| l.contains("hi from script")),
             "missing file content: {lines:?}"
         );
+    }
+
+    #[test]
+    fn run_set_timeout() {
+        let (registry, channel, rx) = make_runner();
+        let code = r#"
+            console.log('start');
+            setTimeout(() => console.log('timeout'), 30);
+            console.log('end');
+        "#;
+        run_script(
+            code,
+            Language::JavaScript,
+            "test.js",
+            std::env::temp_dir(),
+            &registry,
+            channel,
+        );
+        let lines = drain(&rx);
+        // The callback must observe the full top-level execution first: the
+        // run only finishes after pending timers have fired.
+        let start = lines.iter().position(|l| l.contains("start")).unwrap();
+        let end = lines.iter().position(|l| l.contains("end")).unwrap();
+        let timeout = lines
+            .iter()
+            .position(|l| l.contains("timeout"))
+            .unwrap_or_else(|| panic!("timeout callback never ran: {lines:?}"));
+        assert!(
+            start < end && end < timeout,
+            "unexpected order: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn run_clear_interval_stops_repeating() {
+        let (registry, channel, rx) = make_runner();
+        let code = r#"
+            let n = 0;
+            const id = setInterval(() => {
+                n += 1;
+                console.log(`tick ${n}`);
+                if (n >= 2) clearInterval(id);
+            }, 10);
+        "#;
+        run_script(
+            code,
+            Language::JavaScript,
+            "test.js",
+            std::env::temp_dir(),
+            &registry,
+            channel,
+        );
+        let lines = drain(&rx);
+        let ticks: Vec<&String> = lines.iter().filter(|l| l.contains("tick")).collect();
+        assert_eq!(ticks.len(), 2, "interval did not stop after clear: {lines:?}");
+        assert!(ticks[0].contains("tick 1") && ticks[1].contains("tick 2"));
     }
 }

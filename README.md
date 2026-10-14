@@ -51,7 +51,7 @@ scripts/
 ├── tsconfig.json          # TS 配置（include scripts + types）
 ├── types/
 │   ├── console.d.ts       # console 全局对象声明
-│   ├── globals.d.ts       # 其他全局声明
+│   ├── globals.d.ts       # 定时器全局声明
 │   └── scripter.d.ts      # 内置 "scripter" 模块声明
 ├── hello.js               # 示例脚本（仅首次生成）
 └── demo.ts                # 示例脚本（仅首次生成）
@@ -78,6 +78,27 @@ console.warn('...');   // Warn
 console.error('...');  // Error
 console.debug('...');  // Log
 ```
+
+### 定时器
+
+QuickJS 本身不提供定时器，运行时以宿主 API 的形式注入了浏览器风格的全局定时器：
+
+```ts
+declare function setTimeout(callback: () => void, delayMs?: number): number;
+declare function clearTimeout(id?: number): void;
+declare function setInterval(callback: () => void, periodMs?: number): number;
+declare function clearInterval(id?: number): void;
+```
+
+回调在脚本顶层代码执行完毕后按延迟触发，定时器未结束前脚本不会退出。回调抛出的异常会输出到 Console 面板。
+
+```js
+console.log('start');
+setTimeout(() => console.log('1s later'), 1000);   // 最后打印
+console.log('end');                                 // 先于上一行打印
+```
+
+> `scripter` 模块的 `sleep(ms)` 同样基于 tokio 定时器，且支持 `Promise.all` 并行等待；需要等待且不关心回调风格时可优先使用。
 
 ### `scripter` 内置模块
 

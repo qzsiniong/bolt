@@ -4,6 +4,9 @@
 //! blocks user scripts need. Sync functions are registered directly; `fetch`
 //! and `exec` are async (return Promises) and run on the rquickjs scheduler.
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Duration;
 
 use rquickjs::prelude::{Async, Rest};
@@ -91,6 +94,108 @@ pub fn install_console<'js>(ctx: &Ctx<'js>, channel: &ConsoleChannel) -> Result<
     }
     ctx.globals().set("console", console)?;
     Ok(())
+}
+
+// ── Timer globals ──────────────────────────────────────────────────────────
+
+/// Install the standard timer globals on the QuickJS context.
+///
+/// Timers are host APIs — QuickJS ships none of them, so `setTimeout` is
+/// otherwise a `ReferenceError`. Each timer becomes a task on the rquickjs
+/// scheduler (driven by the runner's `AsyncRuntime::idle`) that sleeps on
+/// tokio's timer, so the engine keeps running other JS while a timer is
+/// pending. Ids are plain numbers; `clearTimeout`/`clearInterval` only mark an
+/// id as cancelled, because a spawned task cannot be aborted from outside.
+pub fn install_timers<'js>(ctx: &Ctx<'js>, console: &ConsoleChannel) -> Result<()> {
+    let next_id = Rc::new(Cell::new(1u32));
+    // Ids the script has cleared; the spawned task re-checks this right before
+    // firing. A cleared id also stops the task from firing again.
+    let cancelled = Rc::new(RefCell::new(HashSet::<u32>::new()));
+    let globals = ctx.globals();
+
+    let ids = next_id.clone();
+    let cancelled_ids = cancelled.clone();
+    let ch = console.clone();
+    globals.set(
+        "setTimeout",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, cb: Function<'js>, ms: f64| -> u32 {
+                let id = ids.get();
+                ids.set(id.wrapping_add(1));
+                let cancelled = cancelled_ids.clone();
+                let ch = ch.clone();
+                let timer_ctx = ctx.clone();
+                ctx.spawn(async move {
+                    tokio::time::sleep(ms_to_duration(ms)).await;
+                    let aborted = cancelled.borrow().contains(&id);
+                    if aborted {
+                        return;
+                    }
+                    if let Err(e) = cb.call::<_, Value>(()) {
+                        let caught = rquickjs::CaughtError::from_error(&timer_ctx, e);
+                        crate::runner::log_caught(&ch, &caught);
+                    }
+                });
+                id
+            },
+        )?,
+    )?;
+
+    let ids = next_id.clone();
+    let cancelled_ids = cancelled.clone();
+    let ch = console.clone();
+    globals.set(
+        "setInterval",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, cb: Function<'js>, ms: f64| -> u32 {
+                let id = ids.get();
+                ids.set(id.wrapping_add(1));
+                let cancelled = cancelled_ids.clone();
+                let ch = ch.clone();
+                let timer_ctx = ctx.clone();
+                // Clamp to 1ms: a zero-delay interval would spin the scheduler.
+                let period = ms_to_duration(ms).max(Duration::from_millis(1));
+                ctx.spawn(async move {
+                    loop {
+                        tokio::time::sleep(period).await;
+                        let aborted = cancelled.borrow().contains(&id);
+                        if aborted {
+                            return;
+                        }
+                        if let Err(e) = cb.call::<_, Value>(()) {
+                            let caught = rquickjs::CaughtError::from_error(&timer_ctx, e);
+                            crate::runner::log_caught(&ch, &caught);
+                            return;
+                        }
+                    }
+                });
+                id
+            },
+        )?,
+    )?;
+
+    let cancelled_ids = cancelled.clone();
+    let clear = Function::new(ctx.clone(), move |id: Value<'js>| {
+        if let Some(id) = id.as_int() {
+            cancelled_ids.borrow_mut().insert(id as u32);
+        }
+    })?;
+    globals.set("clearTimeout", clear.clone())?;
+    globals.set("clearInterval", clear)?;
+
+    Ok(())
+}
+
+/// Coerce a JS delay to a duration; negative or non-finite delays fire
+/// immediately (`setTimeout(fn, -1)` behaves like `setTimeout(fn, 0)`).
+fn ms_to_duration(ms: f64) -> Duration {
+    if ms.is_finite() && ms > 0.0 {
+        Duration::from_millis(ms as u64)
+    } else {
+        Duration::ZERO
+    }
 }
 
 /// Best-effort `String(value)` conversion for console output.

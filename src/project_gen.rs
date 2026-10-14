@@ -35,8 +35,21 @@ declare const console: {
 };
 "#;
 
-const GLOBALS_DTS: &str = r#"// Runtime global declarations; extend as needed.
-export {};
+const GLOBALS_DTS: &str = r#"/**
+ * Runtime-provided timer globals.
+ *
+ * QuickJS ships no timers, so the host installs browser-style ones. Timers are
+ * cancelled by id, and a callback that throws is reported in the Console panel.
+ */
+
+/** Run `callback` once after `delayMs` milliseconds; returns the timer id. */
+declare function setTimeout(callback: () => void, delayMs?: number): number;
+/** Cancel a timer created by `setTimeout`. */
+declare function clearTimeout(id?: number): void;
+/** Run `callback` every `periodMs` milliseconds until cleared; returns the timer id. */
+declare function setInterval(callback: () => void, periodMs?: number): number;
+/** Cancel a repeating timer created by `setInterval`. */
+declare function clearInterval(id?: number): void;
 "#;
 
 const HELLO_JS: &str = r#"// Welcome to Scripter!
