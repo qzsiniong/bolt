@@ -42,7 +42,10 @@ fn main() {
 
     gpui_kit::application()
         // Register the embedded icon/SVG bundle (required for Icon rendering).
-        .with_assets(gpui_kit::assets::Assets::new(""))
+        // Use the full Lucide catalog: the default `Assets` bundle only embeds a
+        // curated subset and silently drops icons outside it (e.g. Trash,
+        // FileCode) — their SVG never loads, so the icon renders blank.
+        .with_assets(gpui_kit::assets::AllAssets::new(""))
         .run(move |cx| {
             gpui_kit::init(cx);
 
