@@ -77,6 +77,9 @@ impl Workspace {
         }
         let console = cx.new(|cx| ConsolePanel::new(window, console_rx, cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx, lsp.ok()));
+        // Let the list panel warn about unsaved edits before it replaces the
+        // script currently open in the editor.
+        script_list.update(cx, |list, _| list.set_editor(editor.downgrade()));
 
         // Script selection -> load into the editor (deferred to render, which
         // owns the window that EditorState::set_value requires).
@@ -207,8 +210,9 @@ impl Workspace {
         self.editor.update(cx, |ed, cx| ed.run_current(window, cx));
     }
 
-    fn on_new(&mut self, _: &NewScript, _window: &mut Window, cx: &mut Context<Self>) {
-        self.script_list.update(cx, |list, cx| list.create_new(cx));
+    fn on_new(&mut self, _: &NewScript, window: &mut Window, cx: &mut Context<Self>) {
+        self.script_list
+            .update(cx, |list, cx| list.create_new(window, cx));
     }
 }
 

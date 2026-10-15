@@ -2,10 +2,12 @@ use std::path::PathBuf;
 
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::*;
 
+use crate::panels::editor_panel::EditorPanel;
 use crate::script::{Language, Script};
 use crate::script_store;
 
@@ -19,6 +21,9 @@ pub struct ScriptListPanel {
     scripts: Vec<Script>,
     selected_file: Option<String>,
     confirming_delete: Option<String>,
+    /// The editor, used to warn before a selection change discards unsaved
+    /// edits.
+    editor: Option<WeakEntity<EditorPanel>>,
 }
 
 impl ScriptListPanel {
@@ -31,7 +36,22 @@ impl ScriptListPanel {
             scripts,
             selected_file: None,
             confirming_delete: None,
+            editor: None,
         }
+    }
+
+    /// Hand the panel a handle to the editor so it can check for unsaved
+    /// changes before replacing the open script.
+    pub fn set_editor(&mut self, editor: WeakEntity<EditorPanel>) {
+        self.editor = Some(editor);
+    }
+
+    fn editor_is_dirty(&self, cx: &App) -> bool {
+        self.editor
+            .as_ref()
+            .and_then(|editor| editor.upgrade())
+            .map(|editor| editor.read(cx).is_dirty())
+            .unwrap_or(false)
     }
 
     pub fn scripts_dir(&self) -> &PathBuf {
@@ -49,10 +69,37 @@ impl ScriptListPanel {
         cx.notify();
     }
 
-    fn select(&mut self, file_name: String, cx: &mut Context<Self>) {
+    fn select(&mut self, file_name: String, window: &mut Window, cx: &mut Context<Self>) {
         if Some(&file_name) == self.selected_file.as_ref() {
             return;
         }
+        // Switching away discards unsaved edits in the open script, so ask
+        // before replacing it.
+        if self.editor_is_dirty(cx) {
+            let list = cx.entity();
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                alert
+                    .title("未保存的修改")
+                    .description("当前脚本有未保存的修改，切换会丢失。继续吗？")
+                    .show_cancel(true)
+                    .ok_text("继续")
+                    .cancel_text("取消")
+                    .on_ok({
+                        let list = list.clone();
+                        let file_name = file_name.clone();
+                        move |_, _, cx| {
+                            list.update(cx, |list, cx| list.apply_selection(file_name.clone(), cx));
+                            true
+                        }
+                    })
+            });
+            return;
+        }
+        self.apply_selection(file_name, cx);
+    }
+
+    /// Commit a selection, loading the script into the editor.
+    fn apply_selection(&mut self, file_name: String, cx: &mut Context<Self>) {
         self.selected_file = Some(file_name.clone());
         if let Some(script) = self
             .scripts
@@ -66,7 +113,31 @@ impl ScriptListPanel {
     }
 
     /// Create a new script file (toolbar + button / Cmd+N).
-    pub fn create_new(&mut self, cx: &mut Context<Self>) {
+    pub fn create_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Creating discards unsaved edits in the open script, so ask first.
+        if self.editor_is_dirty(cx) {
+            let list = cx.entity();
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                alert
+                    .title("未保存的修改")
+                    .description("当前脚本有未保存的修改，新建会丢失。继续吗？")
+                    .show_cancel(true)
+                    .ok_text("继续")
+                    .cancel_text("取消")
+                    .on_ok({
+                        let list = list.clone();
+                        move |_, _, cx| {
+                            list.update(cx, |list, cx| list.create_new_now(cx));
+                            true
+                        }
+                    })
+            });
+            return;
+        }
+        self.create_new_now(cx);
+    }
+
+    fn create_new_now(&mut self, cx: &mut Context<Self>) {
         let base = "untitled";
         let mut idx = 1;
         loop {
@@ -80,7 +151,7 @@ impl ScriptListPanel {
                     Ok(script) => {
                         let file_name = script.file_name.clone();
                         self.refresh(cx);
-                        self.select(file_name, cx);
+                        self.apply_selection(file_name, cx);
                         return;
                     }
                     Err(e) => {
@@ -202,7 +273,9 @@ impl Render for ScriptListPanel {
                             .compact()
                             .ghost()
                             .tooltip("New script")
-                            .on_click(cx.listener(|this, _, _, cx| this.create_new(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.create_new(window, cx)),
+                            ),
                     ),
             );
 
@@ -307,8 +380,8 @@ impl Render for ScriptListPanel {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select(fn_select.clone(), cx);
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select(fn_select.clone(), window, cx);
                     }))
                     .child(
                         div()

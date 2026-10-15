@@ -8,7 +8,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Rope, TabSize};
-use gpui_kit::component::{Disableable, IconName};
+use gpui_kit::component::{Disableable, IconName, WindowExt};
 use gpui_kit::*;
 use parking_lot::Mutex;
 
@@ -222,6 +222,11 @@ impl EditorPanel {
         }
     }
 
+    /// Whether the editor content differs from the script saved on disk.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     /// Queue a script to be loaded on the next render (render has access to
     /// the window, which `set_value` requires — subscribe callbacks do not).
     pub fn queue_load(&mut self, script: Script, cx: &mut Context<Self>) {
@@ -230,10 +235,17 @@ impl EditorPanel {
     }
 
     /// Load a script's content into the editor and switch the highlighter.
+    ///
+    /// Unsaved edits are intentionally *not* auto-saved here: switching away
+    /// discards them, which is what the "unsaved changes will be lost"
+    /// confirmation warns about.
     pub fn load_script(&mut self, script: &Script, window: &mut Window, cx: &mut Context<Self>) {
-        // Auto-save the previously loaded script before switching away.
-        self.persist_current(cx);
-
+        // The list panel holds a stale snapshot, so always re-read from disk
+        // to pick up content saved since the list was built.
+        let script = match script_store::read_script(&self.scripts_dir, &script.file_name) {
+            Ok(fresh) => fresh,
+            Err(_) => script.clone(),
+        };
         self.current_script = Some(script.clone());
         self.dirty = false;
 
@@ -265,13 +277,66 @@ impl EditorPanel {
     }
 
     /// Run the currently loaded script (toolbar button / Cmd+Enter).
-    pub fn run_current(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn run_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.running || self.current_script.is_none() {
+            return;
+        }
+        if self.dirty {
+            // Unsaved edits: ask whether to save first. "No" runs the last
+            // saved version instead of the text currently in the editor.
+            let editor = cx.entity();
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                alert
+                    .title("未保存的修改")
+                    .description(
+                        "脚本有未保存的修改。先保存再运行吗？（否 = 直接运行已保存的版本）",
+                    )
+                    .show_cancel(true)
+                    .ok_text("保存并运行")
+                    .cancel_text("否，运行已保存版本")
+                    .on_ok({
+                        let editor = editor.clone();
+                        move |_, window, cx| {
+                            editor.update(cx, |ed, ecx| {
+                                ed.save(window, ecx);
+                                ed.emit_run_edited(ecx);
+                            });
+                            true
+                        }
+                    })
+                    .on_cancel({
+                        let editor = editor.clone();
+                        move |_, _, cx| {
+                            editor.update(cx, |ed, ecx| ed.emit_run_saved(ecx));
+                            true
+                        }
+                    })
+            });
+            return;
+        }
+        self.emit_run_edited(cx);
+    }
+
+    /// Ask the host to run the text currently in the editor.
+    fn emit_run_edited(&mut self, cx: &mut Context<Self>) {
         let Some(script) = self.current_script.clone() else {
             return;
         };
         let content = self.editor.read(cx).value().to_string();
         cx.emit(RunRequested {
             content,
+            language: script.language,
+            file_name: script.file_name,
+        });
+    }
+
+    /// Ask the host to run the last version saved to disk, ignoring edits.
+    fn emit_run_saved(&mut self, cx: &mut Context<Self>) {
+        let Some(script) = self.current_script.clone() else {
+            return;
+        };
+        cx.emit(RunRequested {
+            content: script.content,
             language: script.language,
             file_name: script.file_name,
         });
