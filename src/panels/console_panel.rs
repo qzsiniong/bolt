@@ -1,12 +1,13 @@
 use std::time::Duration;
 
 use crossbeam_channel::Receiver;
+use gpui_kit::HighlightStyle;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
-use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
@@ -19,7 +20,13 @@ pub struct ConsolePanel {
     focus_handle: FocusHandle,
     rx: Receiver<ConsoleEntry>,
     entries: Vec<ConsoleEntry>,
-    scroll_handle: ScrollHandle,
+    editor: Entity<EditorState>,
+    decorations: TextDecorationCollection,
+    /// Cached last rendered text to skip redundant set_value calls.
+    last_text: String,
+    /// Whether the viewport follows new output. Cleared when the user scrolls
+    /// away from the bottom, restored when the bottom comes back into view.
+    follow: bool,
     /// `None` shows every level; `Some(level)` shows only that level.
     filter: Option<ConsoleLevel>,
     filter_menu_open: bool,
@@ -27,13 +34,19 @@ pub struct ConsolePanel {
 }
 
 impl ConsolePanel {
-    pub fn new(_window: &mut Window, rx: Receiver<ConsoleEntry>, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, rx: Receiver<ConsoleEntry>, cx: &mut Context<Self>) -> Self {
         let task = cx.spawn(Self::drain_loop);
+        let editor = cx.new(|ecx| EditorState::new(window, ecx));
+        editor.update(cx, |s, cx| s.set_readonly(true, cx));
+        let decorations = editor.update(cx, |s, cx| s.create_decorations_collection(vec![], cx));
         Self {
             focus_handle: cx.focus_handle(),
             rx,
             entries: Vec::new(),
-            scroll_handle: ScrollHandle::new(),
+            editor,
+            decorations,
+            last_text: String::new(),
+            follow: true,
             filter: None,
             filter_menu_open: false,
             _task: task,
@@ -153,16 +166,7 @@ impl Focusable for ConsolePanel {
 }
 
 impl Render for ConsolePanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Follow mode: auto-scroll to the newest entry as long as the user
-        // hasn't scrolled away from the bottom (checked against the previous
-        // frame's scroll state, before new entries shift the content).
-        //
-        // GPUI scroll offsets are NEGATIVE: 0 at the top, -max_offset at the
-        // bottom (see ScrollHandle::set_offset docs). So distance-from-bottom
-        // is `max_offset + offset`, not `max_offset - offset`.
-        let at_bottom =
-            (self.scroll_handle.max_offset().y + self.scroll_handle.offset().y) <= px(2.);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Drain anything that arrived since the last render too, so typing in
         // the editor immediately surfaces pending output without waiting.
         while let Ok(entry) = self.rx.try_recv() {
@@ -261,69 +265,87 @@ impl Render for ConsolePanel {
                     ),
             );
 
-        // Oldest entries first, newest at the bottom (like a terminal).
-        let mut list = div().flex().flex_col().py_1();
+        // Build the full text and a color decoration for each entry's byte
+        // range. A single readonly Editor gives native selection/copy, while
+        // TextDecoration keeps the per-level color coding.
         let filtered: Vec<&ConsoleEntry> = self
             .entries
             .iter()
             .filter(|e| self.filter.map(|f| f == e.level).unwrap_or(true))
             .collect();
-        if filtered.is_empty() {
-            list = list.child(
-                div()
-                    .p_4()
-                    .text_xs()
-                    .text_color(muted_fg)
-                    .child("Console output will appear here."),
+
+        let mut full_text = String::new();
+        let mut decorations = Vec::with_capacity(filtered.len());
+        for entry in filtered {
+            let line = format!(
+                "{} {}{}",
+                format_time(entry.timestamp),
+                entry.level.prefix(),
+                entry.text
             );
-        } else {
-            for entry in filtered {
-                let color = level_color(entry.level, cx);
-                let prefix = entry.level.prefix();
-                let time = format_time(entry.timestamp);
-                let text = entry.text.clone();
-                list = list.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .px_3()
-                        .py_0p5()
-                        .text_xs()
-                        .child(div().text_color(muted_fg).child(time))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_color(color)
-                                .child(format!("{prefix}{text}")),
-                        ),
-                );
-            }
+            let start = full_text.len();
+            full_text.push_str(&line);
+            let end = full_text.len();
+            full_text.push('\n');
+            decorations.push(TextDecoration::new(
+                start..end,
+                HighlightStyle {
+                    color: Some(level_color(entry.level, cx)),
+                    ..Default::default()
+                },
+            ));
+        }
+        // Strip the trailing newline so copied text ends cleanly.
+        if full_text.ends_with('\n') {
+            full_text.pop();
         }
 
-        if at_bottom {
-            self.scroll_handle.scroll_to_bottom();
+        if full_text != self.last_text {
+            // `self.last_text` still matches what the editor holds, so its line
+            // count (counted the way the rope counts lines, where a trailing
+            // newline opens a new, empty line) can be compared against the
+            // viewport of the last painted frame: the view follows output only
+            // while that frame was at the bottom, which also resumes following
+            // when the user scrolls back down.
+            let total_lines = if self.last_text.is_empty() {
+                0
+            } else {
+                self.last_text.matches('\n').count() + 1
+            };
+            self.follow = match self.editor.read(cx).visible_row_range() {
+                Some(range) => range.end >= total_lines,
+                // No layout yet: nothing has been scrolled away from.
+                None => true,
+            };
+
+            self.last_text = full_text.clone();
+            let text_len = full_text.len();
+            let follow = self.follow;
+            self.editor.update(cx, |s, cx| {
+                let previous_offset = s.scroll_offset();
+                s.set_value(&full_text, window, cx);
+                // Place the cursor at the end so the editor scrolls to the
+                // newest output. set_selected_range does not steal focus.
+                s.set_selected_range(text_len..text_len, cx);
+                if !follow {
+                    // The user is reading older output: set_value resets the
+                    // scroll to the top and the caret-follow above scrolls to
+                    // the end, so the deferred offset is what puts the viewport
+                    // back where the user left it.
+                    s.set_scroll_offset(previous_offset, cx);
+                }
+            });
+            self.decorations.set(decorations, cx);
         }
 
         div().size_full().flex().flex_col().child(toolbar).child(
-            // The scrollbar layer must be a child of a NON-scrolling relative
-            // wrapper (gpui-component's popup_menu pattern): children of a
-            // scrolled element are translated by the scroll offset, so putting
-            // `vertical_scrollbar` on the scrolling div itself makes the
-            // overlay move with the content (thumb drifts opposite to scroll).
-            div()
-                .flex_1()
-                .min_h_0()
-                .relative()
-                .child(
-                    div()
-                        .id("console-list")
-                        .size_full()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.scroll_handle)
-                        .child(list),
-                )
-                .vertical_scrollbar(&self.scroll_handle),
+            div().flex_1().min_h_0().child(
+                Editor::new(&self.editor)
+                    .readonly(true)
+                    .appearance(false)
+                    .bordered(false)
+                    .size_full(),
+            ),
         )
     }
 }
