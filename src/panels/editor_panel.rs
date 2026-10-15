@@ -7,15 +7,33 @@ use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
-use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
+use gpui_kit::component::input::{Editor, EditorState, InputEvent, Rope, TabSize};
 use gpui_kit::component::{Disableable, IconName};
 use gpui_kit::*;
 use parking_lot::Mutex;
 
+use crate::editor_ops;
 use crate::lsp::LspClient;
 use crate::lsp_providers::{DocHandle, LspBridge};
 use crate::script::{Language, Script};
 use crate::script_store;
+
+// Editing shortcuts. The editor's key context is "Input mode=editor", so a
+// binding under "Input" only fires while the editor has focus. Note that
+// `Cmd+Shift+/` cannot be used for the block comment: on macOS the shifted
+// punctuation key is reported as `cmd-?`, not `cmd-shift-/`.
+gpui_kit::actions!(
+    scripter,
+    [
+        ToggleComment,
+        ToggleBlockComment,
+        DeleteLine,
+        DuplicateLineUp,
+        DuplicateLineDown,
+        MoveLineUp,
+        MoveLineDown,
+    ]
+);
 
 /// Emitted when the user clicks Run.
 #[derive(Clone, Debug)]
@@ -49,6 +67,21 @@ pub struct EditorPanel {
 
 impl EditorPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>, lsp: Option<Arc<LspClient>>) -> Self {
+        // Editing shortcuts. `Some("Input")` matches the editor's key context
+        // ("Input mode=editor"), so these only fire while the editor is focused
+        // and never shadow unrelated bindings elsewhere in the app. Note that
+        // `cmd-shift-/` is unreachable on macOS (the shifted punctuation key
+        // reports as `cmd-?`), hence the `cmd-alt-/` block-comment binding.
+        cx.bind_keys([
+            KeyBinding::new("cmd-/", ToggleComment, Some("Input")),
+            KeyBinding::new("cmd-alt-/", ToggleBlockComment, Some("Input")),
+            KeyBinding::new("cmd-shift-k", DeleteLine, Some("Input")),
+            KeyBinding::new("shift-alt-up", DuplicateLineUp, Some("Input")),
+            KeyBinding::new("shift-alt-down", DuplicateLineDown, Some("Input")),
+            KeyBinding::new("alt-up", MoveLineUp, Some("Input")),
+            KeyBinding::new("alt-down", MoveLineDown, Some("Input")),
+        ]);
+
         let editor = cx.new(|ecx| {
             EditorState::new(window, ecx)
                 .language("typescript")
@@ -277,6 +310,91 @@ impl EditorPanel {
     fn has_runnable(&self) -> bool {
         self.current_script.is_some()
     }
+
+    /// Apply a pure text transform to the editor: compute an edit from the
+    /// current rope/selection, then replace that byte range and set the
+    /// resulting selection. Changing the selection first turns
+    /// [`EditorState::replace`] into a replace-arbitrary-range primitive.
+    /// `replace` still emits `InputEvent::Change`, so dirty tracking and the
+    /// LSP `did_change` sync keep working as usual.
+    fn apply_op(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        compute: impl FnOnce(&Rope, std::ops::Range<usize>) -> Option<editor_ops::Edit>,
+    ) {
+        if self.current_script.is_none() {
+            return;
+        }
+        self.editor.update(cx, |state, ecx| {
+            let Some(edit) = compute(state.text(), state.selected_range()) else {
+                return;
+            };
+            // Guard against no-op edits so they don't add a stray undo step.
+            if edit.text == state.text().slice(edit.range.clone()).to_string() {
+                return;
+            }
+            state.set_selected_range(edit.range.clone(), ecx);
+            state.replace(edit.text.clone(), window, ecx);
+            state.set_selected_range(edit.selection.clone(), ecx);
+        });
+    }
+
+    fn on_toggle_comment(
+        &mut self,
+        _: &ToggleComment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_op(window, cx, editor_ops::toggle_line_comment);
+    }
+
+    fn on_toggle_block_comment(
+        &mut self,
+        _: &ToggleBlockComment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_op(window, cx, editor_ops::toggle_block_comment);
+    }
+
+    fn on_delete_line(&mut self, _: &DeleteLine, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_op(window, cx, editor_ops::delete_lines);
+    }
+
+    fn on_duplicate_line_up(
+        &mut self,
+        _: &DuplicateLineUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_op(window, cx, |rope, selection| {
+            editor_ops::duplicate_lines(rope, selection, true)
+        });
+    }
+
+    fn on_duplicate_line_down(
+        &mut self,
+        _: &DuplicateLineDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_op(window, cx, |rope, selection| {
+            editor_ops::duplicate_lines(rope, selection, false)
+        });
+    }
+
+    fn on_move_line_up(&mut self, _: &MoveLineUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_op(window, cx, |rope, selection| {
+            editor_ops::move_lines(rope, selection, true)
+        });
+    }
+
+    fn on_move_line_down(&mut self, _: &MoveLineDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.apply_op(window, cx, |rope, selection| {
+            editor_ops::move_lines(rope, selection, false)
+        });
+    }
 }
 
 impl BasePanel for EditorPanel {
@@ -392,6 +510,14 @@ impl Render for EditorPanel {
             .size_full()
             .flex()
             .flex_col()
+            // Actions bubble from the focused editor up to this ancestor.
+            .on_action(cx.listener(Self::on_toggle_comment))
+            .on_action(cx.listener(Self::on_toggle_block_comment))
+            .on_action(cx.listener(Self::on_delete_line))
+            .on_action(cx.listener(Self::on_duplicate_line_up))
+            .on_action(cx.listener(Self::on_duplicate_line_down))
+            .on_action(cx.listener(Self::on_move_line_up))
+            .on_action(cx.listener(Self::on_move_line_down))
             .child(toolbar)
             .child(div().flex_1().min_h_0().child(editor_view))
     }

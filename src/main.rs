@@ -1,4 +1,5 @@
 mod console_channel;
+mod editor_ops;
 mod host_module;
 mod host_modules;
 mod lsp;
