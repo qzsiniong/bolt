@@ -15,6 +15,7 @@ use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module};
 use crate::console_channel::ConsoleChannel;
 use crate::host_module::{HostLoader, HostRegistry, HostResolver};
 use crate::host_modules::scripter;
+use crate::interaction::InteractionBridge;
 use crate::script::Language;
 use crate::ts_transform::strip_typescript;
 
@@ -60,6 +61,7 @@ pub fn run_script(
     registry: &Arc<HostRegistry>,
     console: ConsoleChannel,
     cancel: CancelToken,
+    interaction: InteractionBridge,
 ) {
     console.info(format!("▶ Running {}…", file_name));
 
@@ -104,6 +106,7 @@ pub fn run_script(
                 &registry,
                 &console,
                 &body_cancel,
+                &interaction,
             ) => {
                 if cancel.is_cancelled() {
                     // run_async suppressed its own error log while cancelled.
@@ -128,6 +131,7 @@ async fn run_async(
     registry: &Arc<HostRegistry>,
     console: &ConsoleChannel,
     cancel: &CancelToken,
+    interaction: &InteractionBridge,
 ) -> Result<(), String> {
     // 3. Create QuickJS runtime + install host loader/resolver.
     let rt = AsyncRuntime::new().map_err(|e| e.to_string())?;
@@ -157,6 +161,12 @@ async fn run_async(
         // host module globals
         if let Err(e) = registry.install_globals(&ctx) {
             console.error(format!("module install: {e}"));
+        }
+        // Interaction APIs (typeStr / requestFocus / confirm / pickPath /
+        // scanQr) extend the `__scripter` object that the line above created,
+        // so they must be installed after it.
+        if let Err(e) = scripter::install_interaction(&ctx, interaction) {
+            console.error(format!("interaction install: {e}"));
         }
 
         // Evaluate as an ES module (resolves imports via the loader).
@@ -229,9 +239,16 @@ mod tests {
         (registry, channel, rx)
     }
 
+    /// Bridge with no UI attached. Interaction APIs would fail through it, but
+    /// none of the tests below call them.
+    fn no_ui(cancel: &CancelToken) -> InteractionBridge {
+        InteractionBridge::new(cancel.clone()).0
+    }
+
     #[test]
     fn run_plain_js_console_log() {
         let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
         run_script(
             "console.log('hello world'); console.info('info');",
             Language::JavaScript,
@@ -239,7 +256,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            CancelToken::new(),
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         assert!(
@@ -255,6 +273,7 @@ mod tests {
     #[test]
     fn run_ts_with_import() {
         let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
         let code = r#"
             import { env } from 'scripter';
             const name: string = env('USER') ?? 'world';
@@ -267,7 +286,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            CancelToken::new(),
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         assert!(
@@ -279,6 +299,7 @@ mod tests {
     #[test]
     fn run_sync_host_fn() {
         let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
         let code = r#"
             import { writeFile, readFile } from 'scripter';
             writeFile('/tmp/scripter_test.txt', 'hi from script');
@@ -292,7 +313,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            CancelToken::new(),
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         assert!(
@@ -304,6 +326,7 @@ mod tests {
     #[test]
     fn run_set_timeout() {
         let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
         let code = r#"
             console.log('start');
             setTimeout(() => console.log('timeout'), 30);
@@ -316,7 +339,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            CancelToken::new(),
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         // The callback must observe the full top-level execution first: the
@@ -336,6 +360,7 @@ mod tests {
     #[test]
     fn run_clear_interval_stops_repeating() {
         let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
         let code = r#"
             let n = 0;
             const id = setInterval(() => {
@@ -351,7 +376,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            CancelToken::new(),
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         let ticks: Vec<&String> = lines.iter().filter(|l| l.contains("tick")).collect();
@@ -376,7 +402,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            cancel,
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         assert!(
@@ -406,7 +433,8 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
-            cancel,
+            cancel.clone(),
+            no_ui(&cancel),
         );
         let lines = drain(&rx);
         assert!(

@@ -32,6 +32,14 @@ tokio = { version = "1.53.2", features = [
 	"macros",
 ] }
 futures = "0.3.34"
+# Host interaction APIs (`typeStr` / `scanQr`).
+# typeStr uses enigo for cross-platform keyboard simulation.
+# scanQr needs CoreGraphics for the screen-capture permission check.
+enigo = "0.6"
+core-graphics = "0.24"
+xcap = { version = "0.9", default-features = false, features = ["image"] }
+rqrr = "0.11"
+image = { version = "0.25", default-features = false }
 swc_ecma_parser = "46.0.0"
 swc_ecma_transforms_typescript = "56.0.0"
 swc_common = "26.0.0"

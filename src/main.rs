@@ -2,14 +2,18 @@ mod console_channel;
 mod editor_ops;
 mod host_module;
 mod host_modules;
+mod interaction;
+mod interaction_window;
 mod lsp;
 mod lsp_providers;
 mod panels;
 mod project_gen;
+mod qr;
 mod runner;
 mod script;
 mod script_store;
 mod ts_transform;
+mod typer;
 mod workspace;
 
 use std::sync::Arc;

@@ -9,11 +9,12 @@ use std::collections::HashSet;
 use std::rc::Rc;
 use std::time::Duration;
 
-use rquickjs::prelude::{Async, Rest};
+use rquickjs::prelude::{Async, Opt, Rest};
 use rquickjs::{Ctx, Error, Function, IntoJs, Object, Result, Value};
 
 use crate::console_channel::ConsoleChannel;
 use crate::host_module::{HostModule, HostRegistry};
+use crate::interaction::{InteractionBridge, PickKind};
 
 const DECLARATION: &str = r#"
   /** Sleep for the given number of milliseconds. */
@@ -32,6 +33,16 @@ const DECLARATION: &str = r#"
   export function env(key: string): string | undefined;
   /** Terminate the running script with the given exit code. */
   export function exit(code: number): void;
+  /** Type `text` into the focused window, one character at a time. */
+  export function typeStr(text: string, delayMs?: number, label?: string): void;
+  /** Wait until the user puts focus on the target window. */
+  export function requestFocus(hint?: string): void;
+  /** Ask the user a yes/no question; resolves false on "no", throws on abort. */
+  export function confirm(message: string): Promise<boolean>;
+  /** Let the user pick a file or directory; resolves null when cancelled. */
+  export function pickPath(prompt?: string, kind?: "file" | "dir"): Promise<string | null>;
+  /** Scan the screens for a QR code; resolves null when none was found. */
+  export function scanQr(): Promise<string | null>;
 "#;
 
 pub fn register(registry: &mut HostRegistry) {
@@ -46,6 +57,11 @@ pub fn register(registry: &mut HostRegistry) {
             .export("exec")
             .export("env")
             .export("exit")
+            .export("typeStr")
+            .export("requestFocus")
+            .export("confirm")
+            .export("pickPath")
+            .export("scanQr")
             .installer(install),
     );
 }
@@ -244,6 +260,141 @@ fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
     let msg = format!("__scripter_exit_{}__", code);
     let val = msg.into_js(&ctx)?;
     Err(ctx.throw(val))
+}
+
+// ── Interaction functions ──────────────────────────────────────────────────
+
+/// Install the host interaction APIs onto the existing `__scripter` object.
+///
+/// Must run *after* [`install`] (via `HostRegistry::install_globals`), which is
+/// what creates `__scripter`; the loader's re-export module reads that same
+/// object when a script does `import { confirm } from 'scripter'`.
+pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> Result<()> {
+    let scripter: Object = ctx.globals().get("__scripter")?;
+
+    let b = bridge.clone();
+    scripter.set(
+        "typeStr",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>,
+                  text: String,
+                  delay_ms: Opt<f64>,
+                  label: Opt<String>|
+                  -> Result<()> {
+                let delay_ms = delay_ms
+                    .0
+                    .map(|v| v.max(0.0) as u64)
+                    .unwrap_or(crate::typer::DEFAULT_DELAY_MS);
+                let label = label.0.as_deref();
+                crate::typer::type_str(&text, delay_ms, label, &b)
+                    .map_err(|msg| throw_error(&ctx, msg))
+            },
+        )?,
+    )?;
+
+    let b = bridge.clone();
+    scripter.set(
+        "requestFocus",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, hint: Opt<String>| -> Result<()> {
+                let hint = hint.0.unwrap_or_else(default_focus_hint);
+                b.request_focus(hint).map_err(|msg| throw_error(&ctx, msg))
+            },
+        )?,
+    )?;
+
+    let b = bridge.clone();
+    scripter.set(
+        "confirm",
+        Function::new(
+            ctx.clone(),
+            Async(move |ctx: Ctx<'js>, message: String| -> _ {
+                let b = b.clone();
+                async move {
+                    b.confirm(message)
+                        .await
+                        .map_err(|msg| throw_error(&ctx, msg))
+                }
+            }),
+        )?,
+    )?;
+
+    let b = bridge.clone();
+    scripter.set(
+        "pickPath",
+        Function::new(
+            ctx.clone(),
+            Async(
+                move |ctx: Ctx<'js>, prompt: Opt<String>, kind: Opt<String>| -> _ {
+                    let b = b.clone();
+                    async move {
+                        let kind = match kind.0.as_deref() {
+                            None | Some("file") => PickKind::File,
+                            Some("dir") => PickKind::Dir,
+                            Some(other) => {
+                                return Err(throw_error(
+                                    &ctx,
+                                    format!("kind 只支持 \"file\" / \"dir\"，收到\"{other}\""),
+                                ));
+                            }
+                        };
+                        let prompt = prompt.0.unwrap_or_else(|| default_pick_prompt(kind));
+                        match b.pick_path(prompt, kind).await {
+                            Ok(Some(path)) => path.to_string_lossy().into_owned().into_js(&ctx),
+                            Ok(None) => Ok(Value::new_null(ctx.clone())),
+                            Err(msg) => Err(throw_error(&ctx, msg)),
+                        }
+                    }
+                },
+            ),
+        )?,
+    )?;
+
+    let b = bridge.clone();
+    scripter.set(
+        "scanQr",
+        Function::new(
+            ctx.clone(),
+            Async(move |ctx: Ctx<'js>| -> _ {
+                let b = b.clone();
+                async move {
+                    // Capturing and decoding block; keep them off the runtime thread.
+                    let scanned = tokio::task::spawn_blocking(move || crate::qr::scan_qr(&b))
+                        .await
+                        .map_err(|e| throw_error(&ctx, format!("截屏任务失败：{e}")))?;
+                    match scanned {
+                        Ok(Some(text)) => text.into_js(&ctx),
+                        Ok(None) => Ok(Value::new_null(ctx.clone())),
+                        Err(msg) => Err(throw_error(&ctx, msg)),
+                    }
+                }
+            }),
+        )?,
+    )?;
+
+    Ok(())
+}
+
+fn default_focus_hint() -> String {
+    crate::typer::DEFAULT_FOCUS_HINT.to_string()
+}
+
+fn default_pick_prompt(kind: PickKind) -> String {
+    match kind {
+        PickKind::File => "选择文件".to_string(),
+        PickKind::Dir => "选择文件夹".to_string(),
+    }
+}
+
+/// Build an `Error` object for `msg` and set it as the pending exception.
+fn throw_error<'js>(ctx: &Ctx<'js>, msg: impl Into<String>) -> Error {
+    let message = msg.into();
+    match rquickjs::Exception::from_message(ctx.clone(), &message) {
+        Ok(exception) => exception.throw(),
+        Err(e) => e,
+    }
 }
 
 // ── Async functions ─────────────────────────────────────────────────────────
