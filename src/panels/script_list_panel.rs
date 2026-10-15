@@ -20,7 +20,6 @@ pub struct ScriptListPanel {
     scripts_dir: PathBuf,
     scripts: Vec<Script>,
     selected_file: Option<String>,
-    confirming_delete: Option<String>,
     /// The editor, used to warn before a selection change discards unsaved
     /// edits.
     editor: Option<WeakEntity<EditorPanel>>,
@@ -35,7 +34,6 @@ impl ScriptListPanel {
             scripts_dir,
             scripts,
             selected_file: None,
-            confirming_delete: None,
             editor: None,
         }
     }
@@ -164,9 +162,25 @@ impl ScriptListPanel {
         }
     }
 
-    fn request_delete(&mut self, file_name: String, cx: &mut Context<Self>) {
-        self.confirming_delete = Some(file_name);
-        cx.notify();
+    /// Ask for confirmation before deleting a script (dialog).
+    fn request_delete(&mut self, file_name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let list = cx.entity();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            alert
+                .title("删除脚本")
+                .description(format!("确定要删除 {} 吗？此操作不可撤销。", file_name))
+                .show_cancel(true)
+                .ok_text("删除")
+                .cancel_text("取消")
+                .on_ok({
+                    let list = list.clone();
+                    let file_name = file_name.clone();
+                    move |_, _, cx| {
+                        list.update(cx, |list, cx| list.confirm_delete(file_name.clone(), cx));
+                        true
+                    }
+                })
+        });
     }
 
     /// Open the scripts directory in Finder.
@@ -184,11 +198,6 @@ impl ScriptListPanel {
         }
     }
 
-    fn cancel_delete(&mut self, cx: &mut Context<Self>) {
-        self.confirming_delete = None;
-        cx.notify();
-    }
-
     fn confirm_delete(&mut self, file_name: String, cx: &mut Context<Self>) {
         if let Err(e) = script_store::delete_script(&self.scripts_dir, &file_name) {
             eprintln!("delete: {e}");
@@ -197,7 +206,6 @@ impl ScriptListPanel {
         if self.selected_file.as_deref() == Some(file_name.as_str()) {
             self.selected_file = None;
         }
-        self.confirming_delete = None;
         cx.notify();
     }
 }
@@ -228,7 +236,6 @@ impl Render for ScriptListPanel {
         let theme = cx.theme();
         let border = theme.border;
         let muted_fg = theme.muted_foreground;
-        let danger = theme.danger;
         let accent = theme.accent;
         let muted = theme.muted;
 
@@ -292,7 +299,6 @@ impl Render for ScriptListPanel {
             for (idx, script) in self.scripts.iter().enumerate() {
                 let file_name = script.file_name.clone();
                 let is_selected = Some(&file_name) == self.selected_file.as_ref();
-                let is_confirming = self.confirming_delete.as_deref() == Some(file_name.as_str());
                 let ext = script.language.extension();
                 let name = script.name.clone();
 
@@ -302,73 +308,40 @@ impl Render for ScriptListPanel {
                     gpui::transparent_black()
                 };
 
-                let row_action: AnyElement = if is_confirming {
-                    let fn_confirm = file_name.clone();
-                    let fn_cancel = file_name.clone();
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id(("del-confirm", idx))
-                                .text_xs()
-                                .text_color(danger)
-                                .child("delete?")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.confirm_delete(fn_confirm.clone(), cx);
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("del-cancel", idx))
-                                .text_xs()
-                                .text_color(muted_fg)
-                                .child("cancel")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    let _ = &fn_cancel;
-                                    this.cancel_delete(cx);
-                                })),
-                        )
-                        .into_any_element()
-                } else {
-                    let fn_req = file_name.clone();
-                    let fn_reveal = file_name.clone();
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .id(("del", idx))
-                                .child(
-                                    gpui_kit::component::Icon::new(
-                                        gpui_kit::assets::IconName::Trash,
-                                    )
+                let fn_req = file_name.clone();
+                let fn_reveal = file_name.clone();
+                let row_action: AnyElement = div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(("del", idx))
+                            .child(
+                                gpui_kit::component::Icon::new(gpui_kit::assets::IconName::Trash)
                                     .size_3p5()
                                     .text_color(muted_fg),
+                            )
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.request_delete(fn_req.clone(), window, cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("reveal", idx))
+                            .child(
+                                gpui_kit::component::Icon::new(
+                                    gpui_kit::assets::IconName::FolderOpen,
                                 )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.request_delete(fn_req.clone(), cx);
-                                })),
-                        )
-                        .child(
-                            div()
-                                .id(("reveal", idx))
-                                .child(
-                                    gpui_kit::component::Icon::new(
-                                        gpui_kit::assets::IconName::FolderOpen,
-                                    )
-                                    .size_3p5()
-                                    .text_color(muted_fg),
-                                )
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.reveal_script(fn_reveal.clone(), cx);
-                                })),
-                        )
-                        .into_any_element()
-                };
+                                .size_3p5()
+                                .text_color(muted_fg),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.reveal_script(fn_reveal.clone(), cx);
+                            })),
+                    )
+                    .into_any_element();
                 let fn_select = file_name.clone();
 
                 let row = div()
