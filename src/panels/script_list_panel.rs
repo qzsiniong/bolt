@@ -236,7 +236,7 @@ impl Render for ScriptListPanel {
         let theme = cx.theme();
         let border = theme.border;
         let muted_fg = theme.muted_foreground;
-        let accent = theme.accent;
+        let _accent = theme.accent;
         let muted = theme.muted;
 
         let header = div()

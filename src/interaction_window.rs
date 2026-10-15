@@ -8,7 +8,6 @@
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 use crate::interaction::ProgressSnapshot;

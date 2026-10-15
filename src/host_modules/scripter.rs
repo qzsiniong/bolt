@@ -403,7 +403,7 @@ fn throw_error<'js>(ctx: &Ctx<'js>, msg: impl Into<String>) -> Error {
 ///
 /// 走 tokio 定时器，不占用线程；等待期间引擎会继续驱动其他 JS 任务，
 /// 因此 `Promise.all` 里的多个 `sleep` 是并行的。
-pub async fn sleep<'js>(ctx: Ctx<'js>, ms: u64) {
+pub async fn sleep<'js>(_ctx: Ctx<'js>, ms: u64) {
     tokio::time::sleep(Duration::from_millis(ms)).await;
 }
 
