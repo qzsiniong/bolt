@@ -501,10 +501,66 @@ impl Render for EditorPanel {
                 div().into_any_element()
             });
 
-        let editor_view = Editor::new(&self.editor)
-            .appearance(false)
-            .bordered(false)
-            .size_full();
+        // With no script loaded there is nothing to edit, so show a hint plus a
+        // shortcut cheat-sheet instead of an empty editor.
+        let editor_area: AnyElement = if can_run {
+            Editor::new(&self.editor)
+                .appearance(false)
+                .bordered(false)
+                .size_full()
+                .into_any_element()
+        } else {
+            let shortcuts = [
+                ("Cmd + /", "Toggle line comment"),
+                ("Cmd + Option + /", "Toggle block comment"),
+                ("Cmd + Shift + K", "Delete line"),
+                ("Shift + Option + ↑ / ↓", "Duplicate line"),
+                ("Option + ↑ / ↓", "Move line"),
+                ("Cmd + Enter", "Run script"),
+                ("Cmd + S", "Save script"),
+            ];
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .justify_center()
+                .gap_3()
+                .child(
+                    div()
+                        .text_3xl()
+                        .text_color(muted_fg)
+                        .child(gpui_kit::assets::IconName::FileCode),
+                )
+                .child(div().text_lg().text_color(fg).child("No script selected"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(muted_fg)
+                        .child("Select a script from the list to start editing."),
+                )
+                .child(
+                    div()
+                        .mt_4()
+                        .p_4()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(border)
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(div().text_sm().text_color(muted_fg).child("Shortcuts"))
+                        .children(shortcuts.iter().map(|(keys, desc)| {
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(div().w(px(168.)).text_sm().text_color(fg).child(*keys))
+                                .child(div().text_sm().text_color(muted_fg).child(*desc))
+                        })),
+                )
+                .into_any_element()
+        };
 
         div()
             .size_full()
@@ -519,6 +575,6 @@ impl Render for EditorPanel {
             .on_action(cx.listener(Self::on_move_line_up))
             .on_action(cx.listener(Self::on_move_line_down))
             .child(toolbar)
-            .child(div().flex_1().min_h_0().child(editor_view))
+            .child(div().flex_1().min_h_0().child(editor_area))
     }
 }
