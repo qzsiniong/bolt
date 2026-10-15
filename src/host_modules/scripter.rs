@@ -276,6 +276,9 @@ async fn exec_cmd<'js>(ctx: Ctx<'js>, cmd: String) -> Result<Value<'js>> {
     let out = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(&cmd)
+        // An aborted run drops this future; without kill_on_drop the child
+        // would outlive the script as an orphan.
+        .kill_on_drop(true)
         .output()
         .await?;
 

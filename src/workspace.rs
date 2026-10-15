@@ -1,16 +1,26 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use gpui_kit::component::dock::{DockArea, DockLayout, DockSkin, panel_handle};
 use gpui_kit::*;
 
 use crate::console_channel::ConsoleChannel;
 use crate::host_module::HostRegistry;
-use crate::panels::editor_panel::RunRequested;
+use crate::panels::editor_panel::{RunRequested, StopRequested};
 use crate::panels::script_list_panel::ScriptSelected;
 use crate::panels::{ConsolePanel, EditorPanel, ScriptListPanel};
+use crate::runner::CancelToken;
 
 gpui_kit::actions!(scripter, [SaveScript, RunScript, NewScript]);
+
+/// Bookkeeping for the single script run currently in flight.
+struct RunState {
+    cancel: CancelToken,
+    /// Set by the worker thread once `run_script` returns.
+    done: Arc<AtomicBool>,
+}
 
 pub struct Workspace {
     dock_area: Entity<DockArea>,
@@ -25,8 +35,13 @@ pub struct Workspace {
     console_channel: ConsoleChannel,
     #[allow(dead_code)]
     registry: Arc<HostRegistry>,
+    /// `None` while idle; only one run at a time.
+    running: Option<RunState>,
     _sub_select: Subscription,
     _sub_run: Subscription,
+    _sub_stop: Subscription,
+    /// Polls `running.done` so the toolbar leaves the "running" state.
+    _run_task: Option<Task<()>>,
 }
 
 impl Workspace {
@@ -74,7 +89,20 @@ impl Workspace {
         );
 
         // Run request -> execute the script via rquickjs on a worker thread.
-        let sub_run = cx.subscribe(&editor, move |this, _ed, event: &RunRequested, _cx| {
+        let sub_run = cx.subscribe(&editor, move |this, _ed, event: &RunRequested, cx| {
+            // One run at a time. The Run button is disabled while busy; this
+            // guard covers the Cmd+Enter route too.
+            if this.running.is_some() {
+                return;
+            }
+            let cancel = CancelToken::new();
+            let done = Arc::new(AtomicBool::new(false));
+            this.running = Some(RunState {
+                cancel: cancel.clone(),
+                done: done.clone(),
+            });
+            this.editor.update(cx, |ed, cx| ed.set_running(true, cx));
+
             let content = event.content.clone();
             let language = event.language;
             let file_name = event.file_name.clone();
@@ -89,8 +117,31 @@ impl Workspace {
                     scripts_dir,
                     &registry,
                     console,
+                    cancel,
                 );
+                done.store(true, Ordering::SeqCst);
             });
+
+            // The worker thread cannot reach gpui entities, so poll for
+            // completion (same pattern as EditorPanel::diagnostics_loop) to
+            // put the toolbar back into the idle state.
+            this._run_task = Some(cx.spawn(async move |this, cx| loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(150))
+                    .await;
+                let finished = this.update(cx, |ws, cx| ws.poll_run(cx)).unwrap_or(true);
+                if finished {
+                    break;
+                }
+            }));
+        });
+
+        // Stop request -> flip the token; the runner aborts at the next
+        // interrupt check or when the racing wait wins.
+        let sub_stop = cx.subscribe(&editor, move |this, _ed, _: &StopRequested, _cx| {
+            if let Some(run) = &this.running {
+                run.cancel.cancel();
+            }
         });
 
         dock_area.update(cx, |area, dock_cx| {
@@ -123,13 +174,31 @@ impl Workspace {
             console,
             console_channel,
             registry,
+            running: None,
             _sub_select: sub_select,
             _sub_run: sub_run,
+            _sub_stop: sub_stop,
+            _run_task: None,
         }
     }
 }
 
 impl Workspace {
+    /// Returns true once the in-flight run has finished, after putting the
+    /// toolbar back into the idle state.
+    fn poll_run(&mut self, cx: &mut Context<Self>) -> bool {
+        let finished = self
+            .running
+            .as_ref()
+            .map(|run| run.done.load(Ordering::SeqCst))
+            .unwrap_or(true);
+        if finished {
+            self.running = None;
+            self.editor.update(cx, |ed, cx| ed.set_running(false, cx));
+        }
+        finished
+    }
+
     fn on_save(&mut self, _: &SaveScript, window: &mut Window, cx: &mut Context<Self>) {
         self.editor.update(cx, |ed, cx| ed.save(window, cx));
     }

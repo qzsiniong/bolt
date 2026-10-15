@@ -7,6 +7,8 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module};
 
@@ -15,6 +17,38 @@ use crate::host_module::{HostLoader, HostRegistry, HostResolver};
 use crate::host_modules::scripter;
 use crate::script::Language;
 use crate::ts_transform::strip_typescript;
+
+/// Cooperative cancellation token shared between the UI and a running script.
+///
+/// Two independent mechanisms watch it: QuickJS's interrupt handler preempts
+/// long-running JS, and an async wait breaks the run out of host functions
+/// (`sleep`/`exec`) and `AsyncRuntime::idle`, where no JS executes.
+#[derive(Clone, Default)]
+pub struct CancelToken {
+    flag: Arc<AtomicBool>,
+}
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Request an abort. Idempotent and callable from any thread.
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::SeqCst)
+    }
+
+    /// Resolve once an abort has been requested (50ms polling).
+    pub async fn wait(&self) {
+        while !self.is_cancelled() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
 
 /// Run a script to completion. Call from a worker thread — never on the GPUI
 /// main thread.
@@ -25,6 +59,7 @@ pub fn run_script(
     scripts_dir: PathBuf,
     registry: &Arc<HostRegistry>,
     console: ConsoleChannel,
+    cancel: CancelToken,
 ) {
     console.info(format!("▶ Running {}…", file_name));
 
@@ -52,9 +87,36 @@ pub fn run_script(
         }
     };
 
+    let registry = registry.clone();
+    let body_cancel = cancel.clone();
+    let file_name = file_name.to_string();
+    // Race the run against the cancel token. A script blocked inside a host
+    // function (`sleep`/`exec`) or waiting in `idle()` executes no JS, so the
+    // interrupt handler never fires — dropping the future is the only way out.
+    // `select!` drops the losing branch, tearing the runtime and every
+    // spawned timer task down with it.
     tokio_rt.block_on(async move {
-        if let Err(e) = run_async(&js_code, file_name, scripts_dir, registry, &console).await {
-            console.error(e.to_string());
+        tokio::select! {
+            outcome = run_async(
+                &js_code,
+                &file_name,
+                scripts_dir,
+                &registry,
+                &console,
+                &body_cancel,
+            ) => {
+                if cancel.is_cancelled() {
+                    // run_async suppressed its own error log while cancelled.
+                    console.warn(format!("⏹ Aborted {file_name}"));
+                } else if let Err(e) = outcome {
+                    console.error(e);
+                } else {
+                    console.info(format!("✔ Finished {file_name}"));
+                }
+            }
+            _ = cancel.wait() => {
+                console.warn(format!("⏹ Aborted {file_name}"));
+            }
         }
     });
 }
@@ -65,10 +127,17 @@ async fn run_async(
     scripts_dir: PathBuf,
     registry: &Arc<HostRegistry>,
     console: &ConsoleChannel,
+    cancel: &CancelToken,
 ) -> Result<(), String> {
     // 3. Create QuickJS runtime + install host loader/resolver.
     let rt = AsyncRuntime::new().map_err(|e| e.to_string())?;
     rt.set_max_stack_size(8 * 1024 * 1024).await;
+    // Preempt long-running JS (`while (true) {}`): QuickJS polls this handler
+    // periodically and aborts with an uncatchable exception when it returns
+    // true.
+    let interrupted = cancel.clone();
+    rt.set_interrupt_handler(Some(Box::new(move || interrupted.is_cancelled())))
+        .await;
     let loader = HostLoader::new(registry.clone(), scripts_dir);
     rt.set_loader(HostResolver, loader).await;
 
@@ -96,19 +165,29 @@ async fn run_async(
             Ok(promise) => {
                 // Drive the module promise to completion.
                 if let Err(e) = promise.into_future::<()>().await.catch(&ctx) {
-                    log_caught(console, &e);
+                    // A cancelled run bails out with the interrupt exception;
+                    // the caller reports the abort instead.
+                    if !cancel.is_cancelled() {
+                        log_caught(console, &e);
+                    }
                 }
             }
             Err(e) => {
-                let caught = rquickjs::CaughtError::from_error(&ctx, e);
-                log_caught(console, &caught);
+                if !cancel.is_cancelled() {
+                    let caught = rquickjs::CaughtError::from_error(&ctx, e);
+                    log_caught(console, &caught);
+                }
             }
         }
     })
     .await;
 
-    // 6. Drain remaining async jobs (fetch/exec Promises, setTimeout-like).
-    rt.idle().await;
+    // 6. Drain remaining async jobs (fetch/exec Promises, setTimeout-like) —
+    // unless cancelled: a leftover `setInterval` or pending host call would
+    // otherwise keep `idle()` waiting forever.
+    if !cancel.is_cancelled() {
+        rt.idle().await;
+    }
 
     Ok(())
 }
@@ -160,6 +239,7 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
+            CancelToken::new(),
         );
         let lines = drain(&rx);
         assert!(
@@ -187,6 +267,7 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
+            CancelToken::new(),
         );
         let lines = drain(&rx);
         assert!(
@@ -211,6 +292,7 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
+            CancelToken::new(),
         );
         let lines = drain(&rx);
         assert!(
@@ -234,6 +316,7 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
+            CancelToken::new(),
         );
         let lines = drain(&rx);
         // The callback must observe the full top-level execution first: the
@@ -268,10 +351,67 @@ mod tests {
             std::env::temp_dir(),
             &registry,
             channel,
+            CancelToken::new(),
         );
         let lines = drain(&rx);
         let ticks: Vec<&String> = lines.iter().filter(|l| l.contains("tick")).collect();
         assert_eq!(ticks.len(), 2, "interval did not stop after clear: {lines:?}");
         assert!(ticks[0].contains("tick 1") && ticks[1].contains("tick 2"));
+    }
+
+    #[test]
+    fn abort_while_awaiting_host_call() {
+        let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
+        let killer = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            killer.cancel();
+        });
+        let started = std::time::Instant::now();
+        run_script(
+            "import { sleep } from 'scripter'; await sleep(60000); console.log('never');",
+            Language::JavaScript,
+            "sleep.js",
+            std::env::temp_dir(),
+            &registry,
+            channel,
+            cancel,
+        );
+        let lines = drain(&rx);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "abort did not interrupt the host call: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("Aborted")),
+            "missing abort notice: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn abort_infinite_loop() {
+        let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
+        let killer = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            killer.cancel();
+        });
+        // Without a working interrupt handler this never returns.
+        run_script(
+            "while (true) {}",
+            Language::JavaScript,
+            "loop.js",
+            std::env::temp_dir(),
+            &registry,
+            channel,
+            cancel,
+        );
+        let lines = drain(&rx);
+        assert!(
+            lines.iter().any(|l| l.contains("Aborted")),
+            "missing abort notice: {lines:?}"
+        );
     }
 }

@@ -25,12 +25,21 @@ pub struct RunRequested {
     pub file_name: String,
 }
 
+/// Emitted when the user clicks Stop, asking the host to abort the running
+/// script.
+#[derive(Clone, Debug)]
+pub struct StopRequested;
+
 pub struct EditorPanel {
     focus_handle: FocusHandle,
     scripts_dir: PathBuf,
     editor: Entity<EditorState>,
     current_script: Option<Script>,
     dirty: bool,
+    /// True while a script started from this panel is executing; drives the
+    /// Run/Stop enabled state. Owned by the host (Workspace), which calls
+    /// `set_running`.
+    running: bool,
     pending_load: Option<Script>,
     lsp: Option<Arc<LspClient>>,
     doc: Arc<Mutex<Option<DocHandle>>>,
@@ -96,6 +105,7 @@ impl EditorPanel {
             editor,
             current_script: None,
             dirty: false,
+            running: false,
             pending_load: None,
             lsp,
             doc,
@@ -167,6 +177,16 @@ impl EditorPanel {
 
     pub fn current_script(&self) -> Option<&Script> {
         self.current_script.as_ref()
+    }
+
+    /// Track whether a script started here is executing. Driven by the host
+    /// (Workspace) when a run starts and completes, so the toolbar can switch
+    /// between Run and Stop.
+    pub fn set_running(&mut self, running: bool, cx: &mut Context<Self>) {
+        if self.running != running {
+            self.running = running;
+            cx.notify();
+        }
     }
 
     /// Queue a script to be loaded on the next render (render has access to
@@ -278,6 +298,7 @@ impl Panel for EditorPanel {
 
 impl EventEmitter<PanelEvent> for EditorPanel {}
 impl EventEmitter<RunRequested> for EditorPanel {}
+impl EventEmitter<StopRequested> for EditorPanel {}
 
 impl Focusable for EditorPanel {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -319,9 +340,22 @@ impl Render for EditorPanel {
                     .label("Run")
                     .primary()
                     .compact()
-                    .disabled(!can_run)
+                    .disabled(!can_run || self.running)
                     .tooltip("Run script (⌘⏎)")
                     .on_click(cx.listener(|this, _, window, cx| this.run_current(window, cx))),
+            )
+            .child(
+                // Stop uses the full Lucide catalog (assets::IconName); the
+                // component enum only carries a fixed compatibility subset and
+                // has no SquareStop variant.
+                Button::new("stop")
+                    .icon(gpui_kit::assets::IconName::SquareStop)
+                    .label("Stop")
+                    .danger()
+                    .compact()
+                    .disabled(!self.running)
+                    .tooltip("Stop running script")
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(StopRequested))),
             )
             .child(
                 Button::new("save")
