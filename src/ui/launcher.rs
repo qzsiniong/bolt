@@ -123,6 +123,11 @@ impl Render for Launcher {
         // this view), so a strong one would keep both entities alive forever.
         let this = cx.entity().downgrade();
         let mut command = Command::new(&self.state)
+            // Fill the window so the list (flex_1) stretches instead of
+            // leaving a blank strip below the footer; raise the list's cap
+            // accordingly (default 18.75rem is shorter than this window).
+            .h_full()
+            .max_h(rems(40.))
             .placeholder("Search scripts or commands...")
             .on_confirm(move |index, window, app| {
                 let _ = this.update(app, |this, _cx| this.on_confirm(index, window));
