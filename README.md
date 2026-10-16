@@ -1,18 +1,70 @@
 # Scripter
 
-基于 [gpui-kit](https://github.com/) 构建的 macOS 桌面应用，用于管理（新建 / 编辑 / 删除）与执行 JavaScript / TypeScript 脚本。
+基于 [gpui-kit](https://github.com/) 构建的 macOS 桌面应用，以「全局快捷键 + 命令面板」的方式运行 JavaScript / TypeScript 脚本，并附带一个脚本管理器（新建 / 编辑 / 删除）。
 
 脚本以独立文件形式存储在磁盘上，配套自动生成的 `tsconfig.json` 与 `.d.ts` 类型声明，因此除了内置编辑器，也可以直接用 VSCode 等外部 IDE 打开脚本目录，获得完整的类型提示与跳转能力。
 
 ## 特性
 
-- **Dock 布局界面**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
+- **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
+- **外部扩展机制**：`extensions/<id>/` 目录（`extension.json` 清单 + JS/TS 入口）即为一个扩展，其命令自动出现在 Launcher 中。
+- **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
 - **QuickJS 执行引擎**：进程内嵌入 `rquickjs`，无需 Node 运行时，脚本在独立线程执行，不阻塞界面。
 - **TypeScript 直接运行**：通过 swc 做类型擦除（TS → JS）后交给 QuickJS 执行。
 - **Rust 扩展模块（HostModule）**：Rust 侧注册模块后，脚本可用 ES module `import { x } from "name"` 直接调用，声明自动生成到 `types/<name>.d.ts`。
 - **Console 面板**：按时间戳正序输出、等级着色（Log / Info / Warn / Error）、等级筛选、底部跟随滚动。
+
+## Launcher 与扩展
+
+应用启动后**不打开任何窗口**，仅注册全局热键后台待命。
+
+| 快捷键 | 操作 |
+| --- | --- |
+| `Alt + Space` | 唤起 / 关闭 Launcher |
+| `Enter` | 执行选中的命令 |
+| `↑ / ↓` | 移动选择 |
+| `Esc` | 清空搜索；搜索为空时关闭 Launcher |
+
+Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / 新建脚本）、**脚本**（每个脚本一条命令，选中即运行）、**每个扩展一组**。
+
+- **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
+- **新建脚本**：打开管理器并直接进入新建流程。
+- 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（Console 输出会缓冲，待管理器打开后可见）。
+
+### 外部扩展
+
+扩展存放在与 `scripts` 同级的目录：
+
+```text
+~/Library/Application Support/scripter/extensions/
+└── demo/
+    ├── extension.json    # 清单（必填）
+    └── index.js          # 入口（默认 index.js，也支持 .ts）
+```
+
+`extension.json` 清单格式：
+
+```json
+{
+  "id": "demo",
+  "name": "演示扩展",
+  "description": "一句话说明",
+  "entry": "index.js",
+  "commands": [
+    { "id": "hello", "title": "打招呼", "subtitle": "运行 index.js" }
+  ]
+}
+```
+
+- `id` 必填，且必须与目录名一致。
+- `entry` 可省略，默认 `index.js`；只支持 `.js` / `.ts`。
+- `commands` 可省略，省略时自动生成一条以扩展名命名的默认命令。
+- 每条命令在 Launcher 中以扩展名作为分组标题出现，选中即运行入口脚本。
+- 清单解析失败的目录会被跳过并在 Console 记录，不影响其他扩展。
+
+扩展入口脚本与普通脚本拥有完全相同的能力：`console`、定时器、`scripter` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `confirm` / `pickPath` / `scanQr` 等）。
 
 ## 环境要求
 
@@ -34,7 +86,7 @@ cargo build      # 仅构建
 cargo test --bin scripter   # 运行测试
 ```
 
-应用启动时会依次完成：创建脚本目录 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 打开窗口。
+应用启动时会依次完成：创建脚本与扩展目录 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
 
 ## 脚本目录
 
@@ -56,6 +108,8 @@ scripts/
 ├── hello.js               # 示例脚本（仅首次生成）
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
+
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）。
 
 ## 快捷键
 
@@ -403,8 +457,12 @@ ctx.globals().set("console", console)?;
 
 | 文件 | 职责 |
 | --- | --- |
-| [src/main.rs](src/main.rs) | 入口：初始化目录、注册 HostModule、生成项目文件、启动 LSP 与窗口 |
-| [src/workspace.rs](src/workspace.rs) | 顶层布局、面板订阅、全局快捷键、窗口标题 |
+| [src/main.rs](src/main.rs) | 入口：初始化目录、注册 HostModule、生成项目文件、启动 LSP、全局热键与窗口单例管理（AppShell） |
+| [src/launcher.rs](src/launcher.rs) | Raycast 风格 Launcher：命令面板、失焦自动关闭、命令分发 |
+| [src/command_model.rs](src/command_model.rs) | 统一命令模型：内置命令 / 脚本命令 / 扩展命令的分组收集 |
+| [src/extension.rs](src/extension.rs) | 外部扩展发现与 `extension.json` 清单解析 |
+| [src/run_service.rs](src/run_service.rs) | 应用级运行服务：worker 线程、取消令牌、interaction 浮窗全链路 |
+| [src/workspace.rs](src/workspace.rs) | 脚本管理器窗口：dock 布局、面板订阅、窗口快捷键 |
 | [src/panels/](src/panels) | 脚本列表 / 编辑器 / Console 三个面板 |
 | [src/script.rs](src/script.rs) · [src/script_store.rs](src/script_store.rs) | `Script` 模型与脚本目录读写（列表 / 新建 / 删除 / 重命名 / 保存） |
 | [src/runner.rs](src/runner.rs) | 执行引擎：创建 QuickJS 运行时、装配 loader、求值脚本 |

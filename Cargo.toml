@@ -32,6 +32,7 @@ tokio = { version = "1.53.2", features = [
 	"macros",
 ] }
 futures = "0.3.34"
+global-hotkey = "0.8"
 # Host interaction APIs (`typeStr` / `scanQr`).
 # typeStr uses enigo for cross-platform keyboard simulation.
 # scanQr needs CoreGraphics for the screen-capture permission check.

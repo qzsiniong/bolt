@@ -51,12 +51,18 @@ fn line_has_terminator(rope: &Rope, row: usize) -> bool {
 /// The terminator text to use for the final line of a replacement block, so the
 /// text's trailing-newline state survives the edit.
 fn final_terminator(rope: &Rope, row: usize) -> &'static str {
-    if line_has_terminator(rope, row) { "\n" } else { "" }
+    if line_has_terminator(rope, row) {
+        "\n"
+    } else {
+        ""
+    }
 }
 
 /// Content (no `\n`, `\r` kept) of the rows `first..=last`.
 fn line_contents(rope: &Rope, first: usize, last: usize) -> Vec<String> {
-    (first..=last).map(|row| rope.slice_line(row).to_string()).collect()
+    (first..=last)
+        .map(|row| rope.slice_line(row).to_string())
+        .collect()
 }
 
 /// Join lines back up, separating them with `\n` and using `final_term` for the

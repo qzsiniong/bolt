@@ -351,10 +351,7 @@ mod tests {
             .iter()
             .position(|l| l.contains("timeout"))
             .unwrap_or_else(|| panic!("timeout callback never ran: {lines:?}"));
-        assert!(
-            start < end && end < timeout,
-            "unexpected order: {lines:?}"
-        );
+        assert!(start < end && end < timeout, "unexpected order: {lines:?}");
     }
 
     #[test]
@@ -381,7 +378,11 @@ mod tests {
         );
         let lines = drain(&rx);
         let ticks: Vec<&String> = lines.iter().filter(|l| l.contains("tick")).collect();
-        assert_eq!(ticks.len(), 2, "interval did not stop after clear: {lines:?}");
+        assert_eq!(
+            ticks.len(),
+            2,
+            "interval did not stop after clear: {lines:?}"
+        );
         assert!(ticks[0].contains("tick 1") && ticks[1].contains("tick 2"));
     }
 
