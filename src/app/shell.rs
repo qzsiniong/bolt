@@ -1,5 +1,8 @@
 //! App-lifetime state shared across windows.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -7,6 +10,7 @@ use crossbeam_channel::{Receiver, Sender};
 use global_hotkey::GlobalHotKeyManager;
 use gpui_kit::*;
 
+use super::assets::ExtensionAssets;
 use crate::console_channel::{ConsoleChannel, ConsoleEntry};
 use crate::runtime::run_service::RunService;
 use crate::ui::launcher::LauncherRequest;
@@ -34,6 +38,17 @@ pub(super) struct AppShell {
     /// Kept alive for the app lifetime; dropping unregisters the hotkey.
     pub(super) _hotkey_manager: Option<GlobalHotKeyManager>,
     pub(super) _app_tick: Task<()>,
+    /// The gpui-shell runtime UI extensions run in. `None` when it could not be
+    /// created; opening a UI extension then reports the reason instead of
+    /// failing the whole app.
+    pub(super) shell_runtime: Option<Rc<gpui_shell::ShellRuntime>>,
+    /// One window per UI extension, keyed by its directory. A stale handle
+    /// means the window closed itself (user closed it / the script asked to
+    /// exit) and the next open creates a fresh one.
+    pub(super) extension_windows: HashMap<PathBuf, AnyWindowHandle>,
+    /// Handle to the installed asset source, so an extension's own `svg()`
+    /// paths can be registered before its window loads.
+    pub(super) extension_assets: ExtensionAssets,
 }
 
 impl Global for AppShell {}

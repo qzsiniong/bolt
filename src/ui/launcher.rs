@@ -26,6 +26,10 @@ pub enum LauncherRequest {
     OpenManager { new_script: bool },
     /// Run a script or extension entry file.
     RunFile(std::path::PathBuf),
+    /// Open (or focus) a UI extension's own gpui-shell window.
+    OpenExtensionUi {
+        ext: crate::model::extension::UiExtension,
+    },
 }
 
 pub struct Launcher {
@@ -109,6 +113,9 @@ impl Launcher {
             CommandAction::NewScript => LauncherRequest::OpenManager { new_script: true },
             CommandAction::RunScript(path) | CommandAction::RunExtension { entry: path } => {
                 LauncherRequest::RunFile(path.clone())
+            }
+            CommandAction::OpenExtensionUi { ext } => {
+                LauncherRequest::OpenExtensionUi { ext: ext.clone() }
             }
         };
         // If the receiver is gone the app is shutting down: nothing left to do.

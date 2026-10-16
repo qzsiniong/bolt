@@ -194,6 +194,9 @@ pub(super) fn drain_launcher_requests(rx: &Receiver<LauncherRequest>, cx: &mut A
         match request {
             LauncherRequest::OpenManager { new_script } => open_manager(cx, new_script),
             LauncherRequest::RunFile(path) => run_path(cx, &path),
+            LauncherRequest::OpenExtensionUi { ext } => {
+                super::extension_ui::open_extension_ui(cx, ext)
+            }
         }
     }
 }

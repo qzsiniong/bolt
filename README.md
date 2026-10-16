@@ -8,6 +8,7 @@
 
 - **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
 - **外部扩展机制**：`extensions/<id>/` 目录（`extension.json` 清单 + JS/TS 入口）即为一个扩展，其命令自动出现在 Launcher 中。
+- **UI 扩展（gpui-shell）**：`extensions/<id>/` 里放 `gpui-shell.json` + JS 入口，脚本用 `export default class extends View` 描述界面，宿主在 GPUI 主线程渲染成独立原生窗口（无 WebView），支持热重载。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
@@ -27,7 +28,7 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / 新建脚本）、**脚本**（每个脚本一条命令，选中即运行）、**每个扩展一组**。
+Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / 新建脚本）、**脚本**（每个脚本一条命令，选中即运行）、**每个扩展一组**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
@@ -66,6 +67,64 @@ Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / �
 
 扩展入口脚本与普通脚本拥有完全相同的能力：`console`、定时器、`scripter` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `confirm` / `pickPath` / `scanQr` 等）。
 
+### UI 扩展（gpui-shell）
+
+同一层目录里，含 `gpui-shell.json` 的目录是 **UI 扩展**：入口脚本只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
+
+```text
+~/Library/Application Support/scripter/extensions/
+└── ui-demo/
+    ├── gpui-shell.json   # 清单（必填）
+    └── main.js           # 入口：export default class extends View
+```
+
+`gpui-shell.json` 由 gpui-shell 严格校验：**`id` / `name` / `entry` 必填，未知字段直接报错**；`version`、`shell-version`、`dependencies`、`capabilities` 可选。`id` 只允许 `a-z 0-9 . - _`，且首尾必须是字母或数字。
+
+```json
+{
+  "id": "ui-demo",
+  "name": "UI 示例",
+  "version": "0.1.0",
+  "entry": "main.js",
+  "capabilities": { "fs": { "read": ["${pluginDir}"] } }
+}
+```
+
+```js
+import { View, div } from "gpui-kit";
+import { h_flex, v_flex, Button, Input, InputState } from "gpui-base";
+
+export default class UiDemo extends View {
+  init() {
+    this.count = 0;
+    this.draft = InputState.new({ placeholder: "输入点什么…" });
+  }
+
+  render(cx) {
+    const colors = cx.theme().colors;
+    return v_flex()
+      .size_full()
+      .p(24)
+      .gap(12)
+      .bg(colors.background)
+      .child(div().text_color(colors.foreground).child(`计数：${this.count}`))
+      .child(Input.new(this.draft).h(28).px(8).border(1).border_color(colors.input));
+  }
+}
+```
+
+- 可用模块：`gpui-kit`（视图与调度）、`gpui-base`（基础控件：`Button` / `Link` / `Checkbox` / `Switch` / `Input` / `InputState` / `h_flex` / `v_flex` …）、`gpui-fps`。样式全部写在脚本里（base 的控件不带视觉样式），颜色用 `cx.theme().colors` 的语义令牌。
+- 状态就是视图字段，改完调用 `cx.notify()` 触发重绘。
+- 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
+- 数据目录：`~/Library/Application Support/scripter/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
+- 权限：在清单 `capabilities` 里声明（`fs` / `network` / `clipboard` / `process`，`storage` 默认开启），宿主另外默认授予「读扩展目录 + 读写自己的数据目录 + exit」。扩展目录被当作你自己写的代码，不做审批弹窗。
+- 首次加载会在扩展目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
+- **debug 构建**下保存入口文件即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
+- `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
+- 一个目录只能是脚本式扩展或 UI 扩展之一：两个清单同时存在会被报错并跳过。
+- 首次启动会生成 `ui-demo` 示例（目录已存在则不动），可直接在 Launcher 里跑通全链路。
+- **尚未桥接**：UI 扩展目前不能调用普通脚本的宿主 API（`scripter` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
+
 ## 环境要求
 
 - Rust（edition 2024，工具链 1.98+）
@@ -86,7 +145,11 @@ cargo build      # 仅构建
 cargo test --bin scripter   # 运行测试
 ```
 
-应用启动时会依次完成：创建脚本与扩展目录 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：创建脚本与扩展目录（含示例 UI 扩展）→ 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+
+> **首次构建**：UI 扩展运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
+>
+> 脚本引擎与扩展运行时**共用同一个 QuickJS**：`[patch.crates-io] rquickjs` 把 crates.io 的 `rquickjs` 改道到 gpui-kit 仓库里的兼容 facade（`pub use quickjs_jit::*`），因此二进制里不会链接两份 QuickJS 静态库。
 
 ## 脚本目录
 
@@ -109,7 +172,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。
 
 ## 快捷键
 
@@ -460,7 +523,7 @@ ctx.globals().set("console", console)?;
 | 文件 / 目录 | 职责 |
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
-| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态）、`hotkey`（全局热键注册与轮询）、`windows`（Launcher / 管理器窗口单例、命令分发） |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态）、`hotkey`（全局热键注册与轮询）、`windows`（Launcher / 管理器窗口单例、命令分发）、`extension_ui`（UI 扩展窗口的打开 / 单例 / 热重载 / 错误面）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
 | [src/ui/](src/ui) | 所有视图与前端逻辑：`workspace`（管理器窗口）、`launcher`、`interaction_window`、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`panels/`（脚本列表 / 编辑器 / Console；编辑器再分 `editor/{document,actions}`） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`extension`、`command_model`、`project_gen` |
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
@@ -474,6 +537,7 @@ ctx.globals().set("console", console)?;
 ## 架构要点
 
 - **线程模型**：GPUI 主线程只负责渲染；脚本在独立工作线程执行，输出经 `ConsoleChannel` 回传面板。
+- **两套运行时，一个引擎**：普通脚本在 worker 线程上跑 rquickjs（可中断、可取消、可并发 await）；UI 扩展在 GPUI 主线程上由 gpui-shell 执行并原生渲染。两者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 扩展的 `console` 与错误经 `tracing` 转到同一个 Console 面板。
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
 - **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）。
 - **补全修正**：`typescript-language-server` 返回的候选带全量列表且无 `text_edit`，provider 侧按光标前缀过滤，并补齐 `text_edit` 范围，避免成员访问时点号被替换吞掉。

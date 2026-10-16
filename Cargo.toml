@@ -13,7 +13,10 @@ parking_lot = "0.12"
 dirs = "5"
 thiserror = "2"
 crossbeam-channel = "0.5"
-rquickjs = { version = "0.14.0", features = [
+# 0.14 → 0.12：由下面的 [patch.crates-io] 指向 gpui-kit 的 `rquickjs` 兼容
+# facade（它 `pub use quickjs_jit::*`），让脚本引擎与 gpui-shell 的扩展运行时
+# 共用同一个 QuickJS，避免两套 QuickJS C 静态库的重复符号冲突。
+rquickjs = { version = "0.12", features = [
 	"loader",
 	"macro",
 	"bindgen",
@@ -47,3 +50,44 @@ swc_common = "26.0.0"
 swc_ecma_codegen = "32.0.3"
 swc_ecma_transforms_base = "50.0.0"
 swc_ecma_ast = "29.0.2"
+# UI 扩展运行时（扩展脚本描述界面，宿主在 GPUI 主线程原生渲染，无 WebView）。
+# 锁 tag：`gpui-component` 是旧仓库名，canonical 名是 `gpui-kit`，
+# git 源 URL 必须与下面两个 [patch] 的 key 完全一致。
+gpui-shell = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3", default-features = false, features = [
+	"quickjs",
+] }
+# gpui-shell 通过 tracing 上报脚本 console 输出、加载失败与热重载结果；
+# 不装 subscriber 这些事件会被静默丢弃（见 src/app/shell_log.rs）。
+tracing = "0.1"
+
+[dev-dependencies]
+# 让单元测试能用 gpui 的 headless 测试平台跑 gpui-shell 的 `check`：真实加载
+# `ui-demo` 的入口脚本并物化一次元素，捕获 JS 侧的拼写/API 错误。
+#
+# 只开 gpui 自己的 test-support（gpui-kit 的 test-support 会连带解析它那个
+# 未发布的可选 gpui-fast-platform 依赖）。类型仍经 gpui-kit 再导出使用。
+gpui-pre = { version = "=0.3.9", features = ["test-support"] }
+
+# gpui-shell 的 `rquickjs` compat facade 在 crates.io 上名为 `rquickjs`（publish = false），
+# 让全图只剩一份 QuickJS（quickjs-jit）。`[patch]` 只在根 manifest 生效，所以写在这里。
+[patch.crates-io]
+rquickjs = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3" }
+
+# gpui-shell 的 gpui-base 是仓库内 path 依赖；改道到 registry 版，避免与
+# gpui-kit 依赖的 gpui-base 变成两份不同 crate（主题/类型会分裂）。
+# gpui-fps 未发布到 crates.io，保持 git 源，无害。
+[patch."https://github.com/longbridge/gpui-kit"]
+gpui-base = "0.7.3"
+
+# quickjs-jit 的 JIT 在 opt-level = 0 下慢约 3 倍（上游建议）。
+[profile.dev.package.quickjs-jit-sys]
+opt-level = 3
+[profile.dev.package.quickjs-jit-runtime]
+opt-level = 3
+
+# LLRT / QuickJS 的 C 代码让 __eh_frame 超过 16MB，链接器每次会提示
+# "section too large ... performance of exception handling might be affected"。
+# 这是既有第三方代码的固有提示（同一链接里其它 ld 告警/错误仍会照常出现），
+# 这里只关掉这条噪音。
+[lints.rust]
+linker_messages = "allow"

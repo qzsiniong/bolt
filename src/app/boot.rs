@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use gpui_kit::*;
 
+use super::assets::ExtensionAssets;
 use super::shell::{APP_TICK, AppShell};
+use super::shell_log;
 use super::{hotkey, windows};
 use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
@@ -21,6 +23,10 @@ pub(crate) fn run() {
     let extensions_dir = extension::extensions_dir();
     if let Err(e) = extension::ensure_dir(&extensions_dir) {
         eprintln!("ensure extensions dir: {e}");
+    }
+    // 首次启动给一个能直接跑的 UI 扩展示例（已存在则不动）。
+    if let Err(e) = extension::ensure_demo_ui_extension(&extensions_dir) {
+        eprintln!("ensure demo ui extension: {e}");
     }
 
     // Register built-in host modules before generating project files so
@@ -40,12 +46,13 @@ pub(crate) fn run() {
         eprintln!("LSP init failed: {reason}");
     }
 
+    // UI 扩展的 `svg("icons/x.svg")` 相对扩展目录解析，而进程只有一个全局
+    // AssetSource：用复合资源源在内置 Lucide 图标之前先查已打开的扩展目录。
+    let assets = ExtensionAssets::new();
+    let extension_assets = assets.clone();
+
     gpui_kit::application()
-        // Register the embedded icon/SVG bundle (required for Icon rendering).
-        // Use the full Lucide catalog: the default `Assets` bundle only embeds a
-        // curated subset and silently drops icons outside it (e.g. Trash,
-        // FileCode) — their SVG never loads, so the icon renders blank.
-        .with_assets(gpui_kit::assets::AllAssets::new(""))
+        .with_assets(assets)
         .run(move |cx| {
             gpui_kit::init(cx);
 
@@ -54,6 +61,11 @@ pub(crate) fn run() {
             // drains it while open. Output produced with no manager open stays
             // buffered and shows up when one opens.
             let (console_channel, console_rx) = ConsoleChannel::new();
+
+            // UI 扩展（gpui-shell）的诊断全部走 tracing：脚本的 console 输出、
+            // 加载失败、热重载结果。没有 subscriber 这些事件会被静默丢弃，
+            // 所以必须在任何 shell 代码之前安装。
+            shell_log::install(console_channel.clone());
             match &lsp_client {
                 Ok(_) => {
                     console_channel.info("LSP: typescript-language-server connected");
@@ -91,6 +103,31 @@ pub(crate) fn run() {
                 });
             });
 
+            // ── UI 扩展运行时（gpui-shell）─────────────────────────────────
+            // 与普通脚本是两套运行时：扩展脚本在 GPUI 主线程执行、由宿主原生
+            // 渲染。初始化失败只降级成「UI 扩展不可用」，脚本/编辑器链路不受
+            // 影响（Launcher 里那条命令会给出 Console 报错）。
+            gpui_shell::init(cx);
+            let shell_runtime = match gpui_shell::ShellRuntime::new(cx) {
+                Ok(runtime) => Some(runtime),
+                Err(e) => {
+                    console_channel.error(format!("UI 扩展运行时初始化失败：{e:#}"));
+                    None
+                }
+            };
+
+            // 扩展脚本的 `process.exit()` 只关掉它自己的窗口：Scripter 是常驻的
+            // 热键应用，一个扩展不该结束整个进程。窗口句柄留在
+            // `extension_windows` 里会失效，下次打开命令时自动重建。
+            let exit_console = console_channel.clone();
+            gpui_shell::on_exit_request(move |request, window, _cx| {
+                exit_console.info(format!(
+                    "UI 扩展请求退出（code={}），仅关闭其窗口",
+                    request.code()
+                ));
+                window.remove_window();
+            });
+
             cx.set_global(AppShell {
                 launcher: None,
                 launcher_tx,
@@ -101,6 +138,9 @@ pub(crate) fn run() {
                 lsp: lsp_client,
                 _hotkey_manager: hotkey_manager,
                 _app_tick: app_tick,
+                shell_runtime,
+                extension_windows: Default::default(),
+                extension_assets,
             });
 
             // No window at startup: the app idles until Alt+Space.
