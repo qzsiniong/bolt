@@ -56,9 +56,6 @@ impl ConsoleChannel {
         (Self { tx }, rx)
     }
 
-    pub fn log(&self, text: impl Into<String>) {
-        self.send(ConsoleLevel::Log, text.into());
-    }
     pub fn info(&self, text: impl Into<String>) {
         self.send(ConsoleLevel::Info, text.into());
     }

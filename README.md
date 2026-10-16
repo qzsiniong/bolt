@@ -319,12 +319,12 @@ console.log(url ?? '未识别到 QR 码');
 
 以添加一个 `"my-utils"` 模块为例（提供 `greet` 和 `now` 两个函数）：
 
-#### Step 1：在 `src/host_modules/` 下新建文件
+#### Step 1：在 `src/host/modules/` 下新建文件
 
 ```rust
-// src/host_modules/my_utils.rs
+// src/host/modules/my_utils.rs
 use rquickjs::{Ctx, Function, Object, Result};
-use crate::host_module::{HostModule, HostRegistry};
+use crate::host::{HostModule, HostRegistry};
 
 const DECLARATION: &str = r#"
   /** Greet someone. */
@@ -367,10 +367,10 @@ fn now() -> i64 {
 }
 ```
 
-#### Step 2：在 `src/host_modules/mod.rs` 中注册
+#### Step 2：在 `src/host/modules/mod.rs` 中注册
 
 ```rust
-pub mod my_utils;
+pub(crate) mod my_utils;
 
 pub fn register_all(registry: &mut HostRegistry) {
     scripter::register(registry);
@@ -455,24 +455,21 @@ ctx.globals().set("console", console)?;
 
 ## 代码结构
 
-| 文件 | 职责 |
+`src/` 按领域分层，根目录只留 `main.rs` 与跨层共享的最小基础设施：
+
+| 文件 / 目录 | 职责 |
 | --- | --- |
-| [src/main.rs](src/main.rs) | 入口：初始化目录、注册 HostModule、生成项目文件、启动 LSP、全局热键与窗口单例管理（AppShell） |
-| [src/launcher.rs](src/launcher.rs) | Raycast 风格 Launcher：命令面板、失焦自动关闭、命令分发 |
-| [src/command_model.rs](src/command_model.rs) | 统一命令模型：内置命令 / 脚本命令 / 扩展命令的分组收集 |
-| [src/extension.rs](src/extension.rs) | 外部扩展发现与 `extension.json` 清单解析 |
-| [src/run_service.rs](src/run_service.rs) | 应用级运行服务：worker 线程、取消令牌、interaction 浮窗全链路 |
-| [src/workspace.rs](src/workspace.rs) | 脚本管理器窗口：dock 布局、面板订阅、窗口快捷键 |
-| [src/panels/](src/panels) | 脚本列表 / 编辑器 / Console 三个面板 |
-| [src/script.rs](src/script.rs) · [src/script_store.rs](src/script_store.rs) | `Script` 模型与脚本目录读写（列表 / 新建 / 删除 / 重命名 / 保存） |
-| [src/runner.rs](src/runner.rs) | 执行引擎：创建 QuickJS 运行时、装配 loader、求值脚本 |
-| [src/ts_transform.rs](src/ts_transform.rs) | 基于 swc 的 TypeScript 类型擦除 |
-| [src/host_module.rs](src/host_module.rs) | HostModule 注册框架 + rquickjs `Loader`/`Resolver` |
-| [src/host_modules/scripter.rs](src/host_modules/scripter.rs) | 内置 `scripter` 模块与 `console` 全局注入 |
-| [src/lsp.rs](src/lsp.rs) | 自研 LSP JSON-RPC 客户端（stdio + 阻塞线程读写） |
-| [src/lsp_providers.rs](src/lsp_providers.rs) | 桥接 gpui 编辑器四大 provider，含补全过滤与 `text_edit` 修正 |
-| [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam） |
-| [src/project_gen.rs](src/project_gen.rs) | 生成 `tsconfig.json`、`.d.ts` 与示例脚本 |
+| [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态）、`hotkey`（全局热键注册与轮询）、`windows`（Launcher / 管理器窗口单例、命令分发） |
+| [src/ui/](src/ui) | 所有视图与前端逻辑：`workspace`（管理器窗口）、`launcher`、`interaction_window`、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`panels/`（脚本列表 / 编辑器 / Console；编辑器再分 `editor/{document,actions}`） |
+| [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`extension`、`command_model`、`project_gen` |
+| [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
+| [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{scripter,typer,qr}` |
+| [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
+| [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
+| [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |
+
+分组规则：`app` 管「谁在什么时机开哪个窗口」，`ui` 放所有 `impl Render` 的视图与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放脚本执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端。
 
 ## 架构要点
 
