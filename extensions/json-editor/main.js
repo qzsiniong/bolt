@@ -119,16 +119,18 @@ export default class JsonEditor extends View {
 
 	// ── 过滤 ────────────────────────────────────────────────────────────────
 
-	refreshFilter(_cx) {
+	refreshFilter(cx) {
 		const parsed = parseAny(this.editor.value());
 		if (!parsed.ok) {
 			this.resultValue = null;
 			this.resultError = parsed.error === "输入为空" ? "" : parsed.error;
 			if (this.resultError === "") this.formatName = "";
+			cx.notify();
 			return;
 		}
 		this.formatName = parsed.format;
 		this.refreshFilterWith(parsed.value);
+		cx.notify();
 	}
 
 	refreshFilterWith(value) {
