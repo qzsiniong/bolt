@@ -7,8 +7,8 @@
 ## 特性
 
 - **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
-- **外部扩展机制**：`extensions/<id>/` 目录（`extension.json` 清单 + JS/TS 入口）即为一个扩展，其命令自动出现在 Launcher 中。
-- **UI 扩展（gpui-shell）**：`extensions/<id>/` 里放 `gpui-shell.json` + JS 入口，脚本用 `export default class extends View` 描述界面，宿主在 GPUI 主线程渲染成独立原生窗口（无 WebView），支持热重载。
+- **外部扩展机制**：`extensions/<id>/` 目录（单一 `extension.json` 清单 + 入口）即为一个扩展，按 `kind` 分为脚本式与 UI 两类。
+- **UI 扩展（gpui-shell）**：清单里 `kind: "ui"`、入口固定为 `main.js`，脚本用 `export default class extends View` 描述界面，宿主在 GPUI 主线程渲染成独立原生窗口（无 WebView），支持热重载与清单声明置顶。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
@@ -45,13 +45,14 @@ Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / �
     └── index.js          # 入口（默认 index.js，也支持 .ts）
 ```
 
-`extension.json` 清单格式：
+`extension.json` 是**所有扩展共用的唯一清单**，一个字段区分两种形态：
 
 ```json
 {
   "id": "demo",
   "name": "演示扩展",
   "description": "一句话说明",
+  "kind": "script",
   "entry": "index.js",
   "commands": [
     { "id": "hello", "title": "打招呼", "subtitle": "运行 index.js" }
@@ -59,36 +60,50 @@ Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / �
 }
 ```
 
-- `id` 必填，且必须与目录名一致。
-- `entry` 可省略，默认 `index.js`；只支持 `.js` / `.ts`。
+- `id` 必填，且必须与目录名一致；只允许 `a-z 0-9 . - _`，且首尾必须是字母或数字。
+- `kind` 可省略，默认 `"script"`；`"ui"` 表示 UI 扩展（见下一节）。
+- `entry` 可省略，脚本式默认 `index.js`（只支持 `.js` / `.ts`）；UI 扩展固定为 `main.js`。
 - `commands` 可省略，省略时自动生成一条以扩展名命名的默认命令。
 - 每条命令在 Launcher 中以扩展名作为分组标题出现，选中即运行入口脚本。
 - 清单解析失败的目录会被跳过并在 Console 记录，不影响其他扩展。
 
 扩展入口脚本与普通脚本拥有完全相同的能力：`console`、定时器、`scripter` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `confirm` / `pickPath` / `scanQr` 等）。
 
+### 仓库自带扩展
+
+仓库的 `extensions/` 目录里放着随源码维护的扩展（目前是 `json-editor`）。用哪一份由构建类型决定：
+
+- **debug 构建**：直接把仓库 `extensions/` 当作扩展目录，不做复制。改完仓库里的扩展文件重启即生效（UI 扩展在 debug 下还会热重载）；示例 `ui-demo` 只写在数据目录，不会污染工作树。
+- **release 构建**：用用户数据目录，并把仓库扩展播种进去——只复制尚不存在的目录，不覆盖用户改动。
+
 ### UI 扩展（gpui-shell）
 
-同一层目录里，含 `gpui-shell.json` 的目录是 **UI 扩展**：入口脚本只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
+清单里 `kind` 为 `"ui"` 的目录是 **UI 扩展**：入口脚本只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
 
 ```text
 ~/Library/Application Support/scripter/extensions/
 └── ui-demo/
-    ├── gpui-shell.json   # 清单（必填）
+    ├── extension.json    # 清单（必填，kind 为 ui）
     └── main.js           # 入口：export default class extends View
 ```
 
-`gpui-shell.json` 由 gpui-shell 严格校验：**`id` / `name` / `entry` 必填，未知字段直接报错**；`version`、`shell-version`、`dependencies`、`capabilities` 可选。`id` 只允许 `a-z 0-9 . - _`，且首尾必须是字母或数字。
+UI 扩展的清单沿用同一个 `extension.json`，只是把 `kind` 写成 `ui`：
 
 ```json
 {
   "id": "ui-demo",
   "name": "UI 示例",
-  "version": "0.1.0",
+  "kind": "ui",
   "entry": "main.js",
-  "capabilities": { "fs": { "read": ["${pluginDir}"] } }
+  "capabilities": { "clipboard": true },
+  "window": { "always_on_top": false, "width": 880, "height": 720 }
 }
 ```
+
+- **入口固定为 `main.js`**。UI 扩展的入口契约由宿主写死，因此 `entry` 只能写 `main.js`（写别的值会被报错并跳过），目录里也必须有 `main.js`。
+- **清单由宿主校验**：`id` 必填且与目录名一致；`kind` 为 `ui`；`window.width/height` 必须为正数。
+- **置顶由清单声明**：`window.always_on_top`（默认 `false`）决定宿主开窗用 `WindowKind::Floating`（NSFloatingWindowLevel，真正浮在其他窗口之上）还是普通窗口。窗口层级只能在创建时确定，所以运行时改这个开关不会实时生效，重启扩展窗口才生效；界面上的图钉图标只是当前状态的指示。
+- `window.width` / `window.height` 默认 `880 × 720`，小于最小尺寸时以最小尺寸为准。
 
 ```js
 import { View, div } from "gpui-kit";
@@ -113,17 +128,27 @@ export default class UiDemo extends View {
 }
 ```
 
-- 可用模块：`gpui-kit`（视图与调度）、`gpui-base`（基础控件：`Button` / `Link` / `Checkbox` / `Switch` / `Input` / `InputState` / `h_flex` / `v_flex` …）、`gpui-fps`。样式全部写在脚本里（base 的控件不带视觉样式），颜色用 `cx.theme().colors` 的语义令牌。
+- 可用模块：`gpui-kit`（视图与调度）、`gpui-base`（基础控件：`Button` / `Link` / `Checkbox` / `Switch` / `Input` / `InputState` / `Textarea` / `TextareaState` / `TextView` / `h_flex` / `v_flex` …）、`gpui-fps`。样式全部写在脚本里（base 的控件不带视觉样式），颜色用 `cx.theme().colors` 的语义令牌。
 - 状态就是视图字段，改完调用 `cx.notify()` 触发重绘。
 - 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
 - 数据目录：`~/Library/Application Support/scripter/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
-- 权限：在清单 `capabilities` 里声明（`fs` / `network` / `clipboard` / `process`，`storage` 默认开启），宿主另外默认授予「读扩展目录 + 读写自己的数据目录 + exit」。扩展目录被当作你自己写的代码，不做审批弹窗。
+- **权限由宿主按清单构建**：宿主始终授予「读扩展目录 + 读/写自己的数据目录 + `storage` + `exit`」；清单 `capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。扩展目录被当作你自己写的代码，不做审批弹窗。
 - 首次加载会在扩展目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
 - **debug 构建**下保存入口文件即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
 - `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
-- 一个目录只能是脚本式扩展或 UI 扩展之一：两个清单同时存在会被报错并跳过。
+- **旧布局会被报错并跳过**：一个 UI 扩展目录若只有 `gpui-shell.json` 而没有 `extension.json`，或两者同时存在（歧义），都会被跳过并在 Console 报错。
 - 首次启动会生成 `ui-demo` 示例（目录已存在则不动），可直接在 Launcher 里跑通全链路。
 - **尚未桥接**：UI 扩展目前不能调用普通脚本的宿主 API（`scripter` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
+
+### 内置 JSON 编辑器
+
+仓库自带一个用扩展机制实现的 JSON 编辑器，位于 [`extensions/json-editor`](extensions/json-editor)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」分组出现。它演示了 UI 扩展的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
+
+- **置顶窗口**：清单声明 `window.always_on_top: true`。
+- **粘贴自动格式化**：向编辑器粘贴一段 ≥8 字符的文本时自动解析并格式化（行号 / 语法高亮由只读结果面板的 Markdown 承担）。
+- **容错解析**：不止标准 JSON，还能识别 JSONC / JSON5 / JS 字面量、URL 查询串、XML、YAML 子集，以及被转义的 JSON 字符串；解析失败时给出定位提示。
+- **JS 过滤**：左下角输入框写受限表达式（`.key.subkey`、`[0][1]`、`.map(x => x.val)` 等，支持 `map` / `filter` / `find` / `slice` / `keys` / `values` / `sort` / `reverse` / `join` / `flat` 与比较运算），结果渲染在只读结果面板。求值器自研（沙箱里 `eval` / `Function` 被禁用），不是完整 JavaScript。
+- **右下角工具**：格式化、压缩、压缩并复制、复制、转义 / 反转义字符串、从剪贴板导入、清空等。
 
 ## 环境要求
 
@@ -145,7 +170,7 @@ cargo build      # 仅构建
 cargo test --bin scripter   # 运行测试
 ```
 
-应用启动时会依次完成：创建脚本与扩展目录（含示例 UI 扩展）→ 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库扩展与示例 UI 扩展）→ 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
 
 > **首次构建**：UI 扩展运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
 >

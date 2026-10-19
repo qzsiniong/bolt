@@ -20,13 +20,25 @@ pub(crate) fn run() {
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {
         eprintln!("ensure scripts dir: {e}");
     }
-    let extensions_dir = extension::extensions_dir();
+    // 扩展目录：debug 构建直接使用仓库里的 `extensions/`，改完重启即生效；
+    // release 构建用数据目录，并把仓库扩展播种进去（只补缺失，不覆盖用户改动）。
+    let extensions_dir = extension::active_extensions_dir();
     if let Err(e) = extension::ensure_dir(&extensions_dir) {
         eprintln!("ensure extensions dir: {e}");
     }
-    // 首次启动给一个能直接跑的 UI 扩展示例（已存在则不动）。
-    if let Err(e) = extension::ensure_demo_ui_extension(&extensions_dir) {
-        eprintln!("ensure demo ui extension: {e}");
+    if extension::uses_bundled_extensions() {
+        // 仓库目录就是工作树：不往里写示例，也没有「同步」这回事。
+        eprintln!("extensions dir: {}", extensions_dir.display());
+    } else {
+        // 首次启动给一个能直接跑的 UI 扩展示例（已存在则不动）。
+        if let Err(e) = extension::ensure_demo_ui_extension(&extensions_dir) {
+            eprintln!("ensure demo ui extension: {e}");
+        }
+        match extension::ensure_bundled_extensions(&extensions_dir) {
+            Ok(n) if n > 0 => eprintln!("synced {n} bundled extension(s)"),
+            Ok(_) => {}
+            Err(e) => eprintln!("ensure bundled extensions: {e}"),
+        }
     }
 
     // Register built-in host modules before generating project files so

@@ -184,8 +184,8 @@ mod tests {
     fn ui_extensions_get_their_own_group_and_action() {
         let tmp = TempDir::new("ui-command");
         tmp.write(
-            "extensions/ui/gpui-shell.json",
-            r#"{ "id": "ui", "name": "UI 示例", "entry": "main.js" }"#,
+            "extensions/ui/extension.json",
+            r#"{ "id": "ui", "name": "UI 示例", "kind": "ui", "entry": "main.js" }"#,
         );
         tmp.write("extensions/ui/main.js", "");
 
@@ -208,7 +208,8 @@ mod tests {
     #[test]
     fn broken_ui_manifest_is_reported_in_errors() {
         let tmp = TempDir::new("ui-command-broken");
-        tmp.write("extensions/bad/gpui-shell.json", r#"{ "id": "bad" }"#);
+        // kind 是 ui 但没写 main.js 入口 → UI 侧报错。
+        tmp.write("extensions/bad/extension.json", r#"{ "id": "bad", "kind": "ui" }"#);
 
         let (groups, errors) = collect_commands(&tmp.0.join("scripts"), &tmp.0.join("extensions"));
         assert_eq!(groups.groups.len(), 1);

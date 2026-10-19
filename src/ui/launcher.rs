@@ -57,7 +57,7 @@ impl Launcher {
         // since the last time the launcher was up.
         let (commands, errors) = collect_commands(
             &crate::model::script_store::scripts_dir(),
-            &crate::model::extension::extensions_dir(),
+            &crate::model::extension::active_extensions_dir(),
         );
         for error in &errors {
             console.warn(format!(

@@ -17,14 +17,13 @@ use std::rc::Rc;
 // `mod tests` 里的 `#[test]` 变成递归展开。
 use gpui_kit::{
     App, AppContext as _, Bounds, Context, Entity, IntoElement, Render, TitlebarOptions, Window,
-    WindowBounds, WindowOptions, px, size,
+    WindowBounds, WindowKind, WindowOptions, px, size,
 };
 
 use super::shell::AppShell;
 use crate::model::extension::{UiExtension, ensure_extension_data_dir, extension_data_dir};
 
-/// UI 扩展窗口的默认尺寸。
-const EXTENSION_WINDOW_SIZE: (f32, f32) = (880., 720.);
+/// UI 扩展窗口的最小尺寸；不会超过清单声明的尺寸。
 const EXTENSION_WINDOW_MIN_SIZE: (f32, f32) = (560., 420.);
 
 /// 打开（或聚焦）一个 UI 扩展窗口。
@@ -56,6 +55,7 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     }
 
     let id = ext.id().to_string();
+    let pinned = ext.manifest.window.always_on_top;
     // 数据目录与授权必须在 load 之前设置：参见模块头部说明。
     let data_dir = match ensure_extension_data_dir(&id) {
         Ok(dir) => dir,
@@ -67,12 +67,16 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     if let Err(e) = gpui_shell::set_bundle_id(&format!("scripter.{id}")) {
         console.warn(format!("UI 扩展 {id} 的应用标识不可用：{e}"));
     }
+    // 目录里没有 gpui-shell.json：能力完全由宿主安装，清单里的开关决定剪贴板。
+    let clipboard = ext.manifest.capabilities.clipboard;
     gpui_shell::set_storage_path(data_dir.join("store.json"));
     gpui_shell::set_capabilities(
-        ext.manifest
-            .capabilities(&ext.root, &data_dir)
+        gpui_shell::Capabilities::new()
             .read_roots([ext.root.clone(), data_dir.clone()])
             .write_roots([data_dir])
+            .storage(true)
+            .clipboard_read(clipboard)
+            .clipboard_write(clipboard)
             .exit(true),
     );
 
@@ -85,15 +89,22 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     let name = ext.name().to_string();
     let title = format!("{name} — Scripter");
     let load_console = console.clone();
+    let window_size = (ext.manifest.window.width, ext.manifest.window.height);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
-            size(px(EXTENSION_WINDOW_SIZE.0), px(EXTENSION_WINDOW_SIZE.1)),
+            size(px(window_size.0), px(window_size.1)),
             cx,
         ))),
+        // 置顶：gpui 的窗口层级只能在创建时确定，故由清单开关决定窗口类型。
+        kind: if pinned {
+            WindowKind::PopUp
+        } else {
+            WindowKind::Normal
+        },
         window_min_size: Some(size(
-            px(EXTENSION_WINDOW_MIN_SIZE.0),
-            px(EXTENSION_WINDOW_MIN_SIZE.1),
+            px(EXTENSION_WINDOW_MIN_SIZE.0.min(window_size.0)),
+            px(EXTENSION_WINDOW_MIN_SIZE.1.min(window_size.1)),
         )),
         titlebar: Some(TitlebarOptions {
             title: Some(title.into()),
@@ -121,7 +132,11 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     cx.global_mut::<AppShell>()
         .extension_windows
         .insert(ext.root.clone(), handle.into());
-    console.info(format!("已打开 UI 扩展 {name}（{id} · {}）", ext.entry()));
+    console.info(format!(
+        "已打开 UI 扩展 {name}（{id} · {}{}）",
+        ext.entry(),
+        if pinned { " · 置顶" } else { "" }
+    ));
 }
 
 /// 载入扩展并返回窗口根视图；加载失败时退回一个可选中复制的错误面，
@@ -194,6 +209,21 @@ mod tests {
         assert_eq!(first_lines("a\nb\nc", 2), "a\nb\n…");
     }
 
+    /// 在 headless 窗口里真实加载一个扩展目录的入口脚本，构建并物化一次元素。
+    fn check_loads(dir: &std::path::Path, cx: &mut gpui_kit::TestAppContext) {
+        cx.update(gpui_shell::init);
+        let runtime = gpui_shell::ShellRuntime::new_isolated().expect("start shell runtime");
+        let window = cx.add_window(|_, _| Empty);
+        let mut context = VisualTestContext::from_window(window.into(), cx);
+        let checked = context.update(|window, cx| runtime.check(dir, window, cx));
+        assert!(
+            checked.is_ok(),
+            "{} 加载失败：{}",
+            dir.display(),
+            checked.err().map(|e| format!("{e:#}")).unwrap_or_default()
+        );
+    }
+
     /// JS 没有编译期检查：这里用 gpui-shell 自带的 `check` 在 headless 窗口里
     /// 真实加载 `ui-demo` 的入口脚本，构建并物化一次元素描述。入口脚本写错、
     /// 用了不存在的模块/组件/样式方法都会让这个测试失败。
@@ -205,18 +235,16 @@ mod tests {
         let extensions = tmp.0.join("extensions");
         std::fs::create_dir_all(&extensions).expect("create extensions dir");
         extension::ensure_demo_ui_extension(&extensions).expect("write demo extension");
-        let dir = extensions.join(extension::DEMO_UI_ID);
+        check_loads(&extensions.join(extension::DEMO_UI_ID), cx);
+    }
 
-        cx.update(gpui_shell::init);
-        let runtime = gpui_shell::ShellRuntime::new_isolated().expect("start shell runtime");
-        let window = cx.add_window(|_, _| Empty);
-        let mut context = VisualTestContext::from_window(window.into(), cx);
-        let checked = context.update(|window, cx| runtime.check(&dir, window, cx));
-        assert!(
-            checked.is_ok(),
-            "ui-demo 加载失败：{}",
-            checked.err().map(|e| format!("{e:#}")).unwrap_or_default()
-        );
+    /// 仓库内 `json-editor` 同样真实加载一次：入口脚本写错、引用了不存在的
+    /// 模块/组件/样式方法都会让它失败。
+    #[gpui_kit::test]
+    fn json_editor_extension_loads(cx: &mut gpui_kit::TestAppContext) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/json-editor");
+        assert!(dir.is_dir(), "缺少仓库扩展目录 {}", dir.display());
+        check_loads(&dir, cx);
     }
 
     struct Empty;
