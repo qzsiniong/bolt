@@ -549,16 +549,17 @@ ctx.globals().set("console", console)?;
 | 文件 / 目录 | 职责 |
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
-| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态）、`hotkey`（全局热键注册与轮询）、`windows`（Launcher / 管理器窗口单例、命令分发）、`extension_ui`（UI 扩展窗口的打开 / 单例 / 热重载 / 错误面 / 宿主标题栏与置顶切换）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/ui/](src/ui) | 所有视图与前端逻辑：`workspace`（管理器窗口）、`launcher`、`interaction_window`、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`panels/`（脚本列表 / 编辑器 / Console；编辑器再分 `editor/{document,actions}`） |
-| [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`extension`、`command_model`、`project_gen` |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`extensions/`（`manifest` 清单扫描 + `ui_window` UI 扩展窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/ui/](src/ui) | 跨模块共享 UI：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作） |
+| [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{scripter,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |
 
-分组规则：`app` 管「谁在什么时机开哪个窗口」，`ui` 放所有 `impl Render` 的视图与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放脚本执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端。
+分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放脚本执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。
 
 ## 架构要点
 

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use super::script::Language;
+use crate::model::script::Language;
 
 pub const MANIFEST_FILE: &str = "extension.json";
 pub const DEFAULT_ENTRY: &str = "index.js";

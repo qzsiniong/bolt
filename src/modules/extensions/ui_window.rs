@@ -27,8 +27,9 @@ use std::rc::Rc;
 
 // 显式导入：`gpui_kit::*` 会把 gpui 的 `#[gpui::test]` 宏带进作用域，令下面
 // `mod tests` 里的 `#[test]` 变成递归展开。
-use super::shell::{AppShell, ExtensionWindow};
-use crate::model::extension::{UiExtension, ensure_extension_data_dir, extension_data_dir};
+use super::manifest::{UiExtension, ensure_extension_data_dir, extension_data_dir};
+use super::state::ExtensionsState;
+use crate::app::shell::AppShell;
 use crate::ui::window_pin::{WindowPin, set_window_level};
 use gpui_kit::component::{ActiveTheme as _, TitleBar};
 use gpui_kit::{
@@ -89,17 +90,13 @@ impl Render for ExtensionChrome {
 pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     let console = cx.global::<AppShell>().console_channel.clone();
 
-    let Some(runtime) = cx.global::<AppShell>().shell_runtime.clone() else {
+    let Some(runtime) = cx.global::<ExtensionsState>().shell_runtime.clone() else {
         console.error("UI 扩展运行时不可用（gpui-shell 初始化失败），无法打开扩展窗口");
         return;
     };
 
     // 单例：同一扩展只保留一个窗口；句柄失效说明窗口已经关了，重新开一个。
-    let existing = cx
-        .global::<AppShell>()
-        .extension_windows
-        .get(&ext.root)
-        .map(|w| w.handle);
+    let existing = cx.global::<ExtensionsState>().ui_windows.get(&ext.root);
     if let Some(handle) = existing {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -108,8 +105,8 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
             cx.activate(true);
             return;
         }
-        cx.global_mut::<AppShell>()
-            .extension_windows
+        cx.global_mut::<ExtensionsState>()
+            .ui_windows
             .remove(&ext.root);
     }
 
@@ -140,8 +137,8 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     );
 
     // 扩展自己的 `svg("icons/x.svg")` 相对扩展根解析，需要先登记。
-    cx.global::<AppShell>()
-        .extension_assets
+    cx.global::<ExtensionsState>()
+        .assets
         .register_root(ext.root.clone());
 
     let root = ext.root.clone();
@@ -202,12 +199,9 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
         let _ = handle.update(cx, |_, window, _| set_window_level(window, true));
     }
 
-    cx.global_mut::<AppShell>().extension_windows.insert(
-        ext.root.clone(),
-        ExtensionWindow {
-            handle: handle.into(),
-        },
-    );
+    cx.global_mut::<ExtensionsState>()
+        .ui_windows
+        .insert(ext.root.clone(), handle.into());
     console.info(format!(
         "已打开 UI 扩展 {name}（{id} · {}{}）",
         ext.entry(),
@@ -305,13 +299,13 @@ mod tests {
     /// 用了不存在的模块/组件/样式方法都会让这个测试失败。
     #[gpui_kit::test]
     fn demo_ui_extension_loads(cx: &mut gpui_kit::TestAppContext) {
-        use crate::model::extension;
+        use super::super::manifest;
 
         let tmp = crate::test_support::TempDir::new("ui-demo-check");
         let extensions = tmp.0.join("extensions");
         std::fs::create_dir_all(&extensions).expect("create extensions dir");
-        extension::ensure_demo_ui_extension(&extensions).expect("write demo extension");
-        check_loads(&extensions.join(extension::DEMO_UI_ID), cx);
+        manifest::ensure_demo_ui_extension(&extensions).expect("write demo extension");
+        check_loads(&extensions.join(manifest::DEMO_UI_ID), cx);
     }
 
     /// 仓库内 `json-editor` 同样真实加载一次：入口脚本写错、引用了不存在的

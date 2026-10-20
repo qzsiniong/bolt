@@ -12,7 +12,11 @@ use super::shell_log;
 use super::{hotkey, windows};
 use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
-use crate::model::{extension, project_gen, script_store};
+use crate::model::{project_gen, script_store};
+use crate::modules::extensions::manifest as extension;
+use crate::modules::extensions::state::ExtensionsState;
+use crate::modules::json_editor::state::JsonEditorState;
+use crate::modules::scripts::state::ScriptsState;
 use crate::runtime::run_service::RunService;
 
 pub(crate) fn run() {
@@ -100,8 +104,7 @@ pub(crate) fn run() {
                 Err(e) => console_channel.error(e),
             }
 
-            // Launcher commands come back through this channel; the tick below
-            // answers them in a plain app update.
+            // Launcher 里被确认的 item 闭包经这个 channel 回到 app tick 执行。
             let (launcher_tx, launcher_rx) = crossbeam_channel::unbounded();
 
             let app_tick = cx.spawn(async move |cx| loop {
@@ -129,8 +132,8 @@ pub(crate) fn run() {
             };
 
             // 扩展脚本的 `process.exit()` 只关掉它自己的窗口：Scripter 是常驻的
-            // 热键应用，一个扩展不该结束整个进程。窗口句柄留在
-            // `extension_windows` 里会失效，下次打开命令时自动重建。
+            // 热键应用，一个扩展不该结束整个进程。窗口句柄留在 ExtensionsState
+            // 里会失效，下次打开命令时自动重建。
             let exit_console = console_channel.clone();
             gpui_shell::on_exit_request(move |request, window, _cx| {
                 exit_console.info(format!(
@@ -140,20 +143,25 @@ pub(crate) fn run() {
                 window.remove_window();
             });
 
+            // 各内容模块的应用级状态：窗口单例与模块专属资源。
+            cx.set_global(ScriptsState { manager: None });
+            cx.set_global(JsonEditorState { window: None });
+            cx.set_global(ExtensionsState {
+                ui_windows: Default::default(),
+                assets: extension_assets,
+                shell_runtime,
+            });
+
             cx.set_global(AppShell {
                 launcher: None,
                 launcher_tx,
-                manager: None,
-                json_editor: None,
+                modules: crate::modules::default_modules(),
                 run_service,
                 console_channel,
                 console_rx,
                 lsp: lsp_client,
                 _hotkey_manager: hotkey_manager,
                 _app_tick: app_tick,
-                shell_runtime,
-                extension_windows: Default::default(),
-                extension_assets,
             });
 
             // No window at startup: the app idles until Alt+Space.
