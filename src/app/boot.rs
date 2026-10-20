@@ -144,6 +144,7 @@ pub(crate) fn run() {
                 launcher: None,
                 launcher_tx,
                 manager: None,
+                json_editor: None,
                 run_service,
                 console_channel,
                 console_rx,

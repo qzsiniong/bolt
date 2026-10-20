@@ -15,6 +15,8 @@ pub enum CommandAction {
     OpenManager,
     /// Open the manager and start its new-script flow.
     NewScript,
+    /// Open (or focus) the native JSON editor window.
+    OpenJsonEditor,
     /// Run a script file from the scripts directory.
     RunScript(PathBuf),
     /// Run an extension's entry file.
@@ -75,6 +77,13 @@ pub fn collect_commands(
             subtitle: Some("在脚本管理器中创建新脚本".to_string()),
             icon: IconName::FilePlus,
             action: CommandAction::NewScript,
+        },
+        AppCommand {
+            id: "builtin.open-json-editor".to_string(),
+            title: "JSON 编辑器".to_string(),
+            subtitle: Some("原生 JSON 编辑器（严格 JSON，语法高亮 + 折叠）".to_string()),
+            icon: IconName::Braces,
+            action: CommandAction::OpenJsonEditor,
         },
     ];
     groups.push(("内置".to_string(), builtin));
@@ -141,7 +150,7 @@ mod tests {
         assert!(errors.is_empty());
         assert_eq!(groups.groups.len(), 1);
         assert_eq!(groups.groups[0].0, "内置");
-        assert_eq!(groups.len(), 2);
+        assert_eq!(groups.len(), 3);
         assert!(matches!(
             groups.resolve(0, 0).map(|c| &c.action),
             Some(CommandAction::OpenManager)

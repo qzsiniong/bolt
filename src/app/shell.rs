@@ -13,8 +13,8 @@ use gpui_kit::*;
 use super::assets::ExtensionAssets;
 use crate::console_channel::{ConsoleChannel, ConsoleEntry};
 use crate::runtime::run_service::RunService;
-use crate::ui::launcher::LauncherRequest;
-use crate::ui::workspace::Workspace;
+use crate::modules::launcher::LauncherRequest;
+use crate::modules::scripts::Workspace;
 
 /// How often the global hotkey channel and launcher requests are polled.
 pub(super) const APP_TICK: Duration = Duration::from_millis(100);
@@ -31,6 +31,7 @@ pub(super) struct AppShell {
     /// window must drop it (and its console drain) so console output buffers
     /// in the channel until a manager is open again.
     pub(super) manager: Option<(AnyWindowHandle, WeakEntity<Workspace>)>,
+    pub(super) json_editor: Option<AnyWindowHandle>,
     pub(super) run_service: Entity<RunService>,
     pub(super) console_channel: ConsoleChannel,
     pub(super) console_rx: Receiver<ConsoleEntry>,

@@ -12,6 +12,7 @@ mod console_channel;
 mod host;
 mod lsp;
 mod model;
+mod modules;
 mod runtime;
 #[cfg(test)]
 mod test_support;

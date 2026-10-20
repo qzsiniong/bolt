@@ -8,8 +8,9 @@ use gpui_kit::*;
 
 use super::shell::AppShell;
 use crate::model::script::Language;
-use crate::ui::launcher::{Launcher, LauncherRequest};
-use crate::ui::workspace::Workspace;
+use crate::modules::json_editor::panel::JsonEditorPanel;
+use crate::modules::launcher::{Launcher, LauncherRequest};
+use crate::modules::scripts::Workspace;
 
 /// Launcher window size.
 const LAUNCHER_SIZE: (f32, f32) = (720., 480.);
@@ -184,6 +185,47 @@ pub(super) fn open_manager(cx: &mut App, new_script: bool) {
     }
 }
 
+/// Open the native JSON editor window as a singleton — focus the existing
+/// handle if it's still alive, otherwise activate the app and create a fresh
+/// one. Mirrors `open_manager` above.
+pub(super) fn open_json_editor(cx: &mut App) {
+    cx.activate(true);
+
+    let existing = cx.global_mut::<AppShell>().json_editor.take();
+    if let Some(handle) = existing {
+        let alive = handle
+            .update(cx, |_, window, _| window.activate_window())
+            .is_ok();
+        if alive {
+            cx.global_mut::<AppShell>().json_editor = Some(handle);
+            return;
+        }
+    }
+
+    let console = cx.global::<AppShell>().console_channel.clone();
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+            None,
+            size(px(880.), px(720.)),
+            cx,
+        ))),
+        kind: WindowKind::Normal,
+        ..Default::default()
+    };
+
+    let opened = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| JsonEditorPanel::new(window, cx))
+    });
+    match opened {
+        Ok((handle, _panel)) => {
+            cx.global_mut::<AppShell>().json_editor = Some(handle);
+        }
+        Err(e) => {
+            console.error(format!("无法打开 JSON 编辑器窗口：{e}"));
+        }
+    }
+}
+
 /// Answer launcher commands from the app tick.
 ///
 /// Dispatch happens here rather than in the launcher's own confirm callback:
@@ -193,6 +235,7 @@ pub(super) fn drain_launcher_requests(rx: &Receiver<LauncherRequest>, cx: &mut A
     while let Ok(request) = rx.try_recv() {
         match request {
             LauncherRequest::OpenManager { new_script } => open_manager(cx, new_script),
+            LauncherRequest::OpenJsonEditor => open_json_editor(cx),
             LauncherRequest::RunFile(path) => run_path(cx, &path),
             LauncherRequest::OpenExtensionUi { ext } => {
                 super::extension_ui::open_extension_ui(cx, ext)

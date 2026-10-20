@@ -6,8 +6,9 @@ edition = "2024"
 [dependencies]
 # gpui-kit = "0.7"
 gpui-kit = { version = "0.7.1", features = [
-	"tree-sitter-javascript",
-	"tree-sitter-typescript",
+    "tree-sitter",      # 聚合，包含 tree-sitter + tree-sitter-json
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
 ] }
 parking_lot = "0.12"
 dirs = "5"

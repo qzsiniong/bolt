@@ -24,6 +24,8 @@ const BLUR_TICK: Duration = Duration::from_millis(100);
 pub enum LauncherRequest {
     /// Open or focus the script manager; `new_script` starts its creation flow.
     OpenManager { new_script: bool },
+    /// Open or focus the native JSON editor window.
+    OpenJsonEditor,
     /// Run a script or extension entry file.
     RunFile(std::path::PathBuf),
     /// Open (or focus) a UI extension's own gpui-shell window.
@@ -111,6 +113,7 @@ impl Launcher {
         let request = match &command.action {
             CommandAction::OpenManager => LauncherRequest::OpenManager { new_script: false },
             CommandAction::NewScript => LauncherRequest::OpenManager { new_script: true },
+            CommandAction::OpenJsonEditor => LauncherRequest::OpenJsonEditor,
             CommandAction::RunScript(path) | CommandAction::RunExtension { entry: path } => {
                 LauncherRequest::RunFile(path.clone())
             }
