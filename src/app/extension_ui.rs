@@ -1,10 +1,21 @@
 //! UI 扩展（gpui-shell）窗口。
 //!
 //! 一个 UI 扩展 = 一个原生窗口：入口脚本 `export default class extends View`，
-//! 宿主在同进程 GPUI 主线程把它渲染成真实元素（没有 WebView）。窗口根就是
-//! gpui-shell 的 `ShellRoot`（**不能**用会包一层 `base::Root` 的
-//! `gpui_kit::open_window`），因此扩展脚本可以使用 shell 自带的
-//! dialog / sheet / toast / 焦点与文本选择能力。
+//! 宿主在同进程 GPUI 主线程把它渲染成真实元素（没有 WebView）。
+//!
+//! **窗口的根视图必须是 gpui-shell 的 `ShellRoot`**：脚本侧的 tooltip、toast、
+//! dialog、sheet 全靠 `Window::root::<ShellRoot>()` 去找宿主层（root.rs 的
+//! `update` / `tooltip_overlay`），根视图不是 `ShellRoot` 时它们**静默失效**
+//! （`update` 返回 `None`，tooltip 触发器直接 return）。因此宿主自绘标题栏
+//! （[`ExtensionChrome`]，右上角置顶图钉）只能作为 `ShellRoot` 的 **content**
+//! 出现，不能反过来把 `ShellRoot` 包在外面——那样 tooltip/toast/dialog 全废。
+//!
+//! 需要保留 `try_load` 出来的那个 `ShellRoot`：热重载的 `runtime.watch` 要从
+//! 它的 `application()` 元数据里取目录与入口（watch.rs L416-L430），而脚本视图
+//! 由它持有。所以 [`ExtensionChrome`] 留着它，只把它的 `content()` 渲染出来。
+//!
+//! 置顶切换直接改 NSWindow 层级（见 [`set_window_level`]），不关窗、不重建
+//! 脚本视图。
 //!
 //! 每次 `try_load` 之前都要重新设置 storage 与 capabilities：gpui-shell 的
 //! 「默认策略」是进程级的，而 `try_load` 在载入那一刻把它快照进该窗口的
@@ -15,16 +26,121 @@ use std::rc::Rc;
 
 // 显式导入：`gpui_kit::*` 会把 gpui 的 `#[gpui::test]` 宏带进作用域，令下面
 // `mod tests` 里的 `#[test]` 变成递归展开。
-use gpui_kit::{
-    App, AppContext as _, Bounds, Context, Entity, IntoElement, Render, TitlebarOptions, Window,
-    WindowBounds, WindowKind, WindowOptions, px, size,
-};
-
-use super::shell::AppShell;
+use super::shell::{AppShell, ExtensionWindow};
 use crate::model::extension::{UiExtension, ensure_extension_data_dir, extension_data_dir};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::ButtonVariants;
+use gpui_kit::component::{ActiveTheme as _, TitleBar, button::Button};
+use gpui_kit::{
+    App, AppContext as _, Bounds, Context, Entity, FontWeight, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Render, SharedString, Styled as _,
+    TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+};
 
 /// UI 扩展窗口的最小尺寸；不会超过清单声明的尺寸。
 const EXTENSION_WINDOW_MIN_SIZE: (f32, f32) = (560., 420.);
+
+/// 直接改 NSWindow 层级实现置顶 / 取消置顶。
+///
+/// `WindowKind::Floating` 与 `Normal` 在 gpui-pre-macos（window.rs L1210-L1218）
+/// 只差 `setLevel_` 与鼠标移动事件开关，两者都是 NSWindow 的运行时消息——
+/// 所以窗口层级并不真的「只能创建时确定」，切换无需关窗重开，gpui 也不读
+/// 层级、无副作用。经 `Window: HasWindowHandle`（gpui-pre window.rs L7571）
+/// 拿到 `AppKitWindowHandle` 的 NSView，再向它要 NSWindow 发消息。
+#[cfg(target_os = "macos")]
+pub(crate) fn set_window_level(window: &Window, pinned: bool) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::RawWindowHandle;
+
+    // gpui 的 `Window` 自带固有 `window_handle()`（返回 `AnyWindowHandle`），
+    // 会遮蔽 trait 方法，这里显式走 `HasWindowHandle` 拿 raw handle。
+    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+        return;
+    };
+    let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
+    unsafe {
+        let ns_window: *mut AnyObject = msg_send![ns_view, window];
+        if ns_window.is_null() {
+            return;
+        }
+        // NSFloatingWindowLevel = 3，NSNormalWindowLevel = 0。
+        let _: () = msg_send![ns_window, setLevel: if pinned { 3i64 } else { 0i64 }];
+        let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: pinned];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn set_window_level(_window: &Window, _pinned: bool) {}
+
+/// 扩展窗口的宿主外壳：宿主自绘标题栏（扩展名 + 置顶图钉）+ 脚本视图。
+///
+/// `shell_root` 是 `try_load` 出来的脚本应用根：它带着 application 元数据
+/// （热重载 `watch` 要读它）并持有当前脚本视图，本视图只渲染它的 `content()`，
+/// 不把 `ShellRoot` 元素本身放进元素树（窗口根是外层那一个）。
+/// 置顶状态是标题栏自己的字段——窗口不重建，切换只改本地值。
+struct ExtensionChrome {
+    shell_root: Entity<gpui_shell::ShellRoot>,
+    name: SharedString,
+    pinned: bool,
+}
+
+impl Render for ExtensionChrome {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        let icon = if self.pinned {
+            IconName::Pin
+        } else {
+            IconName::PinOff
+        };
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(
+                TitleBar::new()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.foreground)
+                            .child(self.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("extension-pin")
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .px_2()
+                            .gap_2()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(Button::new("pin").icon(icon).small().ghost().on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.pinned = !this.pinned;
+                                    set_window_level(window, this.pinned);
+                                    cx.notify();
+                                }),
+                            )),
+                    ),
+            )
+            // flex_1：标题栏以下整块都是扩展脚本的渲染区。
+            // 渲染 `content()` 而不是 `shell_root` 本身：窗口根已经是外层
+            // `ShellRoot`，脚本视图直接当它的 content 少一层；且每帧重新读取，
+            // 热重载替换 content 后立刻生效。
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.shell_root.read(cx).content().clone()),
+            )
+    }
+}
 
 /// 打开（或聚焦）一个 UI 扩展窗口。
 pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
@@ -37,10 +153,10 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
 
     // 单例：同一扩展只保留一个窗口；句柄失效说明窗口已经关了，重新开一个。
     let existing = cx
-        .global_mut::<AppShell>()
+        .global::<AppShell>()
         .extension_windows
         .get(&ext.root)
-        .copied();
+        .map(|w| w.handle);
     if let Some(handle) = existing {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -96,20 +212,19 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
             size(px(window_size.0), px(window_size.1)),
             cx,
         ))),
-        // 置顶：gpui 的窗口层级只能在创建时确定，故由清单开关决定窗口类型。
-        kind: if pinned {
-            WindowKind::PopUp
-        } else {
-            WindowKind::Normal
-        },
+        // 统一开普通窗口：置顶用 `set_window_level` 直接改层级（PopUp 是
+        // 非激活面板，形态上与普通窗口结构性不同，不适合来回切换）。
+        kind: WindowKind::Normal,
         window_min_size: Some(size(
             px(EXTENSION_WINDOW_MIN_SIZE.0.min(window_size.0)),
             px(EXTENSION_WINDOW_MIN_SIZE.1.min(window_size.1)),
         )),
         titlebar: Some(TitlebarOptions {
             title: Some(title.into()),
-            ..Default::default()
+            ..TitleBar::title_bar_options()
         }),
+        // 自绘标题栏自己处理拖动与双击，AppKit 不再把它当系统拖动区。
+        app_owns_titlebar_drag: true,
         is_resizable: true,
         focus: true,
         ..Default::default()
@@ -118,8 +233,17 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     // 非激活态开出的普通窗口会被压在别的应用后面，显式激活一次
     // （与 open_manager 同样的处理）。
     cx.activate(true);
+    let chrome_pinned = pinned;
+    let chrome_name: SharedString = name.clone().into();
     let opened = cx.open_window(options, move |window, cx| {
-        load_shell_root(&runtime, &root, &load_console, window, cx)
+        let shell_root = load_shell_root(&runtime, &root, &load_console, window, cx);
+        let chrome = cx.new(|_| ExtensionChrome {
+            shell_root,
+            name: chrome_name,
+            pinned: chrome_pinned,
+        });
+        // 根视图必须是 ShellRoot（见模块头部说明），chrome 只能作为它的 content。
+        cx.new(|cx| gpui_shell::ShellRoot::new(chrome.into(), window, cx))
     });
     let handle = match opened {
         Ok(handle) => handle,
@@ -129,9 +253,17 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
         }
     };
 
-    cx.global_mut::<AppShell>()
-        .extension_windows
-        .insert(ext.root.clone(), handle.into());
+    // 清单声明置顶：开窗即上浮到 floating 层级。
+    if pinned {
+        let _ = handle.update(cx, |_, window, _| set_window_level(window, true));
+    }
+
+    cx.global_mut::<AppShell>().extension_windows.insert(
+        ext.root.clone(),
+        ExtensionWindow {
+            handle: handle.into(),
+        },
+    );
     console.info(format!(
         "已打开 UI 扩展 {name}（{id} · {}{}）",
         ext.entry(),
@@ -139,7 +271,7 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     ));
 }
 
-/// 载入扩展并返回窗口根视图；加载失败时退回一个可选中复制的错误面，
+/// 载入扩展并返回窗口根里的脚本视图；加载失败时退回一个可选中复制的错误面，
 /// 而不是让宿主 panic。
 fn load_shell_root(
     runtime: &Rc<gpui_shell::ShellRuntime>,

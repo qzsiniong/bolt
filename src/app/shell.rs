@@ -45,10 +45,16 @@ pub(super) struct AppShell {
     /// One window per UI extension, keyed by its directory. A stale handle
     /// means the window closed itself (user closed it / the script asked to
     /// exit) and the next open creates a fresh one.
-    pub(super) extension_windows: HashMap<PathBuf, AnyWindowHandle>,
+    pub(super) extension_windows: HashMap<PathBuf, ExtensionWindow>,
     /// Handle to the installed asset source, so an extension's own `svg()`
     /// paths can be registered before its window loads.
     pub(super) extension_assets: ExtensionAssets,
 }
 
 impl Global for AppShell {}
+
+/// A UI extension's open window. `handle` drives the singleton (activate an
+/// existing window instead of opening a second one).
+pub(super) struct ExtensionWindow {
+    pub(super) handle: AnyWindowHandle,
+}

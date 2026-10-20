@@ -102,7 +102,7 @@ UI 扩展的清单沿用同一个 `extension.json`，只是把 `kind` 写成 `ui
 
 - **入口固定为 `main.js`**。UI 扩展的入口契约由宿主写死，因此 `entry` 只能写 `main.js`（写别的值会被报错并跳过），目录里也必须有 `main.js`。
 - **清单由宿主校验**：`id` 必填且与目录名一致；`kind` 为 `ui`；`window.width/height` 必须为正数。
-- **置顶由清单声明**：`window.always_on_top`（默认 `false`）决定宿主开窗用 `WindowKind::Floating`（NSFloatingWindowLevel，真正浮在其他窗口之上）还是普通窗口。窗口层级只能在创建时确定，所以运行时改这个开关不会实时生效，重启扩展窗口才生效；界面上的图钉图标只是当前状态的指示。
+- **置顶（窗口层级）**：窗口一律以普通形态打开（`WindowKind::Normal`）；清单 `window.always_on_top`（默认 `false`）决定**开窗时**是否上浮。窗口右上角有宿主自绘标题栏，其中的图钉可随时切换置顶——Rust 侧直接改 NSWindow 层级（`NSFloatingWindowLevel` / `NSNormalWindowLevel`），不关窗、不重建脚本视图。
 - `window.width` / `window.height` 默认 `880 × 720`，小于最小尺寸时以最小尺寸为准。
 
 ```js
@@ -133,6 +133,7 @@ export default class UiDemo extends View {
 - 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
 - 数据目录：`~/Library/Application Support/scripter/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
 - **权限由宿主按清单构建**：宿主始终授予「读扩展目录 + 读/写自己的数据目录 + `storage` + `exit`」；清单 `capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。扩展目录被当作你自己写的代码，不做审批弹窗。
+- **宿主自绘标题栏**：每个扩展窗口顶部由宿主提供一条标题栏（扩展名 + 右上角置顶图钉），下方才是扩展自己的界面。扩展脚本无需也无法自绘这一区域。
 - 首次加载会在扩展目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
 - **debug 构建**下保存入口文件即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
 - `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
@@ -144,7 +145,7 @@ export default class UiDemo extends View {
 
 仓库自带一个用扩展机制实现的 JSON 编辑器，位于 [`extensions/json-editor`](extensions/json-editor)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」分组出现。它演示了 UI 扩展的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
 
-- **置顶窗口**：清单声明 `window.always_on_top: true`。
+- **置顶可运行时切换**：清单默认 `window.always_on_top: true`；点宿主标题栏右上角的图钉即可切换，窗口不关闭、内容不丢失。
 - **粘贴自动格式化**：向编辑器粘贴一段 ≥8 字符的文本时自动解析并格式化（行号 / 语法高亮由只读结果面板的 Markdown 承担）。
 - **容错解析**：不止标准 JSON，还能识别 JSONC / JSON5 / JS 字面量、URL 查询串、XML、YAML 子集，以及被转义的 JSON 字符串；解析失败时给出定位提示。
 - **JS 过滤**：左下角输入框写受限表达式（`.key.subkey`、`[0][1]`、`.map(x => x.val)` 等，支持 `map` / `filter` / `find` / `slice` / `keys` / `values` / `sort` / `reverse` / `join` / `flat` 与比较运算），结果渲染在只读结果面板。求值器自研（沙箱里 `eval` / `Function` 被禁用），不是完整 JavaScript。
@@ -548,7 +549,7 @@ ctx.globals().set("console", console)?;
 | 文件 / 目录 | 职责 |
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
-| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态）、`hotkey`（全局热键注册与轮询）、`windows`（Launcher / 管理器窗口单例、命令分发）、`extension_ui`（UI 扩展窗口的打开 / 单例 / 热重载 / 错误面）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态）、`hotkey`（全局热键注册与轮询）、`windows`（Launcher / 管理器窗口单例、命令分发）、`extension_ui`（UI 扩展窗口的打开 / 单例 / 热重载 / 错误面 / 宿主标题栏与置顶切换）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
 | [src/ui/](src/ui) | 所有视图与前端逻辑：`workspace`（管理器窗口）、`launcher`、`interaction_window`、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`panels/`（脚本列表 / 编辑器 / Console；编辑器再分 `editor/{document,actions}`） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`extension`、`command_model`、`project_gen` |
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |

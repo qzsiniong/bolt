@@ -79,6 +79,14 @@ rquickjs = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3" }
 [patch."https://github.com/longbridge/gpui-kit"]
 gpui-base = "0.7.3"
 
+# 扩展窗口的置顶切换直接改 NSWindow 层级（`WindowKind::Floating` 与 `Normal`
+# 在 gpui-pre-macos 里只差一个 `setLevel_`，运行时可调，无需关窗重开）：
+# 经 `Window: HasWindowHandle` 拿 NSView 后用 objc2 发消息。版本对齐
+# gpui-pre-macos 的 objc2 0.6，避免两份运行时。
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+raw-window-handle = "0.6"
+
 # quickjs-jit 的 JIT 在 opt-level = 0 下慢约 3 倍（上游建议）。
 [profile.dev.package.quickjs-jit-sys]
 opt-level = 3

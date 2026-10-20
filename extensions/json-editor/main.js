@@ -1,8 +1,8 @@
 // JSON 编辑器 —— 类 JSON 文本的查看 / 格式化 / 压缩 / 过滤。
 //
 // 界面由 gpui-shell 在 GPUI 主线程渲染；解析与过滤是纯 JS（见 ./parsers.js、
-// ./filter.js）。置顶由宿主按 extension.json 的 window.always_on_top 决定，这里的
-// 图钉只是状态指示。
+// ./filter.js）。窗口置顶由宿主自绘标题栏右上角的图钉控制（Rust 侧直接改
+// NSWindow 层级），脚本不参与。
 import { View, div, svg } from "gpui-kit";
 import {
 	Textarea,
@@ -14,7 +14,6 @@ import {
 	h_flex,
 	v_flex,
 } from "gpui-base";
-import { readFile } from "fs/promises";
 import {
 	parseAny,
 	pretty,
@@ -57,29 +56,9 @@ export default class JsonEditor extends View {
 		this.formatName = "";
 		this.resultValue = null;
 		this.resultError = "";
-		this.pinned = false;
 
 		this.editor.on("change", (_event, cx) => this.onEditorChange(cx));
 		this.filterInput.on("change", (_event, cx) => this.refreshFilter(cx));
-		this.detectPinned(cx);
-	}
-
-	/// 图钉只是状态：真正的置顶在开窗时由清单决定，运行时改不了窗口层级。
-	detectPinned(cx) {
-		cx.spawn(async (taskCx) => {
-			try {
-				const raw = await readFile("extension.json", "utf8");
-				const manifest = JSON.parse(raw);
-				this.pinned = !!(
-					manifest &&
-					manifest.window &&
-					manifest.window.always_on_top
-				);
-			} catch (_) {
-				this.pinned = false;
-			}
-			taskCx.notify();
-		});
 	}
 
 	// ── 编辑器事件 ──────────────────────────────────────────────────────────
@@ -292,31 +271,7 @@ export default class JsonEditor extends View {
 						.child(this.formatName),
 				),
 			)
-			.child(div().flex_1())
-			.child(this.pinBadge(colors));
-	}
-
-	pinBadge(colors) {
-		const label = this.pinned
-			? "已置顶：窗口层级由 extension.json 的 window.always_on_top 决定"
-			: "未置顶：窗口层级由 extension.json 的 window.always_on_top 决定";
-		return div()
-			.flex()
-			.items_center()
-			.justify_center()
-			.w(28)
-			.h(28)
-			.rounded(6)
-			.tooltip(label)
-			.accessibility_label(label)
-			.child(
-				svg(this.pinned ? "icons/pin.svg" : "icons/pin-off.svg")
-					.w(16)
-					.h(16)
-					.text_color(
-						this.pinned ? colors.accent : colors.muted_foreground,
-					),
-			);
+			.child(div().flex_1());
 	}
 
 	resultPanel(colors) {
