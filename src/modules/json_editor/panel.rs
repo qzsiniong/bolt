@@ -7,11 +7,13 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::*;
 
 use super::parsers;
+use crate::ui::window_pin::WindowPin;
 
 /// Net insertion of at least this many characters is treated as a paste —
 /// auto-format the incoming text if it parses as strict JSON.
@@ -77,6 +79,8 @@ const TOOLS: &[ToolButton] = &[
 pub struct JsonEditorPanel {
     focus_handle: FocusHandle,
     editor: Entity<EditorState>,
+    /// 标题栏右上角的置顶图钉（公共控件，自带状态与窗口层级同步）。
+    pin: Entity<WindowPin>,
     /// While `true`, a pending set_value on the editor is in flight — the
     /// corresponding `Change` subscription callback does nothing so we don't
     /// re-trigger auto-format on our own writes.
@@ -117,6 +121,8 @@ impl JsonEditorPanel {
         Self {
             focus_handle: cx.focus_handle(),
             editor,
+            // 本窗口默认不置顶，与开窗时的窗口层级一致（unpinned）。
+            pin: cx.new(|_| WindowPin::new(false)),
             suppress: false,
             last_text: String::new(),
             status: String::new(),
@@ -241,10 +247,6 @@ impl Render for JsonEditorPanel {
         // a &mut Window — `set_value` requires it.
         self.apply_pending(window, cx);
 
-        // Window title stays fixed — unlike the script manager which adapts
-        // per-script, the JSON editor is a single-purpose tool.
-        window.set_window_title("JSON 编辑器");
-
         let colors = cx.theme().colors;
 
         gpui_kit::div()
@@ -252,6 +254,20 @@ impl Render for JsonEditorPanel {
             .flex_col()
             .size_full()
             .bg(colors.background)
+            // 自绘标题栏：标题在左，置顶图钉在右上角（公共控件）。
+            // 对应开窗时的 `TitleBar::window_options()` 基底。
+            .child(
+                TitleBar::new()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground)
+                            .child("JSON 编辑器"),
+                    )
+                    .child(self.pin.clone()),
+            )
             .child(
                 Editor::new(&self.editor)
                     .flex_1()

@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use crossbeam_channel::Receiver;
+use gpui_kit::component::TitleBar;
 use gpui_kit::*;
 
 use super::shell::AppShell;
@@ -210,7 +211,17 @@ pub(super) fn open_json_editor(cx: &mut App) {
             cx,
         ))),
         kind: WindowKind::Normal,
-        ..Default::default()
+        window_min_size: Some(size(px(520.), px(380.))),
+        titlebar: Some(TitlebarOptions {
+            title: Some("JSON 编辑器".into()),
+            ..TitleBar::title_bar_options()
+        }),
+        is_resizable: true,
+        focus: true,
+        // 以 `TitleBar::window_options()` 为基底：标题栏由视图自绘（含右上角
+        // 置顶图钉），拖动/双击交给 `TitleBar` 自己处理，AppKit 不再把它当
+        // 系统拖动区。
+        ..TitleBar::window_options()
     };
 
     let opened = gpui_kit::open_window(options, cx, |window, cx| {

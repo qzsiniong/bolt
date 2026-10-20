@@ -14,8 +14,9 @@
 //! 它的 `application()` 元数据里取目录与入口（watch.rs L416-L430），而脚本视图
 //! 由它持有。所以 [`ExtensionChrome`] 留着它，只把它的 `content()` 渲染出来。
 //!
-//! 置顶切换直接改 NSWindow 层级（见 [`set_window_level`]），不关窗、不重建
-//! 脚本视图。
+//! 置顶切换直接改 NSWindow 层级（见 [`crate::ui::window_pin::set_window_level`]），
+//! 不关窗、不重建脚本视图；标题栏右上角的图钉也复用同一个公共控件
+//! （[`crate::ui::window_pin::WindowPin`]）。
 //!
 //! 每次 `try_load` 之前都要重新设置 storage 与 capabilities：gpui-shell 的
 //! 「默认策略」是进程级的，而 `try_load` 在载入那一刻把它快照进该窗口的
@@ -28,75 +29,32 @@ use std::rc::Rc;
 // `mod tests` 里的 `#[test]` 变成递归展开。
 use super::shell::{AppShell, ExtensionWindow};
 use crate::model::extension::{UiExtension, ensure_extension_data_dir, extension_data_dir};
-use gpui_kit::assets::IconName;
-use gpui_kit::component::Sizable;
-use gpui_kit::component::button::ButtonVariants;
-use gpui_kit::component::{ActiveTheme as _, TitleBar, button::Button};
+use crate::ui::window_pin::{WindowPin, set_window_level};
+use gpui_kit::component::{ActiveTheme as _, TitleBar};
 use gpui_kit::{
-    App, AppContext as _, Bounds, Context, Entity, FontWeight, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Render, SharedString, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowKind, WindowOptions, div, px, size,
+    App, AppContext as _, Bounds, Context, Entity, FontWeight, IntoElement, ParentElement as _,
+    Render, SharedString, Styled as _, TitlebarOptions, Window, WindowBounds, WindowKind,
+    WindowOptions, div, px, size,
 };
 
 /// UI 扩展窗口的最小尺寸；不会超过清单声明的尺寸。
 const EXTENSION_WINDOW_MIN_SIZE: (f32, f32) = (560., 420.);
-
-/// 直接改 NSWindow 层级实现置顶 / 取消置顶。
-///
-/// `WindowKind::Floating` 与 `Normal` 在 gpui-pre-macos（window.rs L1210-L1218）
-/// 只差 `setLevel_` 与鼠标移动事件开关，两者都是 NSWindow 的运行时消息——
-/// 所以窗口层级并不真的「只能创建时确定」，切换无需关窗重开，gpui 也不读
-/// 层级、无副作用。经 `Window: HasWindowHandle`（gpui-pre window.rs L7571）
-/// 拿到 `AppKitWindowHandle` 的 NSView，再向它要 NSWindow 发消息。
-#[cfg(target_os = "macos")]
-pub(crate) fn set_window_level(window: &Window, pinned: bool) {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    use raw_window_handle::RawWindowHandle;
-
-    // gpui 的 `Window` 自带固有 `window_handle()`（返回 `AnyWindowHandle`），
-    // 会遮蔽 trait 方法，这里显式走 `HasWindowHandle` 拿 raw handle。
-    let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(window) else {
-        return;
-    };
-    let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
-        return;
-    };
-    let ns_view = appkit.ns_view.as_ptr() as *mut AnyObject;
-    unsafe {
-        let ns_window: *mut AnyObject = msg_send![ns_view, window];
-        if ns_window.is_null() {
-            return;
-        }
-        // NSFloatingWindowLevel = 3，NSNormalWindowLevel = 0。
-        let _: () = msg_send![ns_window, setLevel: if pinned { 3i64 } else { 0i64 }];
-        let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: pinned];
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn set_window_level(_window: &Window, _pinned: bool) {}
 
 /// 扩展窗口的宿主外壳：宿主自绘标题栏（扩展名 + 置顶图钉）+ 脚本视图。
 ///
 /// `shell_root` 是 `try_load` 出来的脚本应用根：它带着 application 元数据
 /// （热重载 `watch` 要读它）并持有当前脚本视图，本视图只渲染它的 `content()`，
 /// 不把 `ShellRoot` 元素本身放进元素树（窗口根是外层那一个）。
-/// 置顶状态是标题栏自己的字段——窗口不重建，切换只改本地值。
+/// 置顶状态由公共控件 [`WindowPin`] 自己持有——窗口不重建，切换只改本地值。
 struct ExtensionChrome {
     shell_root: Entity<gpui_shell::ShellRoot>,
     name: SharedString,
-    pinned: bool,
+    pin: Entity<WindowPin>,
 }
 
 impl Render for ExtensionChrome {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        let icon = if self.pinned {
-            IconName::Pin
-        } else {
-            IconName::PinOff
-        };
         div()
             .flex()
             .flex_col()
@@ -111,23 +69,8 @@ impl Render for ExtensionChrome {
                             .text_color(theme.foreground)
                             .child(self.name.clone()),
                     )
-                    .child(
-                        div()
-                            .id("extension-pin")
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .px_2()
-                            .gap_2()
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(Button::new("pin").icon(icon).small().ghost().on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.pinned = !this.pinned;
-                                    set_window_level(window, this.pinned);
-                                    cx.notify();
-                                }),
-                            )),
-                    ),
+                    // 右上角置顶图钉：公共控件自带按钮、状态与层级同步。
+                    .child(self.pin.clone()),
             )
             // flex_1：标题栏以下整块都是扩展脚本的渲染区。
             // 渲染 `content()` 而不是 `shell_root` 本身：窗口根已经是外层
@@ -223,11 +166,11 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
             title: Some(title.into()),
             ..TitleBar::title_bar_options()
         }),
-        // 自绘标题栏自己处理拖动与双击，AppKit 不再把它当系统拖动区。
-        app_owns_titlebar_drag: true,
         is_resizable: true,
         focus: true,
-        ..Default::default()
+        // `TitleBar::window_options()` 一并给出「自绘标题栏自己处理拖动与双击、
+        // AppKit 不再把它当系统拖动区」的开窗参数。
+        ..TitleBar::window_options()
     };
 
     // 非激活态开出的普通窗口会被压在别的应用后面，显式激活一次
@@ -237,10 +180,11 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     let chrome_name: SharedString = name.clone().into();
     let opened = cx.open_window(options, move |window, cx| {
         let shell_root = load_shell_root(&runtime, &root, &load_console, window, cx);
+        let pin = cx.new(|_| WindowPin::new(chrome_pinned));
         let chrome = cx.new(|_| ExtensionChrome {
             shell_root,
             name: chrome_name,
-            pinned: chrome_pinned,
+            pin,
         });
         // 根视图必须是 ShellRoot（见模块头部说明），chrome 只能作为它的 content。
         cx.new(|cx| gpui_shell::ShellRoot::new(chrome.into(), window, cx))
