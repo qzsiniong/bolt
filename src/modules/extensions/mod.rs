@@ -114,7 +114,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "ext.demo.go");
         assert_eq!(items[0].title, "Go");
-        assert_eq!(items[0].group, "demo");
+        assert_eq!(items[0].group, "扩展");
     }
 
     #[test]
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, "ui.ui");
         assert_eq!(items[0].title, "UI 示例");
-        assert_eq!(items[0].group, "UI 示例");
+        assert_eq!(items[0].group, "扩展");
     }
 
     #[test]

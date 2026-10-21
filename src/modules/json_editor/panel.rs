@@ -271,7 +271,7 @@ impl Render for JsonEditorPanel {
             .child(
                 Editor::new(&self.editor)
                     .flex_1()
-                    .p(px(12.))
+                    // .p(px(12.))
                     .text_size(px(13.))
                     .text_color(colors.foreground)
                     .bg(colors.background),

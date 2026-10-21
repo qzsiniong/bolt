@@ -135,32 +135,6 @@ fn word_before(text: &Rope, offset: usize) -> String {
     text.slice(start..offset).to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::word_before;
-    use gpui_kit::component::input::Rope;
-
-    #[test]
-    fn word_before_extracts_identifier_prefix() {
-        let rope = Rope::from("console.log(1);\nconsole");
-        let end = rope.len();
-        assert_eq!(word_before(&rope, end), "console");
-
-        // After a dot there is no word prefix (member access).
-        let dot = "console.".len();
-        assert_eq!(word_before(&rope, dot), "");
-
-        // JS identifiers may contain `$`.
-        let rope = Rope::from("const $el = 1;\n$el");
-        let end = rope.len();
-        assert_eq!(word_before(&rope, end), "$el");
-
-        // Empty document / start of line.
-        let rope = Rope::from("");
-        assert_eq!(word_before(&rope, 0), "");
-    }
-}
-
 impl HoverProvider for LspBridge {
     fn hover(
         &self,
@@ -257,5 +231,31 @@ impl CodeActionProvider for LspBridge {
         } else {
             Task::ready(Ok(()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::word_before;
+    use gpui_kit::component::input::Rope;
+
+    #[test]
+    fn word_before_extracts_identifier_prefix() {
+        let rope = Rope::from("console.log(1);\nconsole");
+        let end = rope.len();
+        assert_eq!(word_before(&rope, end), "console");
+
+        // After a dot there is no word prefix (member access).
+        let dot = "console.".len();
+        assert_eq!(word_before(&rope, dot), "");
+
+        // JS identifiers may contain `$`.
+        let rope = Rope::from("const $el = 1;\n$el");
+        let end = rope.len();
+        assert_eq!(word_before(&rope, end), "$el");
+
+        // Empty document / start of line.
+        let rope = Rope::from("");
+        assert_eq!(word_before(&rope, 0), "");
     }
 }

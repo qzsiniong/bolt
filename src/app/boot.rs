@@ -97,11 +97,19 @@ pub(crate) fn run() {
                 RunService::new(scripts_dir.clone(), registry.clone(), console_channel.clone())
             });
 
-            // Raycast-style global hotkey toggles the launcher.
-            let (hotkey_manager, hotkey_status) = hotkey::register();
-            match hotkey_status {
-                Ok(()) => console_channel.info("全局快捷键：Alt+Space 唤起启动器"),
-                Err(e) => console_channel.error(e),
+            // Raycast-style global hotkey toggles the launcher; Cmd+Shift+T pins
+            // the clipboard to a floating sticky.
+            let (hotkey_manager, hotkey_statuses) = hotkey::register();
+            for (id, result) in hotkey_statuses {
+                match (id, result) {
+                    (hotkey::HotKeyId::Launcher, Ok(_)) => {
+                        console_channel.info("全局快捷键：Alt+Space 唤起启动器");
+                    }
+                    (hotkey::HotKeyId::PinClipboard, Ok(_)) => {
+                        console_channel.info("全局快捷键：Cmd+Shift+T Pin 剪切板");
+                    }
+                    (_, Err(e)) => console_channel.error(e),
+                }
             }
 
             // Launcher 里被确认的 item 闭包经这个 channel 回到 app tick 执行。
@@ -109,10 +117,15 @@ pub(crate) fn run() {
 
             let app_tick = cx.spawn(async move |cx| loop {
                 cx.background_executor().timer(APP_TICK).await;
-                let toggled = hotkey::poll_pressed();
+                let fired = hotkey::poll_pressed();
                 cx.update(|cx| {
-                    if toggled {
-                        windows::toggle_launcher(cx);
+                    for id in fired {
+                        match id {
+                            hotkey::HotKeyId::Launcher => windows::toggle_launcher(cx),
+                            hotkey::HotKeyId::PinClipboard => {
+                                crate::modules::pin::window::open_clipboard_pin(cx)
+                            }
+                        }
                     }
                     windows::drain_launcher_requests(&launcher_rx, cx);
                 });
@@ -146,16 +159,27 @@ pub(crate) fn run() {
             // 各内容模块的应用级状态：窗口单例与模块专属资源。
             cx.set_global(ScriptsState { manager: None });
             cx.set_global(JsonEditorState { window: None });
+            cx.set_global(crate::modules::pin::state::PinState::new());
             cx.set_global(ExtensionsState {
                 ui_windows: Default::default(),
                 assets: extension_assets,
                 shell_runtime,
             });
 
+            let modules = crate::modules::default_modules();
+            console_channel.info(format!(
+                "已加载模块：{}",
+                modules
+                    .iter()
+                    .map(|m| m.name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+
             cx.set_global(AppShell {
                 launcher: None,
                 launcher_tx,
-                modules: crate::modules::default_modules(),
+                modules,
                 run_service,
                 console_channel,
                 console_rx,

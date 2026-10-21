@@ -81,9 +81,13 @@ rquickjs = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3" }
 gpui-base = "0.7.3"
 
 # 扩展窗口的置顶切换直接改 NSWindow 层级（`WindowKind::Floating` 与 `Normal`
-# 在 gpui-pre-macos 里只差一个 `setLevel_`，运行时可调，无需关窗重开）：
+# 在 gpui-pre-macos 里只差一个 `setLevel_`，运行时可调，无需关窗重开）；
 # 经 `Window: HasWindowHandle` 拿 NSView 后用 objc2 发消息。版本对齐
 # gpui-pre-macos 的 objc2 0.6，避免两份运行时。
+#
+# Pin 模块的剪切板读取同样直接发原始 Objective-C 消息（NSPasteboard / NSString /
+# NSData），不引入 `objc2-app-kit` / `objc2-foundation`——它们目前依赖 objc2 0.5，
+# 与本项目的 0.6 会同时进入依赖图，`msg_send!` 的 `MessageReceiver` 校验因此失败。
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 raw-window-handle = "0.6"
