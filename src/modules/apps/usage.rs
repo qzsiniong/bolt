@@ -87,7 +87,9 @@ mod tests {
         AppEntry {
             path: PathBuf::from(format!("/Applications/{name}.app")),
             name: name.to_string(),
+            original_name: name.to_string(),
             subtitle: "应用".to_string(),
+            keywords: Vec::new(),
         }
     }
 

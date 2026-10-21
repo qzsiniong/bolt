@@ -30,6 +30,7 @@ impl Module for PinModule {
             subtitle: Some("把剪切板内容固定到桌面（图片或文本，悬浮便签）".to_string()),
             icon: IconName::Pin.into(),
             group: "内置".to_string(),
+            keywords: Vec::new(),
             on_confirm: Arc::new(window::open_clipboard_pin),
         }]
     }

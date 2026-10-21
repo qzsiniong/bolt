@@ -34,6 +34,7 @@ fn open_item() -> LauncherItem {
         subtitle: Some("原生 JSON 编辑器（严格 JSON，语法高亮 + 折叠）".to_string()),
         icon: IconName::Braces.into(),
         group: "内置".to_string(),
+        keywords: Vec::new(),
         on_confirm: Arc::new(window::open_json_editor),
     }
 }

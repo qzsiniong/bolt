@@ -53,6 +53,36 @@ pub(crate) fn display_under_cursor() -> Option<DisplayId> {
     None
 }
 
+/// 显式激活当前 App（等价于用户点击 Dock 图标）。
+///
+/// `WindowKind::Floating` 的 NSPanel（不像 `PopUp` 的 NonactivatingPanel）
+/// 只有在应用已激活时才会浮到前台。gpui-pre-macos 的 `open_window` 里
+/// 的 `makeKeyAndOrderFront_` 只调窗口级方法，不调 `[NSApp activate]`，
+/// 所以从全局快捷键（App 非激活态）唤起时要手动补这一步。
+#[cfg(target_os = "macos")]
+fn activate_app() {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    unsafe {
+        // sharedApplication 是单例，永远不会返回 nil；忽略返回值。
+        let app_class = match AnyClass::get(c"NSApplication") {
+            Some(c) => c,
+            None => return,
+        };
+        let app: *mut objc2::runtime::AnyObject = msg_send![app_class, sharedApplication];
+        if app.is_null() {
+            return;
+        }
+        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn activate_app() {
+    // Linux/Windows 下 Floating 窗口的激活策略由平台层统一处理，不需要额外调用。
+}
+
 /// Alt+Space: close the launcher if it is open, open it otherwise. A stale
 /// handle means the window closed itself (Esc / blur / confirm) — reopen.
 pub(super) fn toggle_launcher(cx: &mut App) {
@@ -67,6 +97,12 @@ pub(super) fn toggle_launcher(cx: &mut App) {
     // Stale handle: fall through and reopen.
 
     let requests = cx.global::<AppShell>().launcher_tx.clone();
+    // Floating 窗口只有在应用已经激活时才会出现在前台；全局快捷键按下时
+    // 很可能是别的 App 在前台，必须先显式 activateIgnoringOtherApps:YES，
+    // 否则窗口会被压住看不见（但其实已经创建了——之前的 PopUp 因为带
+    // NSWindowStyleMaskNonactivatingPanel + NSPopUpWindowLevel=101 才绕过了
+    // 这个问题，代价是 IME 不工作）。
+    activate_app();
     // Center on the display under the cursor; falls back to the primary
     // display when it can't be determined.
     let display_id = display_under_cursor();
@@ -79,7 +115,7 @@ pub(super) fn toggle_launcher(cx: &mut App) {
         ))),
         display_id,
         titlebar: None,
-        kind: WindowKind::PopUp,
+        kind: WindowKind::Floating,
         is_resizable: false,
         focus: true,
         ..Default::default()

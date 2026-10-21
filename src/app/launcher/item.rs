@@ -56,6 +56,10 @@ pub struct LauncherItem {
     /// 分组标题（"内置" / "脚本" / 扩展 display_name）。不同模块的同名
     /// 分组合并；组的位置按首次出现顺序。
     pub group: String,
+    /// 额外的搜索关键词（除了 id、title、subtitle 之外的别名）。例如应用
+    /// 会把原始文件名、bundle id 和 URL schemes 放进来，让「微信」、
+    /// wechat、weixin 都能搜到同一个 App。
+    pub keywords: Vec<String>,
     /// 点击执行逻辑。
     pub on_confirm: LauncherAction,
 }

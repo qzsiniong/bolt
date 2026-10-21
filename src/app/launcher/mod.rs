@@ -197,11 +197,13 @@ impl Render for Launcher {
             let mut group = CommandGroup::new().label(heading.clone());
             for &index in indices {
                 let item = &self.items[index];
-                // The id is searchable too, so `ext.demo.go` finds the command.
+                // id、subtitle 和额外 keywords（如应用的 original_name / bundle id / URL schemes）
+                // 一起喂给 CommandItem。title (label) 本身也参与搜索。
                 let mut keywords = vec![item.id.clone()];
                 if let Some(subtitle) = &item.subtitle {
                     keywords.push(subtitle.clone());
                 }
+                keywords.extend(item.keywords.clone());
                 let item_clone = item.clone();
                 let entry = CommandItem::new()
                     .label(item.title.clone())
@@ -265,6 +267,7 @@ mod tests {
             subtitle: None,
             icon: gpui_kit::assets::IconName::Folder.into(),
             group: group.to_string(),
+            keywords: Vec::new(),
             on_confirm: std::sync::Arc::new(|_| {}),
         }
     }

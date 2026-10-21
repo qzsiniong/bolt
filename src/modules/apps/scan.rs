@@ -11,10 +11,15 @@ use std::path::{Path, PathBuf};
 pub(crate) struct AppEntry {
     /// 规范化后的 `.app` 路径（去重与图标缓存都用它作键）。
     pub(crate) path: PathBuf,
-    /// 显示名：`Safari.app` → `Safari`。
+    /// 显示名：本地化后的名称（如「微信」），或文件名。
     pub(crate) name: String,
+    /// 原始文件名（`.app` 去掉），始终是 ASCII 的 bundle 名（如 WeChat）。
+    /// 用于搜索别名：用户可能输入 wechat 而不是 微信。
+    pub(crate) original_name: String,
     /// 副标题：所在根目录的说明，或根下的相对目录（如 `应用 / Utilities`）。
     pub(crate) subtitle: String,
+    /// 从 Info.plist 里抽的搜索关键词（bundle id、URL schemes 等）。
+    pub(crate) keywords: Vec<String>,
 }
 
 /// 一个扫描根及其说明。
@@ -86,10 +91,12 @@ fn collect(
             }
             out.push(AppEntry {
                 name: name.trim_end_matches(".app").to_string(),
+                original_name: name.trim_end_matches(".app").to_string(),
                 // 副标题用原始路径算：canonicalize 会把 /var 解析成 /private/var，
                 // 与扫描根的字符串前缀对不上。
                 subtitle: subtitle_for(&path, root, label),
                 path: canonical,
+                keywords: Vec::new(),
             });
             // .app 是叶子：绝不进入 Contents 内部找嵌套的 .app。
             continue;

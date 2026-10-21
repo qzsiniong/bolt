@@ -39,6 +39,7 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             subtitle: Some("打开脚本管理器窗口".to_string()),
             icon: IconName::FolderCog.into(),
             group: "内置".to_string(),
+            keywords: Vec::new(),
             on_confirm: Arc::new(|cx| window::open_manager(cx, false)),
         },
         LauncherItem {
@@ -47,6 +48,7 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             subtitle: Some("在脚本管理器中创建新脚本".to_string()),
             icon: IconName::FilePlus.into(),
             group: "内置".to_string(),
+            keywords: Vec::new(),
             on_confirm: Arc::new(|cx| window::open_manager(cx, true)),
         },
     ];
@@ -59,6 +61,7 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             subtitle: Some(script.file_name),
             icon: IconName::FileCode.into(),
             group: "脚本".to_string(),
+            keywords: Vec::new(),
             on_confirm: Arc::new(move |cx| crate::runtime::run_path(cx, &path)),
         });
     }

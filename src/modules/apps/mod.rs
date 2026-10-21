@@ -3,6 +3,7 @@
 //! 目录），按使用次数/最近使用排序，贴近 Raycast 的用法。
 
 pub(crate) mod icons;
+pub(crate) mod names;
 pub(crate) mod scan;
 pub(crate) mod usage;
 
@@ -48,7 +49,10 @@ struct AppsData {
 
 impl AppsModule {
     pub(crate) fn new(cx: &mut App) -> Self {
-        let apps = scan::scan_apps(&scan::default_roots());
+        let mut apps = scan::scan_apps(&scan::default_roots());
+        // 本地化显示名（WeChat → 微信）+ bundle id / URL schemes 作为搜索
+        // 关键词，让用户可以用「微信」、wechat、weixin 搜到同一个 App。
+        names::fill_display_names_and_keywords(&mut apps);
         let usage = usage::load(&usage::usage_path());
         // 磁盘缓存一次读完：每个图标只有几 KB，比逐个异步读简单。
         let mut icons = HashMap::new();
@@ -176,12 +180,21 @@ fn item_for(
     let path = app.path;
     let name = app.name;
     let data = data.clone();
+
+    // 搜索关键词：title 本地化后可能是中文（微信），但用户也可能输入
+    // wechat / weixin。所以把 original_name、bundle id、URL schemes 都
+    // 加进来。Command 组件还会额外匹配 label（title）、id、subtitle，
+    // 所以这些 keywords 是「额外」补充。
+    let mut keywords = vec![app.original_name];
+    keywords.extend(app.keywords);
+
     LauncherItem {
         id: format!("apps.open:{}", path.display()),
         title: name.clone(),
         subtitle: Some(app.subtitle),
         icon,
         group: "应用".to_string(),
+        keywords,
         on_confirm: Arc::new(move |cx: &mut App| launch(cx, data.as_ref(), &path, &name)),
     }
 }
@@ -222,7 +235,9 @@ mod tests {
         AppEntry {
             path: PathBuf::from(format!("/Applications/{name}.app")),
             name: name.to_string(),
+            original_name: name.to_string(),
             subtitle: "应用".to_string(),
+            keywords: Vec::new(),
         }
     }
 

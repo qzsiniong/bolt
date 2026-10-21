@@ -59,6 +59,7 @@ fn items_in(dir: &Path) -> (Vec<LauncherItem>, Vec<String>) {
                 icon: IconName::Puzzle.into(),
                 // group: ext.manifest.display_name().to_string(),
                 group: "扩展".to_string(),
+                keywords: Vec::new(),
                 on_confirm: Arc::new(move |cx| crate::runtime::run_path(cx, &entry)),
             });
         }
@@ -80,6 +81,7 @@ fn items_in(dir: &Path) -> (Vec<LauncherItem>, Vec<String>) {
             icon: IconName::AppWindow.into(),
             // group: ext.name().to_string(),
             group: "扩展".to_string(),
+            keywords: Vec::new(),
             on_confirm: Arc::new(move |cx| ui_window::open_extension_ui(cx, opened.clone())),
         });
     }
