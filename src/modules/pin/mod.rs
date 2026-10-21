@@ -28,7 +28,7 @@ impl Module for PinModule {
             id: "pin.from-clipboard".to_string(),
             title: "Pin 剪切板".to_string(),
             subtitle: Some("把剪切板内容固定到桌面（图片或文本，悬浮便签）".to_string()),
-            icon: IconName::Pin,
+            icon: IconName::Pin.into(),
             group: "内置".to_string(),
             on_confirm: Arc::new(window::open_clipboard_pin),
         }]

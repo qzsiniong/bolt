@@ -10,6 +10,8 @@
 use std::path::PathBuf;
 
 use crate::console_channel::ConsoleChannel;
+#[cfg(target_os = "macos")]
+use crate::ui::mac_ffi::{ns_data_bytes, ns_string, ns_string_to_rust};
 
 /// pin 便签展示的最大尺寸（逻辑像素）。
 pub(crate) const MAX_PIN_WIDTH: f32 = 800.;
@@ -297,62 +299,6 @@ fn decode_entities(text: &str) -> String {
     }
     out.push_str(rest);
     out
-}
-
-/// 建一个 autoreleased 的 `NSString`（`+[NSString stringWithUTF8String:]`）。
-/// 只在同一次调用里当类型/键名用，不长期持有。
-#[cfg(target_os = "macos")]
-fn ns_string(s: &str) -> *mut objc2::runtime::AnyObject {
-    use objc2::msg_send;
-    use objc2::runtime::AnyClass;
-    use std::ffi::CString;
-
-    let Ok(cstr) = CString::new(s) else {
-        return std::ptr::null_mut();
-    };
-    let Some(cls) = AnyClass::get(c"NSString") else {
-        return std::ptr::null_mut();
-    };
-    unsafe { msg_send![cls, stringWithUTF8String: cstr.as_ptr()] }
-}
-
-/// `NSData*` → `Vec<u8>`（立刻拷贝，不持有 Objective-C 对象）。
-#[cfg(target_os = "macos")]
-fn ns_data_bytes(data: *mut objc2::runtime::AnyObject) -> Option<Vec<u8>> {
-    use objc2::msg_send;
-
-    if data.is_null() {
-        return None;
-    }
-    unsafe {
-        let len: usize = msg_send![data, length];
-        // `-[NSData bytes]` 的 ObjC 返回类型是 `const void *`，编码 `^v`；
-        // objc2 在 debug 下会校验声明类型，声明成 `*const u8`（编码 `*`）会在
-        // 运行时直接 abort：invalid message send ... expected '^v', but found '*'。
-        // 所以必须先按 `*const c_void` 收，再自己转成 `*const u8`。
-        let ptr: *const std::ffi::c_void = msg_send![data, bytes];
-        if ptr.is_null() || len == 0 {
-            return None;
-        }
-        Some(std::slice::from_raw_parts(ptr as *const u8, len).to_vec())
-    }
-}
-
-/// `NSString*` → `String`（走 UTF8String，拷贝后即与 Objective-C 对象无关）。
-#[cfg(target_os = "macos")]
-fn ns_string_to_rust(nsstr: *mut objc2::runtime::AnyObject) -> Option<String> {
-    use objc2::msg_send;
-
-    if nsstr.is_null() {
-        return None;
-    }
-    unsafe {
-        let ptr: *const std::ffi::c_char = msg_send![nsstr, UTF8String];
-        if ptr.is_null() {
-            return None;
-        }
-        Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
-    }
 }
 
 #[cfg(not(target_os = "macos"))]

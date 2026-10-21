@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use gpui_kit::App;
+use gpui_kit::ImageSource;
 use gpui_kit::assets::IconName;
 
 /// item 点击后的执行逻辑。
@@ -16,6 +17,29 @@ use gpui_kit::assets::IconName;
 /// 实体，闭包必须脱离它独立存活。实际只在主线程被调用；闭包只捕获
 /// `PathBuf` / `String` / 扩展数据等 `Send + Sync` 值， bound 是诚实的。
 pub type LauncherAction = Arc<dyn Fn(&mut App) + Send + Sync>;
+
+/// 列表行左侧的图标：内置图标，或应用自己的内存图片。
+///
+/// 应用启动器需要每个 App 的真实图标，`IconName` 是固定枚举表达不了；
+/// 图片走 `ImageSource::Image`（内存 PNG 字节），不能用 `data:` URI
+/// ——那个字符串会被 gpui 当成 URI 去 fetch 资源，取不到就静默空白。
+#[derive(Clone)]
+pub enum LauncherIcon {
+    Named(IconName),
+    Image(ImageSource),
+}
+
+impl From<IconName> for LauncherIcon {
+    fn from(icon: IconName) -> Self {
+        Self::Named(icon)
+    }
+}
+
+impl From<ImageSource> for LauncherIcon {
+    fn from(source: ImageSource) -> Self {
+        Self::Image(source)
+    }
+}
 
 /// Launcher 列表里的一行。模块在 collect 时把执行所需数据（路径、扩展
 /// 对象等）捕获进 [`Self::on_confirm`] 闭包，Launcher 只负责展示与触发，
@@ -28,7 +52,7 @@ pub struct LauncherItem {
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
-    pub icon: IconName,
+    pub icon: LauncherIcon,
     /// 分组标题（"内置" / "脚本" / 扩展 display_name）。不同模块的同名
     /// 分组合并；组的位置按首次出现顺序。
     pub group: String,

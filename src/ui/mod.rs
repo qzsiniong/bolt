@@ -5,4 +5,6 @@
 
 pub(crate) mod editor_ops;
 pub(crate) mod interaction_window;
+#[cfg(target_os = "macos")]
+pub(crate) mod mac_ffi;
 pub(crate) mod window_pin;

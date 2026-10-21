@@ -165,7 +165,7 @@ pub(crate) fn run() {
                 shell_runtime,
             });
 
-            let modules = crate::modules::default_modules();
+            let modules = crate::modules::default_modules(cx);
             console_channel.info(format!(
                 "已加载模块：{}",
                 modules

@@ -32,7 +32,7 @@ fn open_item() -> LauncherItem {
         id: "json_editor.open".to_string(),
         title: "JSON 编辑器".to_string(),
         subtitle: Some("原生 JSON 编辑器（严格 JSON，语法高亮 + 折叠）".to_string()),
-        icon: IconName::Braces,
+        icon: IconName::Braces.into(),
         group: "内置".to_string(),
         on_confirm: Arc::new(window::open_json_editor),
     }

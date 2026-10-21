@@ -12,6 +12,7 @@ pub(crate) mod item;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
+use gpui_kit::assets::IconName;
 use gpui_kit::base::h_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
@@ -21,7 +22,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::shell::AppShell;
-pub(crate) use item::{LauncherAction, LauncherItem, Module};
+pub(crate) use item::{LauncherAction, LauncherIcon, LauncherItem, Module};
 
 /// Poll interval for the auto-close-on-blur check.
 const BLUR_TICK: Duration = Duration::from_millis(100);
@@ -166,13 +167,32 @@ impl Render for Launcher {
                 let item_clone = item.clone();
                 let entry = CommandItem::new()
                     .label(item.title.clone())
-                    .icon(item.icon)
+                    // `child` 会整体替换默认行渲染，这里的 icon 只是占位；
+                    // 真实图标在下面的 child 里按 LauncherIcon 分支绘制。
+                    .icon(match &item.icon {
+                        LauncherIcon::Named(icon) => *icon,
+                        LauncherIcon::Image(_) => IconName::AppWindow,
+                    })
                     .child(move |_, cx| {
                         h_flex()
                             .flex_1()
                             .gap_2()
                             .items_center()
-                            .child(Icon::new(item_clone.icon).size_4())
+                            .child(match item_clone.icon.clone() {
+                                LauncherIcon::Named(icon) => {
+                                    Icon::new(icon).size_4().into_any_element()
+                                }
+                                // 固定 16×16 容器：图片的行高与内置图标一致，
+                                // 列表各行不会因为应用图标尺寸不同而抖动。
+                                LauncherIcon::Image(source) => div()
+                                    .w(px(16.))
+                                    .h(px(16.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(img(source).w(px(16.)).h(px(16.)))
+                                    .into_any_element(),
+                            })
                             .child(div().child(item_clone.title.clone()))
                             .when_some(item_clone.subtitle.clone(), move |this, subtitle| {
                                 this.child(
@@ -205,7 +225,7 @@ mod tests {
             id: id.to_string(),
             title: id.to_string(),
             subtitle: None,
-            icon: gpui_kit::assets::IconName::Folder,
+            icon: gpui_kit::assets::IconName::Folder.into(),
             group: group.to_string(),
             on_confirm: std::sync::Arc::new(|_| {}),
         }
