@@ -9,14 +9,29 @@ pub(crate) mod usage;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use gpui_kit::assets::IconName;
 use gpui_kit::{App, Image, ImageFormat, ImageSource};
 
 use crate::app::launcher::{LauncherIcon, LauncherItem, Module};
 use crate::app::shell::AppShell;
+use crate::app::windows;
 use scan::AppEntry;
 use usage::UsageMap;
+
+/// 启动后先等一会儿再补图标：让应用完成启动、全局快捷键的事件 tap 挂上
+/// 主 run loop，再开始 AppKit 调用。
+const ICON_FILL_START_DELAY: Duration = Duration::from_millis(400);
+
+/// 每批最多占用主线程多久。`NSWorkspace` 只能在主线程调用，所以只能按时间
+/// 切片，绝对不能一口气遍历上百个应用——主线程被长时间占住会让全局快捷键
+/// 的事件 tap 超时，Launcher 就按不出来了（见 [`super::icons`] 的模块注释）。
+const ICON_FILL_BUDGET: Duration = Duration::from_millis(6);
+
+/// 两批之间让出主线程多久。只要每次阻塞不超过一帧，事件循环就能正常处理
+/// 热键与窗口绘制。
+const ICON_FILL_PAUSE: Duration = Duration::from_millis(4);
 
 pub(crate) struct AppsModule {
     data: Arc<AppsData>,
@@ -49,8 +64,10 @@ impl AppsModule {
             icons: Mutex::new(icons),
         });
 
-        // 缺失的图标在主线程逐个补齐（`NSWorkspace` 只能在主线程调用），
-        // 每生成一个就让出一次事件循环，避免启动时整屏应用卡住。
+        // 缺失的图标在主线程分批补齐（`NSWorkspace` 只能在主线程调用）。
+        // 单个图标已是毫秒级（见 `icons` 模块注释），但整批仍按时间切片并
+        // 在批间让出主线程：首次启动生成上百个图标时，热键、窗口和绘制都
+        // 不能因此卡住。
         let fill = data.clone();
         let icon_task = cx.spawn(async move |cx| {
             let pending: Vec<PathBuf> = {
@@ -61,43 +78,55 @@ impl AppsModule {
                     .map(|app| app.path.clone())
                     .collect()
             };
+            if pending.is_empty() {
+                return;
+            }
+
+            cx.background_executor().timer(ICON_FILL_START_DELAY).await;
+
             let total = pending.len();
             let mut failed = 0usize;
             let mut first_error = String::new();
-            for path in pending {
-                match icons::icon_bytes(&path) {
-                    Ok(png) => {
-                        lock(&fill.icons).insert(path, png);
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        if first_error.is_empty() {
-                            first_error = format!("{}：{e}", path.display());
+            let mut index = 0;
+            while index < pending.len() {
+                let batch_deadline = Instant::now() + ICON_FILL_BUDGET;
+                while index < pending.len() && Instant::now() < batch_deadline {
+                    let path = &pending[index];
+                    index += 1;
+                    match icons::icon_bytes(path) {
+                        Ok(png) => {
+                            lock(&fill.icons).insert(path.clone(), png);
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            if first_error.is_empty() {
+                                first_error = format!("{}：{e}", path.display());
+                            }
                         }
                     }
                 }
-                cx.background_executor()
-                    .timer(std::time::Duration::ZERO)
-                    .await;
+                cx.background_executor().timer(ICON_FILL_PAUSE).await;
             }
-            if total > 0 {
-                let summary = if failed == 0 {
-                    format!("应用图标：已生成 {total} 个新图标")
+
+            let summary = if failed == 0 {
+                format!("应用图标：已生成 {total} 个新图标")
+            } else {
+                format!(
+                    "应用图标：生成 {} 个，失败 {failed} 个（{first_error}）",
+                    total - failed
+                )
+            };
+            cx.update(|cx| {
+                let console = &cx.global::<AppShell>().console_channel;
+                if failed == 0 {
+                    console.info(summary);
                 } else {
-                    format!(
-                        "应用图标：生成 {} 个，失败 {failed} 个（{first_error}）",
-                        total - failed
-                    )
-                };
-                cx.update(|cx| {
-                    let console = &cx.global::<AppShell>().console_channel;
-                    if failed == 0 {
-                        console.info(summary);
-                    } else {
-                        console.warn(summary);
-                    }
-                });
-            }
+                    console.warn(summary);
+                }
+            });
+            // 图标可能是在 Launcher 已经打开期间补齐的：让它在下一帧重新
+            // 收集 items，已经打开的命令面板不用等下次唤起才显示图标。
+            cx.update(windows::items_changed);
         });
 
         Self {

@@ -41,11 +41,39 @@ fn group_items(items: &[LauncherItem]) -> Vec<(String, Vec<usize>)> {
     groups
 }
 
+/// 一次收集的结果：items、按组展开的下标，以及收集时的 revision。
+struct CollectedItems {
+    items: Vec<LauncherItem>,
+    groups: Vec<(String, Vec<usize>)>,
+    revision: u64,
+}
+
+/// 从所有模块收集 items 并分组；同时记下当前的 revision。
+///
+/// Launcher 打开时收集一次；打开期间若有模块改了内容（例如应用图标生成完
+/// 成），模块会把 `AppShell::items_revision` 加一，下一次绘制时这里会被再
+/// 调用一次（见 [`Launcher::render`]）。
+fn collect_all(cx: &App) -> CollectedItems {
+    let mut items = Vec::new();
+    for module in &cx.global::<AppShell>().modules {
+        items.extend(module.collect_items(cx));
+    }
+    let groups = group_items(&items);
+    let revision = cx.global::<AppShell>().items_revision.get();
+    CollectedItems {
+        items,
+        groups,
+        revision,
+    }
+}
+
 pub struct Launcher {
     state: Entity<CommandState>,
     items: Vec<LauncherItem>,
     /// 组名 → item 下标；与 `items` 同寿命，渲染与 confirm 共用。
     groups: Vec<(String, Vec<usize>)>,
+    /// `items` 对应的 `AppShell::items_revision`。
+    items_revision: u64,
     /// Drained by the app shell, which executes the confirmed action.
     requests: Sender<LauncherAction>,
     /// Auto-close-on-blur poll; ends when the view is dropped.
@@ -66,11 +94,11 @@ impl Launcher {
         // Re-collect on every open: scripts and extensions may have changed
         // since the last time the launcher was up. Each module reports its
         // own load errors to the console.
-        let mut items = Vec::new();
-        for module in &cx.global::<AppShell>().modules {
-            items.extend(module.collect_items(cx));
-        }
-        let groups = group_items(&items);
+        let CollectedItems {
+            items,
+            groups,
+            revision: items_revision,
+        } = collect_all(cx);
 
         let window_handle = window.window_handle();
 
@@ -105,6 +133,7 @@ impl Launcher {
             state,
             items,
             groups,
+            items_revision,
             requests,
             _blur_task: blur_task,
         }
@@ -127,6 +156,15 @@ impl Launcher {
 
 impl Render for Launcher {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // 模块可能在面板打开期间补齐 items（例如应用图标刚刚生成完）。
+        // 只有 revision 变化时才重新收集，正常渲染只读一个 Cell。
+        if cx.global::<AppShell>().items_revision.get() != self.items_revision {
+            let collected = collect_all(cx);
+            self.items = collected.items;
+            self.groups = collected.groups;
+            self.items_revision = collected.revision;
+        }
+
         // A weak handle: the closure is stored in CommandState (a child of
         // this view), so a strong one would keep both entities alive forever.
         let this = cx.entity().downgrade();

@@ -179,6 +179,7 @@ pub(crate) fn run() {
                 launcher: None,
                 launcher_tx,
                 modules,
+                items_revision: std::cell::Cell::new(0),
                 run_service,
                 console_channel,
                 console_rx,

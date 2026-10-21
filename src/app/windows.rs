@@ -110,3 +110,21 @@ pub(super) fn drain_launcher_requests(rx: &Receiver<LauncherAction>, cx: &mut Ap
         action(cx);
     }
 }
+
+/// 模块的 items 变了（例如应用图标刚生成完）：记一次 revision，并让已经
+/// 打开的 Launcher 在下一帧重新收集。没有打开的 Launcher 什么都不用做——
+/// 它下次唤起时本来就会重新 collect。
+pub(crate) fn items_changed(cx: &mut App) {
+    let launcher = {
+        let shell = cx.global::<AppShell>();
+        shell
+            .items_revision
+            .set(shell.items_revision.get().wrapping_add(1));
+        shell.launcher
+    };
+    if let Some(handle) = launcher {
+        // 窗口已关闭时 update 会失败，忽略即可：stale 的 handle 由
+        // `toggle_launcher` 负责清理。
+        let _ = handle.update(cx, |_, window, _| window.refresh());
+    }
+}

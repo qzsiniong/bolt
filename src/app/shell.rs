@@ -1,5 +1,6 @@
 //! App-lifetime state shared across windows and content modules.
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +29,10 @@ pub(crate) struct AppShell {
     /// The registered content modules, re-queried for items on every
     /// launcher open.
     pub(crate) modules: Vec<Box<dyn Module>>,
+    /// Bumped when modules' item set changes while a launcher is open (e.g.
+    /// app icons finished generating). The launcher re-collects items on its
+    /// next paint instead of waiting for the next open.
+    pub(crate) items_revision: Cell<u64>,
     pub(crate) run_service: Entity<RunService>,
     pub(crate) console_channel: ConsoleChannel,
     pub(crate) console_rx: Receiver<ConsoleEntry>,
