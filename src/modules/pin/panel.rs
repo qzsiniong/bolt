@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -28,6 +28,8 @@ pub struct PinWindow {
     hovered: bool,
     /// 是否已经置顶。运行时用户可点右上角图标切换。
     pinned: bool,
+    /// 图片缩放倍率（滚轮调整，10%–800%）。文本不缩放。
+    zoom: f32,
 }
 
 impl PinWindow {
@@ -36,7 +38,42 @@ impl PinWindow {
             content,
             hovered: false,
             pinned: true,
+            zoom: 1.,
         }
+    }
+
+    /// 当前应显示的图片尺寸（基准尺寸 × 缩放）。
+    fn scaled_size(&self) -> (f32, f32) {
+        let (w, h) = self.content.display_size();
+        (w * self.zoom, h * self.zoom)
+    }
+
+    fn is_image(&self) -> bool {
+        matches!(self.content, PinContent::Image { .. })
+    }
+
+    /// 滚轮缩放：上滚放大、下滚缩小，夹在 10%–800%。窗口同步改尺寸，
+    /// 否则图片会被窗口裁掉或者四周露底。
+    fn on_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_image() {
+            return;
+        }
+        let dy = match event.delta {
+            ScrollDelta::Lines(point) => point.y,
+            ScrollDelta::Pixels(point) => point.y / px(40.),
+        };
+        if dy == 0. {
+            return;
+        }
+        let next = (self.zoom * (1. + dy * 0.1)).clamp(0.1, 8.);
+        if (next - self.zoom).abs() < 1e-4 {
+            return;
+        }
+        self.zoom = next;
+        let (w, h) = self.scaled_size();
+        window.resize(size(px(w), px(h)));
+        cx.notify();
+        cx.stop_propagation();
     }
 
     fn on_drag_down(&mut self, event: &MouseDownEvent, window: &mut Window) {
@@ -119,6 +156,10 @@ impl Render for PinWindow {
                     this.on_drag_down(event, window);
                 }),
             )
+            // 滚轮缩放（仅图片内容）。
+            .on_scroll_wheel(cx.listener(|this, event, window, cx| {
+                this.on_wheel(event, window, cx);
+            }))
             // `on_hover` 在进入和离开时都会回调，用它统一驱动 hovered。
             .on_hover({
                 let this = cx.entity().downgrade();
@@ -153,21 +194,21 @@ impl Render for PinWindow {
                 // 尺寸必须显式给：`img` 的固有尺寸只在解码完成后的那一帧才有，
                 // 首帧它是 `Auto`，只给 `max_w/max_h` 会塌成 0×0（窗口全空）。
                 // 用窗口 bounds 的同一份 `display_size()` 就没这个问题。
-                let (w, h) = self.content.display_size();
+                let (w, h) = self.scaled_size();
                 let image = Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()));
                 div()
                     .child(gpui_kit::img(image).w(px(w)).h(px(h)).rounded(px(4.)))
                     .into_any_element()
             }
             PinContent::Text(text) => div()
-                .p(px(12.))
-                .rounded(px(8.))
-                .bg(hsla(0., 0., 0., 0.78))
-                // `text_color` / `text_size` 是 Div（Styled）上的方法，不是
-                // `gpui_kit::text!` 宏产物的方法；`String` 本身即 IntoElement。
-                .text_color(gpui_kit::Hsla::white())
+                .size_full()
+                .p(px(14.))
+                // 文本便签：白底黑字（macshot 风格），深色背景下也清楚。
+                .bg(Hsla::white())
+                .border_1()
+                .border_color(hsla(0., 0., 0., 0.12))
+                .text_color(hsla(0., 0., 0., 1.))
                 .text_size(px(13.))
-                .w_full()
                 .child(text.clone())
                 .into_any_element(),
         };
@@ -177,19 +218,21 @@ impl Render for PinWindow {
                 .flex()
                 .flex_col()
                 .size_full()
+                // 先内容、后按钮：gpui 同级后绘制的元素在上层。图片是不透明的
+                // 整块，按钮若先绘制就会被图片整个盖住（表现就是「看不见」）。
+                .child(content_el)
                 .when_some(hover_buttons, |this, buttons| {
                     // 操作菜单用 Absolute 浮在右上角，不占布局。
                     this.child(
                         div()
                             .absolute()
-                            .right(px(4.))
-                            .top(px(4.))
+                            .right(px(8.))
+                            .top(px(8.))
                             .flex()
-                            .gap(px(2.))
+                            .gap(px(6.))
                             .child(buttons),
                     )
-                })
-                .child(content_el),
+                }),
         );
 
         root
@@ -198,7 +241,32 @@ impl Render for PinWindow {
 
 impl PinWindow {
     fn action_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut row = div().flex().gap(px(2.));
+        // macshot 风格：半透明黑色圆角底 + 白色图标，悬停/按下加深。
+        // 直接给 `Button` 用 `.bg()` 无效——Button 渲染时按 variant 重设背景
+        // 与前景（button.rs L717-L719），只能用 `custom` variant 传颜色。
+        let variant = ButtonCustomVariant::new(cx)
+            .color(hsla(0., 0., 0., 0.9))
+            .foreground(Hsla::white())
+            .hover(hsla(0., 0., 0., 0.9))
+            .active(hsla(0., 0., 0., 0.9));
+
+        let mut row = div().flex().gap(px(6.));
+
+        // macshot 风格的缩放比例徽标：与操作按钮同一层深色圆角底。
+        if self.is_image() {
+            row = row.child(
+                div()
+                    .h(px(24.))
+                    .px(px(9.))
+                    .rounded_full()
+                    .bg(hsla(0., 0., 0., 0.9))
+                    .flex()
+                    .items_center()
+                    .text_color(Hsla::white())
+                    .text_size(px(11.))
+                    .child(format!("{:.0}%", self.zoom * 100.)),
+            );
+        }
 
         let actions = [
             (PanelAction::Copy, IconName::ClipboardCopy, "复制"),
@@ -223,9 +291,12 @@ impl PinWindow {
             let action_cloned = action.clone();
             row = row.child(
                 Button::new(format!("pin-action-{:?}", action))
-                    .ghost()
+                    .custom(variant)
+                    // .primary()
                     .icon(icon)
                     .small()
+                    // 999 会被夹到「半边长」，得到正圆（ButtonRounded 没有 Full）。
+                    .rounded(ButtonRounded::Size(px(999.)))
                     .tooltip(label)
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
