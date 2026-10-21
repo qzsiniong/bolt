@@ -6,7 +6,6 @@
 
 pub(crate) mod clipboard;
 pub(crate) mod panel;
-pub(crate) mod state;
 pub(crate) mod window;
 
 use std::sync::Arc;

@@ -15,7 +15,7 @@ const LAUNCHER_SIZE: (f32, f32) = (720., 480.);
 /// opens on the screen the cursor is on. `None` when it cannot be determined;
 /// callers then fall back to the primary display.
 #[cfg(target_os = "macos")]
-fn display_under_cursor() -> Option<DisplayId> {
+pub(crate) fn display_under_cursor() -> Option<DisplayId> {
     use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
@@ -49,7 +49,7 @@ fn display_under_cursor() -> Option<DisplayId> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn display_under_cursor() -> Option<DisplayId> {
+pub(crate) fn display_under_cursor() -> Option<DisplayId> {
     None
 }
 

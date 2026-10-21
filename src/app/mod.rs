@@ -6,4 +6,4 @@ mod hotkey;
 pub(crate) mod launcher;
 pub(crate) mod shell;
 mod shell_log;
-mod windows;
+pub(crate) mod windows;

@@ -159,7 +159,6 @@ pub(crate) fn run() {
             // 各内容模块的应用级状态：窗口单例与模块专属资源。
             cx.set_global(ScriptsState { manager: None });
             cx.set_global(JsonEditorState { window: None });
-            cx.set_global(crate::modules::pin::state::PinState::new());
             cx.set_global(ExtensionsState {
                 ui_windows: Default::default(),
                 assets: extension_assets,
