@@ -218,17 +218,17 @@ impl Render for Launcher {
                             .items_center()
                             .child(match item_clone.icon.clone() {
                                 LauncherIcon::Named(icon) => {
-                                    Icon::new(icon).size_4().into_any_element()
+                                    Icon::new(icon).size_6().into_any_element()
                                 }
-                                // 固定 16×16 容器：图片的行高与内置图标一致，
+                                // 固定 24×24 容器：图片的行高与内置图标一致，
                                 // 列表各行不会因为应用图标尺寸不同而抖动。
                                 LauncherIcon::Image(source) => div()
-                                    .w(px(16.))
-                                    .h(px(16.))
+                                    .w(px(24.))
+                                    .h(px(24.))
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .child(img(source).w(px(16.)).h(px(16.)))
+                                    .child(img(source).w(px(24.)).h(px(24.)))
                                     .into_any_element(),
                             })
                             .child(div().child(item_clone.title.clone()))
