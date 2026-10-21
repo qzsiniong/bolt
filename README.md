@@ -28,11 +28,39 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。列表分三组：**内置**（脚本管理 / 新建脚本）、**脚本**（每个脚本一条命令，选中即运行）、**每个扩展一组**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
+Launcher 失焦后自动关闭。列表分四组：**内置**（脚本管理 / 新建脚本）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**每个扩展一组**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
 - 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（Console 输出会缓冲，待管理器打开后可见）。
+
+### 应用启动器
+
+Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Applications`、`~/Applications` 下的 `.app`，按 canonical path 去重后生成命令项，用 `NSWorkspace` 拿到真实图标并缓存为 64×64 PNG。
+
+**搜索匹配规则**（按优先级依次尝试）：
+
+1. App 本地化显示名（`InfoPlist.strings` 里的 `CFBundleDisplayName`——中文系统下 `/Applications/WeChat.app` 会显示为"微信"而非 WeChat）
+2. 原始文件名（去 `.app`）
+3. Bundle Identifier（`com.tencent.xinWeChat`）
+4. URL schemes（CFBundleURLTypes 里的 `weixin` / `wechat`）
+5. 原始 Info.plist 值（`en.lproj` 等其他语言覆盖——企业微信会同时保留"WeCom"这个英文名）
+6. 用户可编辑的别名表（`~/Library/Application Support/scripter/app-aliases.json`）
+
+**显示名解析**：按系统语言优先级找 `InfoPlist.strings`——先 `zh-Hans-CN` 再 `zh-Hans` 再 `Base` 最后 `en`。企业微信这种特殊布局（`zh-Hans.lproj` 目录存在但没有 `InfoPlist.strings`，`Base.lproj` 才有"企业微信"）也能正确取到中文名。
+
+**别名配置文件**（JSON，首次启动自动播种默认值，可直接编辑）：
+
+```json
+{
+  "com.tencent.WeWorkMac": ["weixin", "wechat", "企业微信", "企微", "workwechat"],
+  "com.tencent.xinWeChat": ["微信", "wx"]
+}
+```
+
+格式是 `{ "bundle.id": ["alias1", "alias2", ...] }`。默认表随源码维护在 `src/modules/apps/default-aliases.json`（用 `include_str!` 编进二进制），应用数据目录里的 `app-aliases.json` 优先级更高，用户可以往里自由加别名。文件损坏会静默退回内置默认表，不阻塞启动。
+
+**使用统计**：最近使用的应用排在前。使用次数与时间戳持久化在 `~/Library/Application Support/scripter/apps-usage.json`，图标缓存放在 `app-icons/` 子目录。
 
 ### 外部扩展
 
@@ -198,7 +226,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`apps-usage.json`（使用统计）、`app-icons/`（图标缓存）、`app-aliases.json`（用户可编辑的搜索别名）。
 
 ## 快捷键
 
@@ -550,7 +578,7 @@ ctx.globals().set("console", console)?;
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
 | [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`extensions/`（`manifest` 清单扫描 + `ui_window` UI 扩展窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`extensions/`（`manifest` 清单扫描 + `ui_window` UI 扩展窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
 | [src/ui/](src/ui) | 跨模块共享 UI：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
