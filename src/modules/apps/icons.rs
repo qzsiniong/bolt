@@ -37,18 +37,18 @@ fn store_cached(app: &Path, png: &[u8]) {
 }
 
 /// 取图标的 PNG 字节：缓存优先，缺失时生成并写回缓存。
-pub(crate) fn icon_bytes(app: &Path) -> Option<Vec<u8>> {
+pub(crate) fn icon_bytes(app: &Path) -> Result<Vec<u8>, String> {
     if let Some(bytes) = load_cached(app) {
-        return Some(bytes);
+        return Ok(bytes);
     }
     let png = generate_icon(app)?;
     store_cached(app, &png);
-    Some(png)
+    Ok(png)
 }
 
-/// `NSWorkspace iconForFile:` → `NSImage` → TIFF → 缩放 → PNG。
+/// `NSWorkspace iconForFile:` → 最大的位图 representation → AppKit 转 PNG。
 #[cfg(target_os = "macos")]
-fn generate_icon(app: &Path) -> Option<Vec<u8>> {
+fn generate_icon(app: &Path) -> Result<Vec<u8>, String> {
     use objc2::msg_send;
     use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, AnyObject};
@@ -56,25 +56,63 @@ fn generate_icon(app: &Path) -> Option<Vec<u8>> {
     use crate::ui::mac_ffi::{ns_data_bytes, ns_string};
 
     autoreleasepool(|_| unsafe {
-        let workspace_class = AnyClass::get(c"NSWorkspace")?;
+        let workspace_class =
+            AnyClass::get(c"NSWorkspace").ok_or("找不到 NSWorkspace 类".to_string())?;
         let workspace: *mut AnyObject = msg_send![workspace_class, sharedWorkspace];
         if workspace.is_null() {
-            return None;
+            return Err("sharedWorkspace 返回空".to_string());
         }
         let path = ns_string(&app.to_string_lossy());
         if path.is_null() {
-            return None;
+            return Err("路径 NSString 创建失败".to_string());
         }
         let image: *mut AnyObject = msg_send![workspace, iconForFile: path];
         if image.is_null() {
-            return None;
+            return Err("iconForFile 返回空".to_string());
         }
-        // 图标带多个分辨率的 representation，TIFFRepresentation 会全部打包，
-        // 体积不小但解码一次即可；随后统一缩到 64×64 再编码 PNG。
-        let tiff: *mut AnyObject = msg_send![image, TIFFRepresentation];
-        let tiff_bytes = ns_data_bytes(tiff)?;
 
-        let decoded = image::load_from_memory(&tiff_bytes).ok()?.to_rgba8();
+        // 现代 macOS 的 `TIFFRepresentation` 是 16 位浮点 TIFF（linear 色彩空间），
+        // Rust 的 image crate 解不了（Unhandled TIFF sample format 3 for 16 bits）。
+        // 所以 TIFF 只当中间格式：全部位图 rep 交给 AppKit 自己解码
+        // （imageRepsWithData 保证返回的都是 NSBitmapImageRep），选最大的一张，
+        // 再由 AppKit 转成 8 位 PNG（representationUsingType：NSPNGFileType = 4）。
+        let tiff: *mut AnyObject = msg_send![image, TIFFRepresentation];
+        if tiff.is_null() {
+            return Err("TIFFRepresentation 为空".to_string());
+        }
+        let bitmap_class =
+            AnyClass::get(c"NSBitmapImageRep").ok_or("找不到 NSBitmapImageRep 类".to_string())?;
+        let reps: *mut AnyObject = msg_send![bitmap_class, imageRepsWithData: tiff];
+        if reps.is_null() {
+            return Err("imageRepsWithData 返回空".to_string());
+        }
+        let count: usize = msg_send![reps, count];
+        let mut best: *mut AnyObject = std::ptr::null_mut();
+        let mut best_pixels = 0usize;
+        for i in 0..count {
+            let rep: *mut AnyObject = msg_send![reps, objectAtIndex: i];
+            if rep.is_null() {
+                continue;
+            }
+            let w: usize = msg_send![rep, pixelsWide];
+            let h: usize = msg_send![rep, pixelsHigh];
+            if w.saturating_mul(h) > best_pixels {
+                best_pixels = w * h;
+                best = rep;
+            }
+        }
+        if best.is_null() {
+            return Err("图标没有任何位图 representation".to_string());
+        }
+        let nil = std::ptr::null_mut::<AnyObject>();
+        let png_data: *mut AnyObject =
+            msg_send![best, representationUsingType: 4usize, properties: nil];
+        let png = ns_data_bytes(png_data).ok_or("PNG 转换失败".to_string())?;
+
+        // 统一缩到 64×64：PNG 已是 8 位，image crate 可以正常解码。
+        let decoded = image::load_from_memory(&png)
+            .map_err(|e| format!("PNG 解码失败（{} 字节）：{e}", png.len()))?
+            .to_rgba8();
         let resized = image::imageops::resize(
             &decoded,
             ICON_SIZE,
@@ -91,14 +129,14 @@ fn generate_icon(app: &Path) -> Option<Vec<u8>> {
                 ICON_SIZE,
                 image::ExtendedColorType::Rgba8,
             )
-            .ok()?;
-        Some(out)
+            .map_err(|e| format!("PNG 编码失败：{e}"))?;
+        Ok(out)
     })
 }
 
 #[cfg(not(target_os = "macos"))]
-fn generate_icon(_app: &Path) -> Option<Vec<u8>> {
-    None
+fn generate_icon(_app: &Path) -> Result<Vec<u8>, String> {
+    Err("仅 macOS 支持".to_string())
 }
 
 #[cfg(test)]

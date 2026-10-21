@@ -61,13 +61,42 @@ impl AppsModule {
                     .map(|app| app.path.clone())
                     .collect()
             };
+            let total = pending.len();
+            let mut failed = 0usize;
+            let mut first_error = String::new();
             for path in pending {
-                if let Some(png) = icons::icon_bytes(&path) {
-                    lock(&fill.icons).insert(path, png);
+                match icons::icon_bytes(&path) {
+                    Ok(png) => {
+                        lock(&fill.icons).insert(path, png);
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        if first_error.is_empty() {
+                            first_error = format!("{}：{e}", path.display());
+                        }
+                    }
                 }
                 cx.background_executor()
                     .timer(std::time::Duration::ZERO)
                     .await;
+            }
+            if total > 0 {
+                let summary = if failed == 0 {
+                    format!("应用图标：已生成 {total} 个新图标")
+                } else {
+                    format!(
+                        "应用图标：生成 {} 个，失败 {failed} 个（{first_error}）",
+                        total - failed
+                    )
+                };
+                cx.update(|cx| {
+                    let console = &cx.global::<AppShell>().console_channel;
+                    if failed == 0 {
+                        console.info(summary);
+                    } else {
+                        console.warn(summary);
+                    }
+                });
             }
         });
 
