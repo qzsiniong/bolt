@@ -1,0 +1,8 @@
+{
+  "com.tencent.WeWorkMac": ["weixin", "wechat", "企业微信", "企微", "workwechat"],
+  "com.tencent.xinWeChat": ["微信", "wx"],
+  "com.larksuite.lark": ["feishu", "飞书", "lark"],
+  "com.alibaba.DingTalkMac": ["dingtalk", "ding", "dd", "钉钉"],
+  "com.tencent.QQMac": ["qq", "tencentqq", "腾讯qq"],
+  "com.tencent.weread": ["weread", "wechatread", "微信读书"]
+}

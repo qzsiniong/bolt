@@ -12,57 +12,11 @@
 //! 能识别 binary plist / XML plist / .strings 三种格式。语言优先级从系统
 //! AppleLanguages 读，再加上 zh-Hans / en / Base 兜底。找不到或读失败时
 //! 调回文件名（`WeChat.app` → `WeChat`），保证不会返回空。
+//!
+//! 额外的搜索别名（如 weixin → 企业微信）从 [`crate::modules::apps::aliases`]
+//! 加载用户可编辑的 JSON 配置。
 
-use std::collections::HashMap;
 use std::path::Path;
-
-/// 静态别名表：按 bundle identifier 挂用户常用但 App 自身元数据里没有的
-/// 搜索词。Raycast 也维护了类似的一份——Info.plist / URL schemes 不会给
-/// 出「weixin」这种跨产品线的别名，所以需要硬编码。
-///
-/// 只放高频的几个，其他 case 让 App 自身的 raw_names + URL schemes 覆盖。
-/// 格式：`bundle_id → [alias1, alias2, ...]`。
-#[cfg(target_os = "macos")]
-static STATIC_ALIASES: std::sync::OnceLock<HashMap<&'static str, &'static [&'static str]>> =
-    std::sync::OnceLock::new();
-
-#[cfg(target_os = "macos")]
-fn static_aliases() -> &'static HashMap<&'static str, &'static [&'static str]> {
-    STATIC_ALIASES.get_or_init(|| {
-        let mut m = HashMap::new();
-        // 企业微信：Info.plist 里完全没有 weixin，但用户经常混用
-        m.insert(
-            "com.tencent.WeWorkMac",
-            &["weixin", "wechat", "企业微信", "企微", "workwechat"] as &'static [&'static str],
-        );
-        // 微信：URL schemes 已有 weixin/wechat，但补上中文别名
-        m.insert(
-            "com.tencent.xinWeChat",
-            &["微信", "wx"] as &'static [&'static str],
-        );
-        // 飞书 / Lark
-        m.insert(
-            "com.larksuite.lark",
-            &["feishu", "飞书", "lark"] as &'static [&'static str],
-        );
-        // 钉钉
-        m.insert(
-            "com.alibaba.DingTalkMac",
-            &["dingtalk", "ding", "dd", "钉钉"] as &'static [&'static str],
-        );
-        // QQ
-        m.insert(
-            "com.tencent.QQMac",
-            &["qq", "tencentqq", "腾讯qq"] as &'static [&'static str],
-        );
-        // 微信读书
-        m.insert(
-            "com.tencent.weread",
-            &["weread", "wechatread", "微信读书"] as &'static [&'static str],
-        );
-        m
-    })
-}
 
 /// 对应用数组逐个填显示名和搜索关键词；原地修改 `AppEntry.name` 与
 /// `AppEntry.keywords`。
@@ -70,6 +24,9 @@ fn static_aliases() -> &'static HashMap<&'static str, &'static [&'static str]> {
 /// 非 macOS 或 objc 调用整体失败时静默跳过：所有 entry 保持文件名和空
 /// keywords，调用方不需要做额外处理。
 pub(crate) fn fill_display_names_and_keywords(apps: &mut [crate::modules::apps::scan::AppEntry]) {
+    // 从磁盘读别名表；首次启动自动播种默认值，文件损坏回退内置默认。
+    let aliases = crate::modules::apps::aliases::load();
+
     #[cfg(target_os = "macos")]
     {
         let langs = preferred_languages();
@@ -85,13 +42,10 @@ pub(crate) fn fill_display_names_and_keywords(apps: &mut [crate::modules::apps::
             let mut kws = Vec::new();
             if let Some(bundle_id) = info.bundle_id.as_ref() {
                 kws.push(bundle_id.clone());
-                // 静态别名表：Info.plist 和 URL schemes 里没有、但用户经常
-                // 用来搜这个 App 的名称（例如 weixin 搜企业微信）。
-                #[cfg(target_os = "macos")]
-                {
-                    if let Some(extra) = static_aliases().get(bundle_id.as_str()) {
-                        kws.extend(extra.iter().map(|s| (*s).to_string()));
-                    }
+                // 用户可编辑的别名表：Info.plist / URL schemes 里没有、但
+                // 用户经常用来搜这个 App 的名称（例如 weixin 搜企业微信）。
+                if let Some(extra) = aliases.get(bundle_id.as_str()) {
+                    kws.extend(extra.clone());
                 }
             }
             kws.extend(info.url_schemes);
@@ -107,7 +61,7 @@ pub(crate) fn fill_display_names_and_keywords(apps: &mut [crate::modules::apps::
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = apps;
+        let _ = (apps, aliases);
     }
 }
 

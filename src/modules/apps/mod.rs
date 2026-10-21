@@ -2,6 +2,7 @@
 //! 点击直接启动。图标是应用的真实图标（`NSWorkspace` 生成并缓存到数据
 //! 目录），按使用次数/最近使用排序，贴近 Raycast 的用法。
 
+pub(crate) mod aliases;
 pub(crate) mod icons;
 pub(crate) mod names;
 pub(crate) mod scan;
