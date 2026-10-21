@@ -110,28 +110,39 @@ impl PinWindow {
         }
     }
 
-    fn save_to_disk(&self, cx: &Context<Self>) {
-        let dir = clipboard::default_save_dir();
+    /// 保存到用户选的路径：弹原生保存面板（`prompt_for_new_path`），
+    /// 默认目录为桌面、默认文件名为 `pin-<时间戳>.<png|txt>`。
+    fn save_to_disk(&mut self, cx: &mut Context<Self>) {
+        let (payload, ext) = match &self.content {
+            PinContent::Image { bytes, .. } => (bytes.clone(), "png"),
+            PinContent::Text(text) => (text.clone().into_bytes(), "txt"),
+        };
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let path = match &self.content {
-            PinContent::Image { .. } => dir.join(format!("pin-{ts}.png")),
-            PinContent::Text(_) => dir.join(format!("pin-{ts}.txt")),
-        };
-        let result = match &self.content {
-            PinContent::Image { bytes, .. } => std::fs::write(&path, bytes),
-            PinContent::Text(text) => std::fs::write(&path, text),
-        };
-        let console = cx
-            .global::<crate::app::shell::AppShell>()
-            .console_channel
-            .clone();
-        match result {
-            Ok(()) => console.info(format!("已保存到 {}", path.display())),
-            Err(e) => console.error(format!("保存失败 {e}")),
-        }
+        let suggested = format!("pin-{ts}.{ext}");
+        let receiver = cx.prompt_for_new_path(&clipboard::default_save_dir(), Some(&suggested));
+
+        // 原生面板是异步的：离开面板后由 oneshot 带回结果（取消 = None）。
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = receiver.await else {
+                return;
+            };
+            let result = std::fs::write(&path, payload);
+            let _ = this.update(cx, |_, cx| {
+                let console = cx
+                    .global::<crate::app::shell::AppShell>()
+                    .console_channel
+                    .clone();
+                match result {
+                    Ok(()) => console.info(format!("已保存到 {}", path.display())),
+                    Err(e) => console.error(format!("保存失败 {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
