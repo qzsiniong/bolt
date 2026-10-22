@@ -372,6 +372,8 @@ impl Render for Launcher {
             let this = cx.entity().downgrade();
             let mut panel_command = Command::new(&panel.state)
                 .max_h(rems(22.))
+                // 搜索框放底部，对齐 Raycast 动作面板。
+                .search_bottom(true)
                 .placeholder("搜索操作…")
                 .on_confirm(move |index, window, _app| {
                     let Some(action) = actions.get(index.row) else {
