@@ -211,7 +211,9 @@ cargo test --bin scripter   # 运行测试
 ```text
 packaging/macos/
 ├── Info.plist       # Bundle 元数据、LSUIElement（后台应用不占 Dock）
-└── entitlements.plist  # 签名权限：QuickJS-JIT + 网络
+├── entitlements.plist  # 签名权限：QuickJS-JIT + 网络
+├── Scripter.icns    # 应用图标（由 icon-1024.png 生成）
+└── icon-1024.png    # 图标源文件（AI 生成 + 自动裁边 + squircle 蒙版）
 scripts/
 └── build-macos-app.sh  # 打包脚本
 ```

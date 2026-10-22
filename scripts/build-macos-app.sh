@@ -55,6 +55,9 @@ cp "$PLIST_SRC" "$CONTENTS/Info.plist"
 # 写入 PkgInfo（APPL + 四个空格，AppKit 应用的标配）
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
+echo "==> 复制应用图标"
+cp "$ROOT/packaging/macos/Scripter.icns" "$RESOURCES_DIR/Scripter.icns"
+
 # --- 可选：代码签名 ---
 if [ "$SIGN" = "1" ]; then
     echo "==> ad-hoc 签名"
