@@ -18,6 +18,32 @@ use gpui_kit::assets::IconName;
 /// `PathBuf` / `String` / 扩展数据等 `Send + Sync` 值， bound 是诚实的。
 pub type LauncherAction = Arc<dyn Fn(&mut App) + Send + Sync>;
 
+/// Cmd+K 动作面板里的一个动作：标题 + 可选快捷键提示 + 执行闭包。
+///
+/// `shortcut` 只是展示文本（如 "↵"），不绑定真实按键——面板打开时 Enter
+/// 始终执行当前选中的动作。模块别放没接线的提示，会误导用户。
+///
+/// `dialog` 为 Some 时表示「这个 action 只需要弹 dialog 展示内容」，
+/// Launcher 收到后直接 open AlertDialog、不走 channel，也不关窗口。
+/// 用于展示类动作（如显示搜索关键词），避免经 Console 绕路。
+#[derive(Clone)]
+pub struct ItemAction {
+    pub title: String,
+    pub shortcut: Option<&'static str>,
+    pub run: LauncherAction,
+    pub dialog: Option<DialogSpec>,
+}
+
+/// AlertDialog 展示类动作的配置。所有字段都带默认值：调用方只写 title
+/// 和 description 就够了，ok_text 不传默认"关闭"，show_cancel 默认 false。
+#[derive(Clone)]
+pub struct DialogSpec {
+    pub title: String,
+    pub description: String,
+    pub ok_text: Option<String>,
+    pub show_cancel: bool,
+}
+
 /// 列表行左侧的图标：内置图标，或应用自己的内存图片。
 ///
 /// 应用启动器需要每个 App 的真实图标，`IconName` 是固定枚举表达不了；
@@ -62,6 +88,9 @@ pub struct LauncherItem {
     pub keywords: Vec<String>,
     /// 点击执行逻辑。
     pub on_confirm: LauncherAction,
+    /// Cmd+K 动作面板的动作列表。为空时 Launcher 回退成单个「打开」
+    /// （执行 [`Self::on_confirm`]），模块不用为普通 item 手写。
+    pub actions: Vec<ItemAction>,
 }
 
 /// 一个内容模块：为 Launcher 提供 items。

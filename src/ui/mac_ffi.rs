@@ -61,3 +61,74 @@ pub(crate) fn ns_string_to_rust(nsstr: *mut AnyObject) -> Option<String> {
         Some(std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned())
     }
 }
+
+/// 在 Finder 中显示（reveal）指定路径：`-[NSWorkspace selectFile:...]`。
+pub(crate) fn reveal_in_finder(path: &std::path::Path) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    let cls = AnyClass::get(c"NSWorkspace").ok_or("NSWorkspace 类不可用")?;
+    let workspace: *mut AnyObject = unsafe { msg_send![cls, sharedWorkspace] };
+    if workspace.is_null() {
+        return Err("NSWorkspace.sharedWorkspace 不可用".to_string());
+    }
+    let ns_path = ns_string(&path.to_string_lossy());
+    if ns_path.is_null() {
+        return Err(format!("路径 {} 转 NSString 失败", path.display()));
+    }
+    // 第二个参数传 nil（rootFullPath 不用）。
+    let ok: bool = unsafe {
+        msg_send![workspace, selectFile: ns_path, inFileViewerRootedAtPath: std::ptr::null_mut::<AnyObject>()]
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("Finder 无法显示 {}", path.display()))
+    }
+}
+
+/// 复制文本到系统剪切板。
+pub(crate) fn copy_text(text: &str) -> Result<(), String> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    let cls = AnyClass::get(c"NSPasteboard").ok_or("NSPasteboard 类不可用")?;
+    let pb: *mut AnyObject = unsafe { msg_send![cls, generalPasteboard] };
+    if pb.is_null() {
+        return Err("NSPasteboard.generalPasteboard 不可用".to_string());
+    }
+    let ns_text = ns_string(text);
+    let ns_type = ns_string("public.utf8-plain-text");
+    if ns_text.is_null() || ns_type.is_null() {
+        return Err("NSString 创建失败".to_string());
+    }
+    unsafe {
+        let _: isize = msg_send![pb, clearContents];
+        let ok: bool = msg_send![pb, setString: ns_text, forType: ns_type];
+        if ok {
+            Ok(())
+        } else {
+            Err("setString:forType: 返回 NO".to_string())
+        }
+    }
+}
+
+/// 系统横幅通知（NSUserNotification）。title 在顶部加粗，body 在下方；
+/// 用于 Cmd+K 动作的即时反馈，比 Console 直观、不打断用户。
+///
+/// 走 `osascript`：无额外依赖，一条 `Command::status()` 就够。applescript
+/// 里字符串要加引号，title 里出现 `"` 或 `\` 需要转义。
+pub(crate) fn notify(title: &str, body: &str) {
+    let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        escaped_body, escaped_title
+    );
+    // 异步：通知是一次性的，阻塞也没意义；丢错（osascript 执行失败）也无
+    // 法恢复，只是横幅没弹出来。
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .status();
+}

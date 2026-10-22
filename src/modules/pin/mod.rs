@@ -32,6 +32,7 @@ impl Module for PinModule {
             group: "内置".to_string(),
             keywords: Vec::new(),
             on_confirm: Arc::new(window::open_clipboard_pin),
+            actions: Vec::new(),
         }]
     }
 }

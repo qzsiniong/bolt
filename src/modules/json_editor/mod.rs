@@ -36,6 +36,7 @@ fn open_item() -> LauncherItem {
         group: "内置".to_string(),
         keywords: Vec::new(),
         on_confirm: Arc::new(window::open_json_editor),
+        actions: Vec::new(),
     }
 }
 

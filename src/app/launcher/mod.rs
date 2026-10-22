@@ -9,6 +9,7 @@
 
 pub(crate) mod item;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
@@ -17,12 +18,15 @@ use gpui_kit::base::h_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::IndexPath;
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::shell::AppShell;
-pub(crate) use item::{LauncherAction, LauncherIcon, LauncherItem, Module};
+pub(crate) use item::{DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module};
+
+gpui_kit::actions!(scripter_launcher, [ToggleActions]);
 
 /// Poll interval for the auto-close-on-blur check.
 const BLUR_TICK: Duration = Duration::from_millis(100);
@@ -67,6 +71,68 @@ fn collect_all(cx: &App) -> CollectedItems {
     }
 }
 
+/// item 没声明 actions 时回退成单个「打开」（执行 on_confirm）。
+/// 无论回退还是声明，都统一追加「显示搜索关键词」——因为 keyword 是
+/// Launcher 的核心概念，模块不用自己重复写这条。
+fn actions_for(item: &LauncherItem) -> Vec<ItemAction> {
+    let mut actions = if item.actions.is_empty() {
+        vec![ItemAction {
+            title: "打开".to_string(),
+            shortcut: Some("↵"),
+            run: item.on_confirm.clone(),
+            dialog: None,
+        }]
+    } else {
+        item.actions.clone()
+    };
+
+    // 搜索命中来源：label（title）、id、subtitle、item.keywords。
+    // Command 组件内部对 title/id/subtitle 已经做了匹配，keywords 是额外补
+    // 充的；把这几项完整列出来，方便调试和确认匹配来源。
+    let item_id = item.id.clone();
+    let title = item.title.clone();
+    let subtitle = item.subtitle.clone();
+    let keywords = item.keywords.clone();
+    let mut lines = vec![format!("id: {item_id}"), format!("title: {title}")];
+    if let Some(s) = &subtitle {
+        lines.push(format!("subtitle: {s}"));
+    }
+    if keywords.is_empty() {
+        lines.push("keywords: (无)".to_string());
+    } else {
+        lines.push(format!(
+            "keywords: [{}]",
+            keywords
+                .iter()
+                .map(|s| format!("\"{s}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    // dialog 字段非 None 表示这是展示型动作——Launcher 收到后直接 open dialog，
+    // 不走 channel、不关窗口。
+    let noop: LauncherAction = Arc::new(|_| {});
+    actions.push(ItemAction {
+        title: "显示搜索关键词".to_string(),
+        shortcut: None,
+        run: noop,
+        dialog: Some(DialogSpec {
+            title: "搜索关键词".to_string(),
+            description: lines.join("\n"),
+            ok_text: Some("关闭".to_string()),
+            show_cancel: false,
+        }),
+    });
+    actions
+}
+
+/// Cmd+K 动作面板的打开状态：自己的 CommandState（自带搜索框）+
+/// 打开那一刻拍下的动作列表快照。
+struct ActionsPanel {
+    state: Entity<CommandState>,
+    actions: Vec<ItemAction>,
+}
+
 pub struct Launcher {
     state: Entity<CommandState>,
     items: Vec<LauncherItem>,
@@ -76,6 +142,8 @@ pub struct Launcher {
     items_revision: u64,
     /// Drained by the app shell, which executes the confirmed action.
     requests: Sender<LauncherAction>,
+    /// Cmd+K 动作面板；None = 关闭。
+    panel: Option<ActionsPanel>,
     /// Auto-close-on-blur poll; ends when the view is dropped.
     _blur_task: Task<()>,
 }
@@ -90,6 +158,8 @@ impl Launcher {
         // Start with the caret in the search field.
         let focus = state.read(cx).focus_handle(cx);
         focus.focus(window, cx);
+
+        cx.bind_keys([KeyBinding::new("cmd-k", ToggleActions, None)]);
 
         // Re-collect on every open: scripts and extensions may have changed
         // since the last time the launcher was up. Each module reports its
@@ -135,6 +205,7 @@ impl Launcher {
             groups,
             items_revision,
             requests,
+            panel: None,
             _blur_task: blur_task,
         }
     }
@@ -151,6 +222,37 @@ impl Launcher {
         // If the receiver is gone the app is shutting down: nothing left to do.
         let _ = self.requests.send(item.on_confirm.clone());
         window.remove_window();
+    }
+
+    /// Cmd+K：给当前选中项打开/关闭动作面板。
+    fn toggle_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel.is_some() {
+            self.close_actions(window, cx);
+            return;
+        }
+        // 选中项来自主列表的 selection；经 groups 反解回 items。
+        let Some(index) = self.state.read(cx).selected_index() else {
+            return;
+        };
+        let Some(item) = self.resolve(index.section, index.row).cloned() else {
+            return;
+        };
+        let state = cx.new(|cx| CommandState::new(window, cx));
+        let focus = state.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        self.panel = Some(ActionsPanel {
+            state,
+            actions: actions_for(&item),
+        });
+        cx.notify();
+    }
+
+    /// 关闭动作面板并把焦点还给主搜索框（不关窗口）。
+    fn close_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel = None;
+        let focus = self.state.read(cx).focus_handle(cx);
+        focus.focus(window, cx);
+        cx.notify();
     }
 }
 
@@ -250,7 +352,94 @@ impl Render for Launcher {
             command = command.group(group);
         }
 
-        div().size_full().child(command)
+        let mut root = div()
+            .size_full()
+            .relative()
+            .on_action(cx.listener(|this, _: &ToggleActions, window, cx| {
+                this.toggle_actions(window, cx);
+            }))
+            .child(command);
+
+        // Cmd+K 动作面板：右下角浮层，自带搜索框的第二个 Command。
+        // Esc 只关面板（on_cancel 里 close_actions），Enter 执行选中动作。
+        if let Some(panel) = &self.panel {
+            let actions = panel.actions.clone();
+            let requests = self.requests.clone();
+            let this = cx.entity().downgrade();
+            let mut panel_command = Command::new(&panel.state)
+                .max_h(rems(22.))
+                .placeholder("搜索操作…")
+                .on_confirm(move |index, window, _app| {
+                    let Some(action) = actions.get(index.row) else {
+                        return;
+                    };
+                    // 展示型动作：直接弹 AlertDialog，不关窗口（面板保留）。
+                    // 执行型动作：经 channel 发 LauncherAction，然后关窗口。
+                    if let Some(spec) = &action.dialog {
+                        let spec = spec.clone();
+                        let _ = window.open_alert_dialog(_app, move |alert, _, _| {
+                            let mut dlg = alert
+                                .title(spec.title.clone())
+                                .description(spec.description.clone())
+                                .show_cancel(spec.show_cancel);
+                            if let Some(ok) = &spec.ok_text {
+                                dlg = dlg.ok_text(ok.clone());
+                            }
+                            dlg.on_ok(move |_, _, _| true)
+                        });
+                    } else {
+                        let _ = requests.send(action.run.clone());
+                        window.remove_window();
+                    }
+                })
+                .on_cancel(move |window, app| {
+                    let _ = this.update(app, |this, cx| this.close_actions(window, cx));
+                });
+
+            let mut group = CommandGroup::new();
+            for action in &panel.actions {
+                let title = action.title.clone();
+                let shortcut = action.shortcut;
+                group = group.item(
+                    CommandItem::new()
+                        .label(action.title.clone())
+                        .keywords(vec![action.title.clone()])
+                        .child(move |_, cx| {
+                            h_flex()
+                                .flex_1()
+                                .items_center()
+                                .justify_between()
+                                .child(div().child(title.clone()))
+                                .when_some(shortcut, |this, s| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(s),
+                                    )
+                                })
+                                .into_any_element()
+                        }),
+                );
+            }
+            panel_command = panel_command.group(group);
+
+            root = root.child(
+                div()
+                    .absolute()
+                    .bottom_4()
+                    .right_4()
+                    .w(px(420.))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().popover)
+                    .shadow_lg()
+                    .child(panel_command),
+            );
+        }
+
+        root
     }
 }
 
@@ -269,6 +458,7 @@ mod tests {
             group: group.to_string(),
             keywords: Vec::new(),
             on_confirm: std::sync::Arc::new(|_| {}),
+            actions: Vec::new(),
         }
     }
 
@@ -292,5 +482,39 @@ mod tests {
     #[test]
     fn empty_items_yield_no_groups() {
         assert!(group_items(&[]).is_empty());
+    }
+
+    #[test]
+    fn actions_fallback_has_open_plus_show_keywords() {
+        let it = item("a", "内置");
+        let actions = super::actions_for(&it);
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].title, "打开");
+        assert_eq!(actions[0].shortcut, Some("↵"));
+        assert_eq!(actions[1].title, "显示搜索关键词");
+    }
+
+    #[test]
+    fn declared_actions_are_preserved_then_show_keywords_appended() {
+        let mut it = item("a", "内置");
+        it.actions = vec![
+            super::ItemAction {
+                title: "第一个".to_string(),
+                shortcut: None,
+                run: std::sync::Arc::new(|_| {}),
+                dialog: None,
+            },
+            super::ItemAction {
+                title: "第二个".to_string(),
+                shortcut: None,
+                run: std::sync::Arc::new(|_| {}),
+                dialog: None,
+            },
+        ];
+        let actions = super::actions_for(&it);
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0].title, "第一个");
+        assert_eq!(actions[1].title, "第二个");
+        assert_eq!(actions[2].title, "显示搜索关键词");
     }
 }

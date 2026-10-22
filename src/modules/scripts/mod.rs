@@ -12,8 +12,9 @@ use std::sync::Arc;
 use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
-use crate::app::launcher::{LauncherItem, Module};
+use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module};
 use crate::model::script_store;
+use crate::ui::mac_ffi;
 
 /// Scripts 模块：提供「脚本管理」「新建脚本」两条内置命令，以及脚本目录里
 /// 每个脚本一条的运行命令。
@@ -39,8 +40,9 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             subtitle: Some("打开脚本管理器窗口".to_string()),
             icon: IconName::FolderCog.into(),
             group: "内置".to_string(),
-            keywords: Vec::new(),
+            keywords: vec![String::from("jbgl"), String::from("scripter")],
             on_confirm: Arc::new(|cx| window::open_manager(cx, false)),
+            actions: Vec::new(),
         },
         LauncherItem {
             id: "scripts.new".to_string(),
@@ -50,11 +52,19 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             group: "内置".to_string(),
             keywords: Vec::new(),
             on_confirm: Arc::new(|cx| window::open_manager(cx, true)),
+            actions: Vec::new(),
         },
     ];
 
     for script in script_store::list_scripts(scripts_dir) {
         let path = script.path.clone();
+        let primary: LauncherAction = Arc::new({
+            let path = path.clone();
+            move |cx| crate::runtime::run_path(cx, &path)
+        });
+        // Cmd+K 动作：运行 / 在 Finder 中显示 / 复制路径。
+        let reveal_path = path.clone();
+        let copy_path = path.to_string_lossy().into_owned();
         items.push(LauncherItem {
             id: format!("scripts.run:{}", script.file_name),
             title: script.name,
@@ -62,7 +72,42 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             icon: IconName::FileCode.into(),
             group: "脚本".to_string(),
             keywords: Vec::new(),
-            on_confirm: Arc::new(move |cx| crate::runtime::run_path(cx, &path)),
+            on_confirm: primary.clone(),
+            actions: vec![
+                ItemAction {
+                    title: "运行".to_string(),
+                    shortcut: Some("↵"),
+                    run: primary,
+                    dialog: None,
+                },
+                ItemAction {
+                    title: "在 Finder 中显示".to_string(),
+                    shortcut: None,
+                    run: Arc::new(move |_| match mac_ffi::reveal_in_finder(&reveal_path) {
+                        Ok(()) => mac_ffi::notify(
+                            "Scripter",
+                            &format!(
+                                "已在 Finder 中显示 {}",
+                                reveal_path
+                                    .file_name()
+                                    .map(|s| s.to_string_lossy().into_owned())
+                                    .unwrap_or_default()
+                            ),
+                        ),
+                        Err(e) => mac_ffi::notify("Scripter", &format!("显示失败：{e}")),
+                    }),
+                    dialog: None,
+                },
+                ItemAction {
+                    title: "复制路径".to_string(),
+                    shortcut: None,
+                    run: Arc::new(move |_| match mac_ffi::copy_text(&copy_path) {
+                        Ok(()) => mac_ffi::notify("Scripter", "路径已复制到剪贴板"),
+                        Err(e) => mac_ffi::notify("Scripter", &format!("复制失败：{e}")),
+                    }),
+                    dialog: None,
+                },
+            ],
         });
     }
     items

@@ -16,9 +16,10 @@ use std::time::{Duration, Instant};
 use gpui_kit::assets::IconName;
 use gpui_kit::{App, Image, ImageFormat, ImageSource};
 
-use crate::app::launcher::{LauncherIcon, LauncherItem, Module};
+use crate::app::launcher::{ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module};
 use crate::app::shell::AppShell;
 use crate::app::windows;
+use crate::ui::mac_ffi;
 use scan::AppEntry;
 use usage::UsageMap;
 
@@ -189,6 +190,51 @@ fn item_for(
     let mut keywords = vec![app.original_name];
     keywords.extend(app.keywords);
 
+    let primary: LauncherAction = Arc::new({
+        let data = data.clone();
+        let path = path.clone();
+        let name = name.clone();
+        move |cx: &mut App| launch(cx, data.as_ref(), &path, &name)
+    });
+    // Cmd+K 动作：打开（主动作，带使用统计）/ 在 Finder 中显示 / 复制路径。
+    let reveal_path = path.clone();
+    let copy_path = path.to_string_lossy().into_owned();
+    let actions = vec![
+        ItemAction {
+            title: "打开应用".to_string(),
+            shortcut: Some("↵"),
+            run: primary.clone(),
+            dialog: None,
+        },
+        ItemAction {
+            title: "在 Finder 中显示".to_string(),
+            shortcut: None,
+            run: Arc::new(move |_| match mac_ffi::reveal_in_finder(&reveal_path) {
+                Ok(()) => mac_ffi::notify(
+                    "Scripter",
+                    &format!(
+                        "已在 Finder 中显示 {}",
+                        reveal_path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default()
+                    ),
+                ),
+                Err(e) => mac_ffi::notify("Scripter", &format!("显示失败：{e}")),
+            }),
+            dialog: None,
+        },
+        ItemAction {
+            title: "复制路径".to_string(),
+            shortcut: None,
+            run: Arc::new(move |_| match mac_ffi::copy_text(&copy_path) {
+                Ok(()) => mac_ffi::notify("Scripter", "路径已复制到剪贴板"),
+                Err(e) => mac_ffi::notify("Scripter", &format!("复制失败：{e}")),
+            }),
+            dialog: None,
+        },
+    ];
+
     LauncherItem {
         id: format!("apps.open:{}", path.display()),
         title: name.clone(),
@@ -196,7 +242,8 @@ fn item_for(
         icon,
         group: "应用".to_string(),
         keywords,
-        on_confirm: Arc::new(move |cx: &mut App| launch(cx, data.as_ref(), &path, &name)),
+        on_confirm: primary,
+        actions,
     }
 }
 
