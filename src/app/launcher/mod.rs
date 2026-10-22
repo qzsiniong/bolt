@@ -435,6 +435,8 @@ impl Render for Launcher {
                     .absolute()
                     .bottom_4()
                     .right_4()
+                    // 注册遮挡 hitbox，阻止 hover/滚动穿透到底层 command 列表。
+                    .occlude()
                     .w(px(420.))
                     .rounded_lg()
                     .border_1()
