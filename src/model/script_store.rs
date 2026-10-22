@@ -1,10 +1,10 @@
 use super::script::{Language, Script};
 use std::path::{Path, PathBuf};
 
-/// Returns the scripts directory: `~/Library/Application Support/scripter/scripts/`.
+/// Returns the scripts directory: `~/Library/Application Support/bolt/scripts/`.
 pub fn scripts_dir() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("scripter");
+    path.push("bolt");
     path.push("scripts");
     path
 }

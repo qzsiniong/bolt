@@ -10,7 +10,7 @@ use super::panels::{ConsolePanel, EditorPanel, ScriptListPanel};
 use crate::console_channel::ConsoleEntry;
 use crate::runtime::run_service::{RunService, RunStateChanged};
 
-gpui_kit::actions!(scripter, [SaveScript, RunScript, NewScript]);
+gpui_kit::actions!(bolt, [SaveScript, RunScript, NewScript]);
 
 /// The script manager window: dock with script list, editor and console.
 /// Script execution lives in the app-level [`RunService`], so this window can
@@ -151,8 +151,8 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Keep the window title in sync with the loaded script.
         let title = match self.editor.read(cx).current_script() {
-            Some(script) => format!("Scripter — {}", script.file_name),
-            None => "Scripter".to_string(),
+            Some(script) => format!("Bolt — {}", script.file_name),
+            None => "Bolt".to_string(),
         };
         window.set_window_title(&title);
 

@@ -1,4 +1,4 @@
-//! Built-in `"scripter"` host module.
+//! Built-in `"bolt"` host module.
 //!
 //! Provides file I/O, HTTP, shell exec, env, and exit — the common building
 //! blocks user scripts need. Sync functions are registered directly; `fetch`
@@ -47,7 +47,7 @@ const DECLARATION: &str = r#"
 
 pub fn register(registry: &mut HostRegistry) {
     registry.register(
-        HostModule::new("scripter")
+        HostModule::new("bolt")
             .declaration(DECLARATION)
             .export("sleep")
             .export("readFile")
@@ -66,7 +66,7 @@ pub fn register(registry: &mut HostRegistry) {
     );
 }
 
-/// Install the `__scripter` global object with all native functions.
+/// Install the `__bolt` global object with all native functions.
 fn install<'js>(ctx: &Ctx<'js>) -> Result<()> {
     let g = Object::new(ctx.clone())?;
 
@@ -79,7 +79,7 @@ fn install<'js>(ctx: &Ctx<'js>) -> Result<()> {
     g.set("fetch", Function::new(ctx.clone(), Async(fetch_url))?)?;
     g.set("exec", Function::new(ctx.clone(), Async(exec_cmd))?)?;
 
-    ctx.globals().set("__scripter", g)?;
+    ctx.globals().set("__bolt", g)?;
     Ok(())
 }
 
@@ -257,23 +257,23 @@ fn env_var(key: String) -> Result<Option<String>> {
 
 /// `exit(code)` — throws a sentinel string the runner detects.
 fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
-    let msg = format!("__scripter_exit_{}__", code);
+    let msg = format!("__bolt_exit_{}__", code);
     let val = msg.into_js(&ctx)?;
     Err(ctx.throw(val))
 }
 
 // ── Interaction functions ──────────────────────────────────────────────────
 
-/// Install the host interaction APIs onto the existing `__scripter` object.
+/// Install the host interaction APIs onto the existing `__bolt` object.
 ///
 /// Must run *after* [`install`] (via `HostRegistry::install_globals`), which is
-/// what creates `__scripter`; the loader's re-export module reads that same
-/// object when a script does `import { confirm } from 'scripter'`.
+/// what creates `__bolt`; the loader's re-export module reads that same
+/// object when a script does `import { confirm } from 'bolt'`.
 pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> Result<()> {
-    let scripter: Object = ctx.globals().get("__scripter")?;
+    let bolt: Object = ctx.globals().get("__bolt")?;
 
     let b = bridge.clone();
-    scripter.set(
+    bolt.set(
         "typeStr",
         Function::new(
             ctx.clone(),
@@ -294,7 +294,7 @@ pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> R
     )?;
 
     let b = bridge.clone();
-    scripter.set(
+    bolt.set(
         "requestFocus",
         Function::new(
             ctx.clone(),
@@ -306,7 +306,7 @@ pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> R
     )?;
 
     let b = bridge.clone();
-    scripter.set(
+    bolt.set(
         "confirm",
         Function::new(
             ctx.clone(),
@@ -322,7 +322,7 @@ pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> R
     )?;
 
     let b = bridge.clone();
-    scripter.set(
+    bolt.set(
         "pickPath",
         Function::new(
             ctx.clone(),
@@ -353,7 +353,7 @@ pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> R
     )?;
 
     let b = bridge.clone();
-    scripter.set(
+    bolt.set(
         "scanQr",
         Function::new(
             ctx.clone(),

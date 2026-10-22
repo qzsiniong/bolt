@@ -52,7 +52,7 @@ declare function setInterval(callback: () => void, periodMs?: number): number;
 declare function clearInterval(id?: number): void;
 "#;
 
-const HELLO_JS: &str = r#"// Welcome to Scripter!
+const HELLO_JS: &str = r#"// Welcome to Bolt!
 // Press Run (Cmd/Ctrl+Enter) to execute this script.
 console.log('hello world');
 console.info('info message');
@@ -61,7 +61,7 @@ console.error('error message');
 "#;
 
 const DEMO_TS: &str = r#"// Example: import a Rust-provided host module.
-import { env, readFile } from 'scripter';
+import { env, readFile } from 'bolt';
 
 const name: string = env('USER') ?? 'world';
 console.log(`hello, ${name}`);

@@ -79,7 +79,7 @@ pub(crate) fn init() {
             if !image.is_null() {
                 let _: () = msg_send![button, setImage: image];
             }
-            let tooltip = crate::ui::mac_ffi::ns_string("Scripter — Alt+Space 唤起");
+            let tooltip = crate::ui::mac_ffi::ns_string("Bolt — Alt+Space 唤起");
             if !tooltip.is_null() {
                 let _: () = msg_send![button, setToolTip: tooltip];
             }
@@ -95,7 +95,7 @@ pub(crate) fn init() {
         add_menu_item(
             menu,
             handler,
-            "退出 Scripter",
+            "退出 Bolt",
             "quitApp:",
             Some(("q", 0x10_0000)),
         ); // ⌘Q
@@ -137,13 +137,13 @@ unsafe fn add_menu_item(
     let _: () = msg_send![menu, addItem: item];
 }
 
-/// 注册 `ScripterTrayHandler` ObjC 类，四个方法各自 post 一条 TrayCommand。
+/// 注册 `BoltTrayHandler` ObjC 类，四个方法各自 post 一条 TrayCommand。
 #[cfg(target_os = "macos")]
 fn ensure_handler_class() -> Option<&'static AnyClass> {
     use objc2::declare::ClassBuilder;
     use objc2::runtime::Sel;
 
-    const NAME: &std::ffi::CStr = c"ScripterTrayHandler";
+    const NAME: &std::ffi::CStr = c"BoltTrayHandler";
     if let Some(cls) = AnyClass::get(NAME) {
         return Some(cls);
     }

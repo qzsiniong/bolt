@@ -377,7 +377,7 @@ impl RunService {
                 cx,
             )),
             titlebar: Some(TitlebarOptions {
-                title: Some("Scripter".into()),
+                title: Some("Bolt".into()),
                 appears_transparent: false,
                 traffic_light_position: None,
             }),

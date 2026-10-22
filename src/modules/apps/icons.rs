@@ -22,7 +22,7 @@ const ICON_SIZE: u32 = 64;
 
 fn cache_dir() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("scripter");
+    path.push("bolt");
     path.push("app-icons");
     path
 }

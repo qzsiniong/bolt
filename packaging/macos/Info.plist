@@ -4,11 +4,11 @@
 <dict>
     <!-- Bundle identity -->
     <key>CFBundleName</key>
-    <string>Scripter</string>
+    <string>Bolt</string>
     <key>CFBundleDisplayName</key>
-    <string>Scripter</string>
+    <string>Bolt</string>
     <key>CFBundleIdentifier</key>
-    <string>com.scripter.app</string>
+    <string>com.bolt.app</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
@@ -16,9 +16,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>scripter</string>
+    <string>bolt</string>
     <key>CFBundleIconFile</key>
-    <string>Scripter</string>
+    <string>Bolt</string>
 
     <!-- System requirements -->
     <key>LSMinimumSystemVersion</key>
@@ -34,7 +34,7 @@
 
     <!-- 权限说明（首次请求时系统弹窗会用到） -->
     <key>NSHumanReadableCopyright</key>
-    <string>Copyright © 2026 Scripter</string>
+    <string>Copyright © 2026 Bolt</string>
     <key>NSRequiresAquaSystemAppearance</key>
     <false/>
 

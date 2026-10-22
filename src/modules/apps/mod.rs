@@ -211,7 +211,7 @@ fn item_for(
             shortcut: None,
             run: Arc::new(move |_| match mac_ffi::reveal_in_finder(&reveal_path) {
                 Ok(()) => mac_ffi::notify(
-                    "Scripter",
+                    "Bolt",
                     &format!(
                         "已在 Finder 中显示 {}",
                         reveal_path
@@ -220,7 +220,7 @@ fn item_for(
                             .unwrap_or_default()
                     ),
                 ),
-                Err(e) => mac_ffi::notify("Scripter", &format!("显示失败：{e}")),
+                Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
             }),
             dialog: None,
         },
@@ -228,8 +228,8 @@ fn item_for(
             title: "复制路径".to_string(),
             shortcut: None,
             run: Arc::new(move |_| match mac_ffi::copy_text(&copy_path) {
-                Ok(()) => mac_ffi::notify("Scripter", "路径已复制到剪贴板"),
-                Err(e) => mac_ffi::notify("Scripter", &format!("复制失败：{e}")),
+                Ok(()) => mac_ffi::notify("Bolt", "路径已复制到剪贴板"),
+                Err(e) => mac_ffi::notify("Bolt", &format!("复制失败：{e}")),
             }),
             dialog: None,
         },

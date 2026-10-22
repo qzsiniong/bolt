@@ -120,7 +120,7 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
             extension_data_dir(&id)
         }
     };
-    if let Err(e) = gpui_shell::set_bundle_id(&format!("scripter.{id}")) {
+    if let Err(e) = gpui_shell::set_bundle_id(&format!("bolt.{id}")) {
         console.warn(format!("UI 扩展 {id} 的应用标识不可用：{e}"));
     }
     // 目录里没有 gpui-shell.json：能力完全由宿主安装，清单里的开关决定剪贴板。
@@ -143,7 +143,7 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
 
     let root = ext.root.clone();
     let name = ext.name().to_string();
-    let title = format!("{name} — Scripter");
+    let title = format!("{name} — Bolt");
     let load_console = console.clone();
     let window_size = (ext.manifest.window.width, ext.manifest.window.height);
     let options = WindowOptions {

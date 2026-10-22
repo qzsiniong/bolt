@@ -26,7 +26,7 @@ use gpui_kit::*;
 use super::shell::AppShell;
 pub(crate) use item::{DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module};
 
-gpui_kit::actions!(scripter_launcher, [ToggleActions]);
+gpui_kit::actions!(bolt_launcher, [ToggleActions]);
 
 /// Poll interval for the auto-close-on-blur check.
 const BLUR_TICK: Duration = Duration::from_millis(100);

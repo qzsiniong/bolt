@@ -7,7 +7,7 @@
 //! - **UI 扩展**（`"kind": "ui"`）：固定入口 [`UI_ENTRY`]，由 gpui-shell 在 GPUI
 //!   主线程渲染成原生窗口。
 //!
-//! Layout: `<data_dir>/scripter/extensions/<id>/extension.json` plus the entry.
+//! Layout: `<data_dir>/bolt/extensions/<id>/extension.json` plus the entry.
 //!
 //! gpui-shell 自己认的 `gpui-shell.json` **不再使用**：它是一份严格清单
 //! （未知字段直接报错，装不下 `kind`/`window` 这类宿主字段），而它对没有清单的
@@ -308,13 +308,13 @@ fn load_ui_extension(dir: &Path, manifest: ExtensionManifest) -> Result<UiExtens
 }
 
 /// Per-extension private data directory:
-/// `~/Library/Application Support/scripter/extensions-data/<id>/`.
+/// `~/Library/Application Support/bolt/extensions-data/<id>/`.
 ///
 /// Kept next to `scripts/` and `extensions/` so a user editing an extension can
 /// find its storage without knowing about gpui-shell's own layout.
 pub fn extension_data_dir(id: &str) -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("scripter");
+    path.push("bolt");
     path.push("extensions-data");
     path.push(id);
     path
@@ -428,10 +428,10 @@ pub fn ensure_demo_ui_extension(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// `~/Library/Application Support/scripter/extensions/`.
+/// `~/Library/Application Support/bolt/extensions/`.
 pub fn extensions_dir() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("scripter");
+    path.push("bolt");
     path.push("extensions");
     path
 }
@@ -449,7 +449,7 @@ fn extensions_under(base: &Path) -> Option<PathBuf> {
 /// 仓库内随源码维护的扩展目录（开发副本）。
 ///
 /// 先看当前工作目录（`cargo run` 从仓库根启动），再回退编译期包根
-/// （直接运行 `target/debug/scripter` 时 CWD 未必在仓库里）。
+/// （直接运行 `target/debug/bolt` 时 CWD 未必在仓库里）。
 pub fn bundled_extensions_dir() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok();
     cwd.as_deref()
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn missing_dir_yields_nothing() {
-        let (exts, errors) = list_extensions(Path::new("/nonexistent/scripter-test"));
+        let (exts, errors) = list_extensions(Path::new("/nonexistent/bolt-test"));
         assert!(exts.is_empty());
         assert!(errors.is_empty());
     }
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn extension_data_dir_lives_under_the_app_data_dir() {
         let dir = extension_data_dir("ui-demo");
-        assert!(dir.ends_with("scripter/extensions-data/ui-demo"));
+        assert!(dir.ends_with("bolt/extensions-data/ui-demo"));
     }
 
     // ── 仓库扩展同步 ────────────────────────────────────────────────────────
@@ -894,9 +894,6 @@ mod tests {
         tmp.write("extensions/demo/extension.json", r#"{ "id": "demo" }"#);
         // 底层查找：给定 base 优先看它的 extensions/。
         assert_eq!(extensions_under(&tmp.0), Some(tmp.0.join("extensions")));
-        assert_eq!(
-            extensions_under(Path::new("/nonexistent/scripter-test")),
-            None
-        );
+        assert_eq!(extensions_under(Path::new("/nonexistent/bolt-test")), None);
     }
 }

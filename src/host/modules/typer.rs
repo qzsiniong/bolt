@@ -24,7 +24,7 @@ pub const DEFAULT_DELAY_MS: u64 = 300;
 
 const DEFAULT_LABEL: &str = "输入文本";
 
-const INIT_FAIL_HINT: &str = "无法初始化键盘模拟：请检查「系统设置 → 隐私与安全性 → 辅助功能」中是否允许 Scripter（修改后需重启应用）";
+const INIT_FAIL_HINT: &str = "无法初始化键盘模拟：请检查「系统设置 → 隐私与安全性 → 辅助功能」中是否允许 Bolt（修改后需重启应用）";
 
 /// `typeStr(text, delayMs, label?)`.
 ///
@@ -41,7 +41,7 @@ pub fn type_str(
         return Err(ABORTED.to_string());
     }
     // First output of the run: let the user pick where it goes. Without this
-    // the keys land in whatever window happens to be focused — usually Scripter.
+    // the keys land in whatever window happens to be focused — usually Bolt.
     if !bridge.take_focus_confirmation() {
         bridge.request_focus(DEFAULT_FOCUS_HINT.to_string())?;
     }

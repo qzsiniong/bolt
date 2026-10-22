@@ -20,10 +20,10 @@ pub(crate) struct UsageEntry {
 
 pub(crate) type UsageMap = HashMap<String, UsageEntry>;
 
-/// `~/Library/Application Support/scripter/apps-usage.json`
+/// `~/Library/Application Support/bolt/apps-usage.json`
 pub(crate) fn usage_path() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("scripter");
+    path.push("bolt");
     path.push("apps-usage.json");
     path
 }

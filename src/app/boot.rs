@@ -163,7 +163,7 @@ pub(crate) fn run() {
                 }
             };
 
-            // 扩展脚本的 `process.exit()` 只关掉它自己的窗口：Scripter 是常驻的
+            // 扩展脚本的 `process.exit()` 只关掉它自己的窗口：Bolt 是常驻的
             // 热键应用，一个扩展不该结束整个进程。窗口句柄留在 ExtensionsState
             // 里会失效，下次打开命令时自动重建。
             let exit_console = console_channel.clone();

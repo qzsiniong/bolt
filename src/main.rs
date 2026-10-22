@@ -1,4 +1,4 @@
-//! Scripter: a Raycast-style launcher that runs TypeScript/JavaScript scripts
+//! Bolt: a Raycast-style launcher that runs TypeScript/JavaScript scripts
 //! on a QuickJS runtime.
 //!
 //! Module layout (see README for the full grouping rules):

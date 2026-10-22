@@ -10,7 +10,7 @@ pub struct TempDir(pub PathBuf);
 
 impl TempDir {
     pub fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("scripter-test-{tag}-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bolt-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self(dir)

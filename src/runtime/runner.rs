@@ -15,7 +15,7 @@ use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module};
 use super::interaction::InteractionBridge;
 use super::ts_transform::strip_typescript;
 use crate::console_channel::ConsoleChannel;
-use crate::host::modules::scripter;
+use crate::host::modules::bolt;
 use crate::host::{HostLoader, HostRegistry, HostResolver};
 use crate::model::script::Language;
 
@@ -159,11 +159,11 @@ async fn run_async(
     // 5. Inside the context: install console + host module globals, then eval.
     ctx.async_with(async |ctx| {
         // console global
-        if let Err(e) = scripter::install_console(&ctx, console) {
+        if let Err(e) = bolt::install_console(&ctx, console) {
             console.error(format!("console install: {e}"));
         }
         // timer globals (setTimeout / clearTimeout / setInterval / clearInterval)
-        if let Err(e) = scripter::install_timers(&ctx, console) {
+        if let Err(e) = bolt::install_timers(&ctx, console) {
             console.error(format!("timer install: {e}"));
         }
         // host module globals
@@ -171,9 +171,9 @@ async fn run_async(
             console.error(format!("module install: {e}"));
         }
         // Interaction APIs (typeStr / requestFocus / confirm / pickPath /
-        // scanQr) extend the `__scripter` object that the line above created,
+        // scanQr) extend the `__bolt` object that the line above created,
         // so they must be installed after it.
-        if let Err(e) = scripter::install_interaction(&ctx, interaction) {
+        if let Err(e) = bolt::install_interaction(&ctx, interaction) {
             console.error(format!("interaction install: {e}"));
         }
 
@@ -293,7 +293,7 @@ mod tests {
         let (registry, channel, rx) = make_runner();
         let cancel = CancelToken::new();
         let code = r#"
-            import { env } from 'scripter';
+            import { env } from 'bolt';
             const name: string = env('USER') ?? 'world';
             console.log(`hello, ${name}`);
         "#;
@@ -315,9 +315,9 @@ mod tests {
         let (registry, channel, rx) = make_runner();
         let cancel = CancelToken::new();
         let code = r#"
-            import { writeFile, readFile } from 'scripter';
-            writeFile('/tmp/scripter_test.txt', 'hi from script');
-            const content = readFile('/tmp/scripter_test.txt');
+            import { writeFile, readFile } from 'bolt';
+            writeFile('/tmp/bolt_test.txt', 'hi from script');
+            const content = readFile('/tmp/bolt_test.txt');
             console.log(content);
         "#;
         run_script(
@@ -399,7 +399,7 @@ mod tests {
         });
         let started = std::time::Instant::now();
         run_script(
-            "import { sleep } from 'scripter'; await sleep(60000); console.log('never');",
+            "import { sleep } from 'bolt'; await sleep(60000); console.log('never');",
             Language::JavaScript,
             "sleep.js",
             run_env(registry, channel, &cancel),

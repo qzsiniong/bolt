@@ -171,7 +171,7 @@ impl DefinitionProvider for LspBridge {
 
 impl CodeActionProvider for LspBridge {
     fn id(&self) -> SharedString {
-        "scripter-lsp".into()
+        "bolt-lsp".into()
     }
 
     fn code_actions(

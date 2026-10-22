@@ -4,7 +4,7 @@
 //! （例如企业微信 bundle 里完全没有 `weixin`），所以这里用一份可编辑的
 //! JSON 配置补。配置文件放在：
 //!
-//!     `~/Library/Application Support/scripter/app-aliases.json`
+//!     `~/Library/Application Support/bolt/app-aliases.json`
 //!
 //! 格式：`{ "bundle.id": ["alias1", "alias2", ...], ... }`。
 //!
@@ -19,10 +19,10 @@ use std::path::{Path, PathBuf};
 /// HashMap 保证 O(1) 查找；Vec 保持 JSON 里书写的顺序（对调试友好）。
 pub(crate) type AliasMap = HashMap<String, Vec<String>>;
 
-/// 配置文件路径，和 apps-usage.json / app-icons 共用 scripter 数据目录。
+/// 配置文件路径，和 apps-usage.json / app-icons 共用 bolt 数据目录。
 pub(crate) fn aliases_path() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("scripter");
+    path.push("bolt");
     path.push("app-aliases.json");
     path
 }
@@ -132,6 +132,6 @@ mod tests {
 
     fn tempfile_path() -> PathBuf {
         let pid = std::process::id();
-        PathBuf::from(format!("/tmp/scripter-aliases-test-{pid}.json"))
+        PathBuf::from(format!("/tmp/bolt-aliases-test-{pid}.json"))
     }
 }

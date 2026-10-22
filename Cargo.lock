@@ -867,6 +867,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "bolt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "core-graphics 0.24.0",
+ "crossbeam-channel",
+ "dirs 5.0.1",
+ "enigo",
+ "futures",
+ "global-hotkey",
+ "gpui-kit",
+ "gpui-pre",
+ "gpui-shell",
+ "image",
+ "lsp-types",
+ "objc2 0.6.5",
+ "parking_lot",
+ "raw-window-handle",
+ "reqwest",
+ "rqrr",
+ "rquickjs",
+ "serde",
+ "serde_json",
+ "swc_common",
+ "swc_ecma_ast",
+ "swc_ecma_codegen",
+ "swc_ecma_parser",
+ "swc_ecma_transforms_base",
+ "swc_ecma_transforms_typescript",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "xcap",
+]
+
+[[package]]
 name = "brotli"
 version = "8.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7921,42 +7957,6 @@ dependencies = [
  "objc-foundation",
  "objc_id",
  "once_cell",
-]
-
-[[package]]
-name = "scripter"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "core-graphics 0.24.0",
- "crossbeam-channel",
- "dirs 5.0.1",
- "enigo",
- "futures",
- "global-hotkey",
- "gpui-kit",
- "gpui-pre",
- "gpui-shell",
- "image",
- "lsp-types",
- "objc2 0.6.5",
- "parking_lot",
- "raw-window-handle",
- "reqwest",
- "rqrr",
- "rquickjs",
- "serde",
- "serde_json",
- "swc_common",
- "swc_ecma_ast",
- "swc_ecma_codegen",
- "swc_ecma_parser",
- "swc_ecma_transforms_base",
- "swc_ecma_transforms_typescript",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
- "xcap",
 ]
 
 [[package]]

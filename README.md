@@ -1,4 +1,4 @@
-# Scripter
+# Bolt
 
 基于 [gpui-kit](https://github.com/) 构建的 macOS 桌面应用，以「全局快捷键 + 命令面板」的方式运行 JavaScript / TypeScript 脚本，并附带一个脚本管理器（新建 / 编辑 / 删除）。
 
@@ -45,7 +45,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 3. Bundle Identifier（`com.tencent.xinWeChat`）
 4. URL schemes（CFBundleURLTypes 里的 `weixin` / `wechat`）
 5. 原始 Info.plist 值（`en.lproj` 等其他语言覆盖——企业微信会同时保留"WeCom"这个英文名）
-6. 用户可编辑的别名表（`~/Library/Application Support/scripter/app-aliases.json`）
+6. 用户可编辑的别名表（`~/Library/Application Support/bolt/app-aliases.json`）
 
 **显示名解析**：按系统语言优先级找 `InfoPlist.strings`——先 `zh-Hans-CN` 再 `zh-Hans` 再 `Base` 最后 `en`。企业微信这种特殊布局（`zh-Hans.lproj` 目录存在但没有 `InfoPlist.strings`，`Base.lproj` 才有"企业微信"）也能正确取到中文名。
 
@@ -60,14 +60,14 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 格式是 `{ "bundle.id": ["alias1", "alias2", ...] }`。默认表随源码维护在 `src/modules/apps/default-aliases.json`（用 `include_str!` 编进二进制），应用数据目录里的 `app-aliases.json` 优先级更高，用户可以往里自由加别名。文件损坏会静默退回内置默认表，不阻塞启动。
 
-**使用统计**：最近使用的应用排在前。使用次数与时间戳持久化在 `~/Library/Application Support/scripter/apps-usage.json`，图标缓存放在 `app-icons/` 子目录。
+**使用统计**：最近使用的应用排在前。使用次数与时间戳持久化在 `~/Library/Application Support/bolt/apps-usage.json`，图标缓存放在 `app-icons/` 子目录。
 
 ### 外部扩展
 
 扩展存放在与 `scripts` 同级的目录：
 
 ```text
-~/Library/Application Support/scripter/extensions/
+~/Library/Application Support/bolt/extensions/
 └── demo/
     ├── extension.json    # 清单（必填）
     └── index.js          # 入口（默认 index.js，也支持 .ts）
@@ -95,7 +95,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 - 每条命令在 Launcher 中以扩展名作为分组标题出现，选中即运行入口脚本。
 - 清单解析失败的目录会被跳过并在 Console 记录，不影响其他扩展。
 
-扩展入口脚本与普通脚本拥有完全相同的能力：`console`、定时器、`scripter` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `confirm` / `pickPath` / `scanQr` 等）。
+扩展入口脚本与普通脚本拥有完全相同的能力：`console`、定时器、`bolt` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `confirm` / `pickPath` / `scanQr` 等）。
 
 ### 仓库自带扩展
 
@@ -109,7 +109,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 清单里 `kind` 为 `"ui"` 的目录是 **UI 扩展**：入口脚本只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
 
 ```text
-~/Library/Application Support/scripter/extensions/
+~/Library/Application Support/bolt/extensions/
 └── ui-demo/
     ├── extension.json    # 清单（必填，kind 为 ui）
     └── main.js           # 入口：export default class extends View
@@ -159,7 +159,7 @@ export default class UiDemo extends View {
 - 可用模块：`gpui-kit`（视图与调度）、`gpui-base`（基础控件：`Button` / `Link` / `Checkbox` / `Switch` / `Input` / `InputState` / `Textarea` / `TextareaState` / `TextView` / `h_flex` / `v_flex` …）、`gpui-fps`。样式全部写在脚本里（base 的控件不带视觉样式），颜色用 `cx.theme().colors` 的语义令牌。
 - 状态就是视图字段，改完调用 `cx.notify()` 触发重绘。
 - 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
-- 数据目录：`~/Library/Application Support/scripter/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
+- 数据目录：`~/Library/Application Support/bolt/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
 - **权限由宿主按清单构建**：宿主始终授予「读扩展目录 + 读/写自己的数据目录 + `storage` + `exit`」；清单 `capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。扩展目录被当作你自己写的代码，不做审批弹窗。
 - **宿主自绘标题栏**：每个扩展窗口顶部由宿主提供一条标题栏（扩展名 + 右上角置顶图钉），下方才是扩展自己的界面。扩展脚本无需也无法自绘这一区域。
 - 首次加载会在扩展目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
@@ -167,7 +167,7 @@ export default class UiDemo extends View {
 - `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
 - **旧布局会被报错并跳过**：一个 UI 扩展目录若只有 `gpui-shell.json` 而没有 `extension.json`，或两者同时存在（歧义），都会被跳过并在 Console 报错。
 - 首次启动会生成 `ui-demo` 示例（目录已存在则不动），可直接在 Launcher 里跑通全链路。
-- **尚未桥接**：UI 扩展目前不能调用普通脚本的宿主 API（`scripter` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
+- **尚未桥接**：UI 扩展目前不能调用普通脚本的宿主 API（`bolt` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
 
 ### 内置 JSON 编辑器
 
@@ -196,8 +196,8 @@ npm i -g typescript-language-server typescript
 ```bash
 cargo run        # 调试运行
 cargo build      # 仅构建
-cargo test --bin scripter   # 运行测试
-./scripts/build-macos-app.sh          # 打包成 target/release/Scripter.app
+cargo test --bin bolt   # 运行测试
+./scripts/build-macos-app.sh          # 打包成 target/release/Bolt.app
 ./scripts/build-macos-app.sh --sign   # 打包 + ad-hoc 签名（绕过 Gatekeeper）
 ./scripts/build-macos-app.sh --clean  # 先 cargo clean 再完整打包
 ```
@@ -212,7 +212,7 @@ cargo test --bin scripter   # 运行测试
 packaging/macos/
 ├── Info.plist       # Bundle 元数据、LSUIElement（后台应用不占 Dock）
 ├── entitlements.plist  # 签名权限：QuickJS-JIT + 网络
-├── Scripter.icns    # 应用图标（由 icon-1024.png 生成）
+├── Bolt.icns    # 应用图标（由 icon-1024.png 生成）
 └── icon-1024.png    # 图标源文件（AI 生成 + 自动裁边 + squircle 蒙版）
 scripts/
 └── build-macos-app.sh  # 打包脚本
@@ -222,7 +222,7 @@ scripts/
 
 | 字段 | 值 | 说明 |
 | --- | --- | --- |
-| `CFBundleIdentifier` | `com.scripter.app` | 修改成你自己的标识再分发 |
+| `CFBundleIdentifier` | `com.bolt.app` | 修改成你自己的标识再分发 |
 | `LSUIElement` | `true` | 后台代理应用：Dock 不显示、不在 Cmd+Tab 列表，窗口由托盘 / 快捷键唤起 |
 | `LSMinimumSystemVersion` | `12.0` | 最低 macOS 版本 |
 
@@ -234,7 +234,7 @@ scripts/
 
 - **打开启动器**：等价于 `Alt+Space`
 - **脚本管理** / **新建脚本**：打开脚本管理器窗口
-- **退出 Scripter**（⌘Q）
+- **退出 Bolt**（⌘Q）
 
 实现在 [src/app/tray.rs](src/app/tray.rs)：objc2 raw `msg_send!` 直接建 NSStatusItem + NSMenu，菜单点击经 crossbeam channel 回到 app tick 分发（ObjC 回调不直接碰 gpui）。`cargo run` 时通过 `setActivationPolicy(Accessory)` 隐藏 Dock；打包后由 `LSUIElement` 覆盖同一件事。
 
@@ -242,7 +242,7 @@ scripts/
 
 - **ad-hoc 签名**（本地能跑，不能分发）：加 `--sign` 参数，脚本自动用 `-` 身份签名并带上 entitlements
 - **开发者签名**（分发到其他 Mac）：需要 Apple Developer 账号。把 `codesign --sign -` 改成 `codesign --sign "Developer ID Application: Your Name (TEAMID)"`，然后用 `notarytool` 上传到 Apple 公证
-- **未签名直接双击**：macOS Gatekeeper 会拒绝。右键 → 打开可跳过一次；或终端执行 `xattr -cr Scripter.app` 清除隔离属性
+- **未签名直接双击**：macOS Gatekeeper 会拒绝。右键 → 打开可跳过一次；或终端执行 `xattr -cr Bolt.app` 清除隔离属性
 
 **首次运行的系统授权**：
 
@@ -266,7 +266,7 @@ scripts/
 macOS 下脚本存储在：
 
 ```
-~/Library/Application Support/scripter/scripts/
+~/Library/Application Support/bolt/scripts/
 ```
 
 首次启动会自动生成：
@@ -277,7 +277,7 @@ scripts/
 ├── types/
 │   ├── console.d.ts       # console 全局对象声明
 │   ├── globals.d.ts       # 定时器全局声明
-│   └── scripter.d.ts      # 内置 "scripter" 模块声明
+│   └── bolt.d.ts      # 内置 "bolt" 模块声明
 ├── hello.js               # 示例脚本（仅首次生成）
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
@@ -362,12 +362,12 @@ setTimeout(() => console.log('1s later'), 1000);   // 最后打印
 console.log('end');                                 // 先于上一行打印
 ```
 
-> `scripter` 模块的 `sleep(ms)` 同样基于 tokio 定时器，且支持 `Promise.all` 并行等待；需要等待且不关心回调风格时可优先使用。
+> `bolt` 模块的 `sleep(ms)` 同样基于 tokio 定时器，且支持 `Promise.all` 并行等待；需要等待且不关心回调风格时可优先使用。
 
-### `scripter` 内置模块
+### `bolt` 内置模块
 
 ```ts
-import { readFile, writeFile, listDir, fetch, exec, env, exit } from 'scripter';
+import { readFile, writeFile, listDir, fetch, exec, env, exit } from 'bolt';
 
 readFile(path: string): string;                 // 同步读取 UTF-8 文本
 writeFile(path: string, content: string): void; // 同步写入
@@ -381,7 +381,7 @@ exit(code: number): void;                       // 终止脚本
 示例：
 
 ```ts
-import { env, readFile } from 'scripter';
+import { env, readFile } from 'bolt';
 
 const name: string = env('USER') ?? 'world';
 console.log(`hello, ${name}`);
@@ -400,10 +400,10 @@ import { helper } from './utils.ts';
 
 ### 宿主交互 API
 
-脚本通过 `import from 'scripter'` 导入宿主提供的交互 API。调用时会自动弹出置顶小窗（进度条 / 待命提示 / 确认对话框），用户交互后继续执行。
+脚本通过 `import from 'bolt'` 导入宿主提供的交互 API。调用时会自动弹出置顶小窗（进度条 / 待命提示 / 确认对话框），用户交互后继续执行。
 
 ```ts
-import { typeStr, requestFocus, confirm, pickPath, scanQr } from 'scripter';
+import { typeStr, requestFocus, confirm, pickPath, scanQr } from 'bolt';
 ```
 
 #### `typeStr(text: string, delayMs?: number, label?: string): void`
@@ -461,13 +461,13 @@ console.log(url ?? '未识别到 QR 码');
 
 #### 权限说明
 
-- **辅助功能**：`typeStr` 需要「系统设置 → 隐私与安全性 → 辅助功能」授权 Scripter。
-- **屏幕录制**：`scanQr` 需要「系统设置 → 隐私与安全性 → 屏幕录制」授权 Scripter。首次调用时系统会自动弹窗请求。
+- **辅助功能**：`typeStr` 需要「系统设置 → 隐私与安全性 → 辅助功能」授权 Bolt。
+- **屏幕录制**：`scanQr` 需要「系统设置 → 隐私与安全性 → 屏幕录制」授权 Bolt。首次调用时系统会自动弹窗请求。
 
 #### 注意事项
 
 - `typeStr` 和 `requestFocus` 是同步阻塞调用；`confirm` / `pickPath` / `scanQr` 返回 Promise。
-- 若未先调用 `requestFocus` 直接 `typeStr`，按键会自动落到当前焦点窗口（通常就是 Scripter 自身编辑器），因此首次使用建议先调用 `requestFocus`。
+- 若未先调用 `requestFocus` 直接 `typeStr`，按键会自动落到当前焦点窗口（通常就是 Bolt 自身编辑器），因此首次使用建议先调用 `requestFocus`。
 - 执行中点击交互窗的「中止」按钮，脚本会在下一个异步边界抛出 `AbortError` 样式的错误并停止。
 
 ## 在 Rust 侧扩展 JS 能力
@@ -486,7 +486,7 @@ console.log(url ?? '未识别到 QR 码');
 
    这段源码对 QuickJS 而言就是一个普通模块，因此 `import` 语法完全标准，无需 polyfill。
 3. **类型声明自动生成**：每个 `HostModule` 的 `declaration` 字段会在启动时写入 `scripts/types/<name>.d.ts`。编辑器里的 `typescript-language-server` 读取这些声明后，补全、悬停、诊断直接生效。
-4. **运行时装配**：脚本执行前，runner 依次调用 `registry.install_globals(&ctx)` → `scripter::install_console(&ctx)` → `scripter::install_timers(&ctx)`，把全部 Rust 函数和全局对象注入 QuickJS 上下文。
+4. **运行时装配**：脚本执行前，runner 依次调用 `registry.install_globals(&ctx)` → `bolt::install_console(&ctx)` → `bolt::install_timers(&ctx)`，把全部 Rust 函数和全局对象注入 QuickJS 上下文。
 
 ### 添加新模块的步骤
 
@@ -546,7 +546,7 @@ fn now() -> i64 {
 pub(crate) mod my_utils;
 
 pub fn register_all(registry: &mut HostRegistry) {
-    scripter::register(registry);
+    bolt::register(registry);
     my_utils::register(registry);   // ← 新增这一行
 }
 ```
@@ -556,7 +556,7 @@ pub fn register_all(registry: &mut HostRegistry) {
 ```ts
 import { greet, now } from 'my-utils';
 
-console.log(greet('Scripter'));   // → "Hello, Scripter!"
+console.log(greet('Bolt'));   // → "Hello, Bolt!"
 console.log(now());               // → 1720000000000
 ```
 
@@ -571,7 +571,7 @@ console.log(now());               // → 1720000000000
 
 异步函数通过 `rquickjs::prelude::Async` 包装后，rquickjs 内部会把它转成返回 Promise 的函数。异步体内部可以用 `tokio::time::sleep`、`reqwest::get`、`tokio::process::Command` 等任意 tokio 异步 API，等待期间 QuickJS 引擎会继续调度其他 JS 任务（包括其他 Promise 回调和定时器）。
 
-例如内置的 `scripter.fetch`：
+例如内置的 `bolt.fetch`：
 
 ```rust
 use rquickjs::prelude::Async;
@@ -598,7 +598,7 @@ g.set("fetch", Function::new(ctx.clone(), Async(fetch_url))?)?;
 JS 侧：
 
 ```ts
-import { fetch } from 'scripter';
+import { fetch } from 'bolt';
 const { status, body } = await fetch('https://example.com');
 ```
 
@@ -638,7 +638,7 @@ ctx.globals().set("console", console)?;
 | [src/ui/](src/ui) | 跨模块共享 UI：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
-| [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{scripter,typer,qr}` |
+| [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |

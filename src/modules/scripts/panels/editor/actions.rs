@@ -12,7 +12,7 @@ use crate::ui::editor_ops;
 // used for the block comment: on macOS the shifted punctuation key is reported
 // as `cmd-?`, not `cmd-shift-/`.
 gpui_kit::actions!(
-    scripter,
+    bolt,
     [
         ToggleComment,
         ToggleBlockComment,

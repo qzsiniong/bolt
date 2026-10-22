@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 将 Rust release 二进制打包成标准 macOS .app bundle。
 #
-# 产出：target/release/Scripter.app/
+# 产出：target/release/Bolt.app/
 # 用法：
 #   ./scripts/build-macos-app.sh           # 编译 + 打包
 #   ./scripts/build-macos-app.sh --sign    # 额外做 ad-hoc 签名（可自运行，绕过 Gatekeeper）
@@ -11,9 +11,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="Scripter"
-BINARY_NAME="scripter"
-BUNDLE_ID="com.scripter.app"
+APP_NAME="Bolt"
+BINARY_NAME="bolt"
+BUNDLE_ID="com.bolt.app"
 PLIST_SRC="$ROOT/packaging/macos/Info.plist"
 ENTITLEMENTS_SRC="$ROOT/packaging/macos/entitlements.plist"
 
@@ -56,7 +56,7 @@ cp "$PLIST_SRC" "$CONTENTS/Info.plist"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 echo "==> 复制应用图标"
-cp "$ROOT/packaging/macos/Scripter.icns" "$RESOURCES_DIR/Scripter.icns"
+cp "$ROOT/packaging/macos/Bolt.icns" "$RESOURCES_DIR/Bolt.icns"
 
 # --- 可选：代码签名 ---
 if [ "$SIGN" = "1" ]; then
@@ -72,7 +72,7 @@ fi
 
 echo ""
 echo "==> 打包完成：$APP_DIR"
-echo "    双击 Scripter.app 或 ./$APP_DIR/Contents/MacOS/$BINARY_NAME 运行。"
+echo "    双击 Bolt.app 或 ./$APP_DIR/Contents/MacOS/$BINARY_NAME 运行。"
 echo ""
 echo "    首次运行需要系统设置授权："
 echo "      - 辅助功能：系统设置 → 隐私与安全性 → 辅助功能"
