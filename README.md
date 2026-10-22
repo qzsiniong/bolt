@@ -183,6 +183,12 @@ export default class UiDemo extends View {
 
 - Rust（edition 2024，工具链 1.98+）
 - Node.js（`typescript-language-server` 通过 shebang 调用 `node`）
+- cargo-patch-crate（管理 `gpui-component` 的本地补丁，见「依赖补丁」）：
+
+```bash
+cargo install patch-crate
+```
+
 - 全局安装语言服务：
 
 ```bash
@@ -194,6 +200,7 @@ npm i -g typescript-language-server typescript
 ## 构建与运行
 
 ```bash
+cargo patch-crate   # 首次克隆 / cargo clean 后：重建 gpui-component 补丁工作副本（必跑，见下节）
 cargo run        # 调试运行
 cargo build      # 仅构建
 cargo test --bin bolt   # 运行测试
@@ -201,6 +208,14 @@ cargo test --bin bolt   # 运行测试
 ./scripts/build-macos-app.sh --sign   # 打包 + ad-hoc 签名（绕过 Gatekeeper）
 ./scripts/build-macos-app.sh --clean  # 先 cargo clean 再完整打包
 ```
+
+### 依赖补丁（cargo-patch-crate）
+
+项目对 `gpui-component` 打了本地补丁（给 `Command` 组件加了 `search_icon` / `search_size` builder，用于定制 Launcher 搜索框），用 [cargo-patch-crate](https://github.com/mokeyish/cargo-patch-crate) 管理：
+
+- 补丁文件提交在 `patches/gpui-component+0.7.3.patch`；被补丁 crate 的工作副本在 `target/patch/`（随 `target` 一起不入库）。
+- **克隆后 / `cargo clean` 后必须先跑一次 `cargo patch-crate`** 重建工作副本，否则 `cargo build` 直接报 `target/patch/gpui-component-0.7.3/Cargo.toml` 不存在——Cargo 解析 `[patch]` 路径早于任何 build script，无法用 build.rs 自动引导。
+- 日常修改：直接编辑 `target/patch/gpui-component-0.7.3/` 里的代码，验证后跑 `cargo patch-crate gpui-component` 把改动重新导出为补丁文件，提交 `patches/` 即可。
 
 ### 打包成 macOS .app
 
@@ -265,13 +280,13 @@ scripts/
 
 macOS 下脚本存储在：
 
-```
+```text
 ~/Library/Application Support/bolt/scripts/
 ```
 
 首次启动会自动生成：
 
-```
+```text
 scripts/
 ├── tsconfig.json          # TS 配置（include scripts + types）
 ├── types/

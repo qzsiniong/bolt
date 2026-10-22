@@ -1,0 +1,98 @@
+diff --git a/src/command/command.rs b/src/command/command.rs
+index 1bf4222..d4634b3 100644
+--- a/src/command/command.rs
++++ b/src/command/command.rs
+@@ -5,11 +5,12 @@ use gpui::{
+     StyleRefinement, Styled, Window, rems,
+ };
+ 
+-use crate::IndexPath;
+ use crate::command::{
+     item::{CommandEntry, CommandGroup, CommandItem},
+     state::{CommandModel, CommandState, OnCancel, OnIndex, OnQuery},
+ };
++use crate::{IndexPath, Size};
++use gpui_kit_assets::IconName;
+ 
+ pub(crate) type CommandSlot = dyn Fn(&CommandState, &mut Window, &mut App) -> AnyElement;
+ 
+@@ -23,6 +24,8 @@ pub(crate) struct CommandOptions {
+     pub(crate) bordered: bool,
+     pub(crate) header: Option<Rc<CommandSlot>>,
+     pub(crate) footer: Option<Rc<CommandSlot>>,
++    pub(crate) search_icon: Option<IconName>,
++    pub(crate) search_size: Size,
+ }
+ 
+ impl Default for CommandOptions {
+@@ -35,6 +38,8 @@ impl Default for CommandOptions {
+             bordered: true,
+             header: None,
+             footer: None,
++            search_icon: None,
++            search_size: Size::default(),
+         }
+     }
+ }
+@@ -114,6 +119,21 @@ impl Command {
+         self
+     }
+ 
++    /// Set the prefix icon of the search field, default: [`IconName::Search`].
++    ///
++    /// Accepts the full `gpui_kit_assets::IconName` catalog, not just the
++    /// component compatibility subset.
++    pub fn search_icon(mut self, icon: IconName) -> Self {
++        self.options.search_icon = Some(icon);
++        self
++    }
++
++    /// Set the size of the search field, default: [`Size::Medium`].
++    pub fn search_size(mut self, size: impl Into<Size>) -> Self {
++        self.options.search_size = size.into();
++        self
++    }
++
+     /// Keep the query field but toggle the local filtering, default: `true`.
+     ///
+     /// Turn it off when an external source already answers the query, such as
+diff --git a/src/command/state.rs b/src/command/state.rs
+index fbe3555..13998fd 100644
+--- a/src/command/state.rs
++++ b/src/command/state.rs
+@@ -11,7 +11,7 @@ use gpui::{
+ use rust_i18n::t;
+ 
+ use crate::{
+-    ActiveTheme as _, ElementExt as _, Icon, IconName, IndexPath, StyledExt as _,
++    ActiveTheme as _, ElementExt as _, Icon, IconName, IndexPath, Sizable as _, StyledExt as _,
+     VirtualListScrollHandle,
+     actions::{Cancel, Confirm, SelectDown, SelectUp},
+     command::{
+@@ -917,6 +917,11 @@ impl Render for CommandState {
+         let rows_count = self.rows.len();
+         let row_sizes = self.row_sizes.clone();
+         let command_state = cx.entity();
++        let search_icon = self
++            .options
++            .search_icon
++            .unwrap_or(gpui_kit_assets::IconName::Search);
++        let search_size = self.options.search_size;
+ 
+         v_flex()
+             .id("command")
+@@ -950,11 +955,12 @@ impl Render for CommandState {
+                         .child(
+                             Input::new(&self.query_input)
+                                 .prefix(
+-                                    Icon::new(IconName::Search)
++                                    Icon::new(search_icon)
+                                         .text_color(cx.theme().muted_foreground),
+                                 )
+                                 .appearance(false)
+-                                .p_0(),
++                                .p_0()
++                                .with_size(search_size),
+                         ),
+                 )
+             })

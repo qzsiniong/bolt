@@ -271,6 +271,10 @@ impl Render for Launcher {
         // this view), so a strong one would keep both entities alive forever.
         let this = cx.entity().downgrade();
         let mut command = Command::new(&self.state)
+            // 闪电前缀图标 + 大号搜索框（vendor patch 加的 builder 方法）；
+            // Cmd+K 动作面板保持默认 Search 图标。
+            .search_icon(IconName::Zap)
+            .search_size(gpui_kit::component::Size::Large)
             // Fill the window so the list (flex_1) stretches instead of
             // leaving a blank strip below the footer; raise the list's cap
             // accordingly (default 18.75rem is shorter than this window).
