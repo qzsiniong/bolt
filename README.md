@@ -208,7 +208,7 @@ cargo test --bin scripter   # 运行测试
 
 **目录结构**：
 
-```
+```text
 packaging/macos/
 ├── Info.plist       # Bundle 元数据、LSUIElement（后台应用不占 Dock）
 └── entitlements.plist  # 签名权限：QuickJS-JIT + 网络
@@ -221,9 +221,20 @@ scripts/
 | 字段 | 值 | 说明 |
 | --- | --- | --- |
 | `CFBundleIdentifier` | `com.scripter.app` | 修改成你自己的标识再分发 |
-| `LSUIElement` | `true` | 后台应用，Dock 不显示 |
-| `LSBackgroundOnly` | `true` | 不出现在 Cmd+Tab 切换列表 |
+| `LSUIElement` | `true` | 后台代理应用：Dock 不显示、不在 Cmd+Tab 列表，窗口由托盘 / 快捷键唤起 |
 | `LSMinimumSystemVersion` | `12.0` | 最低 macOS 版本 |
+
+> **注意**：不要加 `LSBackgroundOnly`——它会禁止应用创建任何窗口（Launcher / 脚本管理器都弹不出来）。`LSUIElement` 才是「无 Dock 图标但能开窗」的正确键。
+
+### 菜单栏托盘
+
+应用启动后常驻菜单栏（闪电图标，NSStatusItem 模板图，自动适配深浅色），不占 Dock。托盘菜单：
+
+- **打开启动器**：等价于 `Alt+Space`
+- **脚本管理** / **新建脚本**：打开脚本管理器窗口
+- **退出 Scripter**（⌘Q）
+
+实现在 [src/app/tray.rs](src/app/tray.rs)：objc2 raw `msg_send!` 直接建 NSStatusItem + NSMenu，菜单点击经 crossbeam channel 回到 app tick 分发（ObjC 回调不直接碰 gpui）。`cargo run` 时通过 `setActivationPolicy(Accessory)` 隐藏 Dock；打包后由 `LSUIElement` 覆盖同一件事。
 
 **代码签名（可选）**：
 

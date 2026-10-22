@@ -26,12 +26,10 @@
     <key>NSHighResolutionCapable</key>
     <true/>
 
-    <!-- 后台应用：不占 Dock、启动无窗口，靠全局快捷键唤起 Launcher -->
+    <!-- 后台代理应用：不占 Dock、不出现在 Cmd+Tab，启动无窗口，
+         靠全局快捷键 / 菜单栏托盘唤起。注意不能用 LSBackgroundOnly——
+         它会禁止一切窗口（Launcher / 管理器都弹不出来）。 -->
     <key>LSUIElement</key>
-    <true/>
-
-    <!-- 让 Finder 显示为后台应用，不出现在 Cmd+Tab 切换列表 -->
-    <key>LSBackgroundOnly</key>
     <true/>
 
     <!-- 权限说明（首次请求时系统弹窗会用到） -->

@@ -9,7 +9,7 @@ use gpui_kit::*;
 use super::assets::ExtensionAssets;
 use super::shell::{APP_TICK, AppShell};
 use super::shell_log;
-use super::{hotkey, windows};
+use super::{hotkey, tray, windows};
 use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
 use crate::model::{project_gen, script_store};
@@ -72,6 +72,13 @@ pub(crate) fn run() {
         .run(move |cx| {
             gpui_kit::init(cx);
 
+            // 托盘：Accessory 策略隐藏 Dock 图标（.app 的 LSUIElement 已覆盖
+            // 打包场景，这里对齐 cargo run 行为）+ 菜单栏常驻图标。命令经
+            // channel 回到下方 app tick 执行，ObjC 回调不直接碰 gpui。
+            tray::set_accessory_policy();
+            let tray_rx = tray::command_channel();
+            tray::init();
+
             // One console channel for the whole app: the run service (and any
             // host side) pushes lines in; the manager window's Console panel
             // drains it while open. Output produced with no manager open stays
@@ -125,6 +132,18 @@ pub(crate) fn run() {
                             hotkey::HotKeyId::PinClipboard => {
                                 crate::modules::pin::window::open_clipboard_pin(cx)
                             }
+                        }
+                    }
+                    while let Ok(cmd) = tray_rx.try_recv() {
+                        match cmd {
+                            tray::TrayCommand::ToggleLauncher => windows::toggle_launcher(cx),
+                            tray::TrayCommand::OpenManager => {
+                                crate::modules::scripts::window::open_manager(cx, false)
+                            }
+                            tray::TrayCommand::NewScript => {
+                                crate::modules::scripts::window::open_manager(cx, true)
+                            }
+                            tray::TrayCommand::Quit => cx.quit(),
                         }
                     }
                     windows::drain_launcher_requests(&launcher_rx, cx);
