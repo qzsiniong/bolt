@@ -23,6 +23,8 @@ pub(crate) struct AppShell {
     /// The launcher window, while it is open. A stale handle means the window
     /// closed itself (Esc / blur / confirm).
     pub(crate) launcher: Option<AnyWindowHandle>,
+    /// 取色浮窗组：每块显示器一个。再触发取色时整组先关再开。
+    pub(crate) color_picker: Vec<AnyWindowHandle>,
     /// Sender handed to each launcher, which pushes the confirmed item's
     /// action here; the app tick drains and executes it.
     pub(crate) launcher_tx: Sender<LauncherAction>,

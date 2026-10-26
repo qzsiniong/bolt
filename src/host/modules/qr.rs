@@ -20,8 +20,8 @@ const MAX_CAPTURE_WIDTH: u32 = 1600;
 const CAPTURE_ACCESS_HINT: &str = "识别二维码需要「屏幕录制」权限：请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Bolt（修改后需重启应用）";
 
 /// Whether this process may capture the screen. Asks the system for the
-/// permission when it is missing.
-fn ensure_capture_access() -> bool {
+/// permission when it is missing. Shared with the color picker module.
+pub(crate) fn ensure_capture_access() -> bool {
     let access = ScreenCaptureAccess;
     access.preflight() || access.request()
 }

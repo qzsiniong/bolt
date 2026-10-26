@@ -196,6 +196,7 @@ pub(crate) fn run() {
 
             cx.set_global(AppShell {
                 launcher: None,
+                color_picker: Vec::new(),
                 launcher_tx,
                 modules,
                 items_revision: std::cell::Cell::new(0),

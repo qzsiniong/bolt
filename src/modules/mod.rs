@@ -3,6 +3,7 @@
 //! boot via [`default_modules`].
 
 pub(crate) mod apps;
+pub(crate) mod color_picker;
 pub(crate) mod extensions;
 pub(crate) mod json_editor;
 pub(crate) mod pin;
@@ -17,6 +18,7 @@ pub(crate) fn default_modules(
         Box::new(scripts::ScriptsModule),
         Box::new(json_editor::JsonEditorModule),
         Box::new(pin::PinModule),
+        Box::new(color_picker::ColorPickerModule),
         Box::new(extensions::ExtensionsModule),
     ]
 }
