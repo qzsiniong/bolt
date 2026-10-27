@@ -1,12 +1,11 @@
 //! 应用启动器模块：把 `/Applications` 等目录下的 `.app` 列进 Launcher，
 //! 点击直接启动。图标是应用的真实图标（`NSWorkspace` 生成并缓存到数据
-//! 目录），按使用次数/最近使用排序，贴近 Raycast 的用法。
+//! 目录）。使用频率排序由宿主统一提供（app/usage.rs），模块自己不管。
 
 pub(crate) mod aliases;
 pub(crate) mod icons;
 pub(crate) mod names;
 pub(crate) mod scan;
-pub(crate) mod usage;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +20,6 @@ use crate::app::shell::AppShell;
 use crate::app::windows;
 use crate::ui::mac_ffi;
 use scan::AppEntry;
-use usage::UsageMap;
 
 /// 启动后先等一会儿再补图标：让应用完成启动、全局快捷键的事件 tap 挂上
 /// 主 run loop，再开始 AppKit 调用。
@@ -44,7 +42,6 @@ pub(crate) struct AppsModule {
 
 struct AppsData {
     apps: Vec<AppEntry>,
-    usage: Mutex<UsageMap>,
     /// 应用路径 → 已缓存的 PNG 字节。
     icons: Mutex<HashMap<PathBuf, Vec<u8>>>,
 }
@@ -55,7 +52,6 @@ impl AppsModule {
         // 本地化显示名（WeChat → 微信）+ bundle id / URL schemes 作为搜索
         // 关键词，让用户可以用「微信」、wechat、weixin 搜到同一个 App。
         names::fill_display_names_and_keywords(&mut apps);
-        let usage = usage::load(&usage::usage_path());
         // 磁盘缓存一次读完：每个图标只有几 KB，比逐个异步读简单。
         let mut icons = HashMap::new();
         for app in &apps {
@@ -66,7 +62,6 @@ impl AppsModule {
 
         let data = Arc::new(AppsData {
             apps,
-            usage: Mutex::new(usage),
             icons: Mutex::new(icons),
         });
 
@@ -152,15 +147,13 @@ impl Module for AppsModule {
     }
 }
 
-/// 纯函数：按使用频率排序后构造 items（与 App 上下文解耦，方便单测）。
+/// 纯函数：构造 items（与 App 上下文解耦，方便单测）。使用频率排序由
+/// launcher 收集后统一做（app/usage.rs）。
 fn items_from(data: &Arc<AppsData>) -> Vec<LauncherItem> {
-    let mut apps = data.apps.clone();
-    {
-        let usage = lock(&data.usage);
-        usage::sort_by_usage(&mut apps, &usage);
-    }
     let icons = lock(&data.icons);
-    apps.into_iter()
+    data.apps
+        .iter()
+        .cloned()
         .map(|app| item_for(app, data, &icons))
         .collect()
 }
@@ -191,10 +184,9 @@ fn item_for(
     keywords.extend(app.keywords);
 
     let primary: LauncherAction = Arc::new({
-        let data = data.clone();
         let path = path.clone();
         let name = name.clone();
-        move |cx: &mut App| launch(cx, data.as_ref(), &path, &name)
+        move |cx: &mut App| launch(cx, &path, &name)
     });
     // Cmd+K 动作：打开（主动作，带使用统计）/ 在 Finder 中显示 / 复制路径。
     let reveal_path = path.clone();
@@ -247,17 +239,9 @@ fn item_for(
     }
 }
 
-/// 记录一次使用并启动应用。
-fn launch(cx: &mut App, data: &AppsData, path: &Path, name: &str) {
+/// 启动应用。使用频率计数由 launcher 统一处理（主回车确认时按 item.id）。
+fn launch(cx: &mut App, path: &Path, name: &str) {
     let console = cx.global::<AppShell>().console_channel.clone();
-
-    {
-        let mut usage = lock(&data.usage);
-        usage::bump(&mut usage, &path.to_string_lossy());
-        if let Err(e) = usage::save(&usage::usage_path(), &usage) {
-            console.warn(format!("保存应用使用记录失败：{e}"));
-        }
-    }
 
     match std::process::Command::new("open").arg(path).status() {
         Ok(status) if status.success() => console.info(format!("已启动应用：{name}")),
@@ -289,31 +273,21 @@ mod tests {
         }
     }
 
-    fn data_with(
-        apps: Vec<AppEntry>,
-        usage: UsageMap,
-        icons: HashMap<PathBuf, Vec<u8>>,
-    ) -> Arc<AppsData> {
+    fn data_with(apps: Vec<AppEntry>, icons: HashMap<PathBuf, Vec<u8>>) -> Arc<AppsData> {
         Arc::new(AppsData {
             apps,
-            usage: Mutex::new(usage),
             icons: Mutex::new(icons),
         })
     }
 
     #[test]
-    fn sorts_by_usage_and_falls_back_to_a_named_icon() {
-        let mut usage = UsageMap::new();
-        usage::bump(&mut usage, "/Applications/Zed.app");
+    fn falls_back_to_a_named_icon_without_cached_bytes() {
         let icons = HashMap::from([(PathBuf::from("/Applications/Safari.app"), vec![1, 2, 3])]);
-        let data = data_with(vec![app("Safari"), app("Zed")], usage, icons);
+        let data = data_with(vec![app("Safari"), app("Zed")], icons);
 
         let items = items_from(&data);
-        assert_eq!(items[0].id, "apps.open:/Applications/Zed.app");
-        assert_eq!(items[1].id, "apps.open:/Applications/Safari.app");
-        assert!(items.iter().all(|item| item.group == "应用"));
         // 有缓存字节的用真实图标，没有的退回内置图标。
-        assert!(matches!(items[0].icon, LauncherIcon::Named(_)));
-        assert!(matches!(items[1].icon, LauncherIcon::Image(_)));
+        assert!(matches!(items[0].icon, LauncherIcon::Image(_)));
+        assert!(matches!(items[1].icon, LauncherIcon::Named(_)));
     }
 }

@@ -21,6 +21,8 @@ use gpui_kit::component::IndexPath;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::prelude::FluentBuilder as _;
+
+use super::usage;
 use gpui_kit::*;
 
 use super::shell::AppShell;
@@ -31,18 +33,14 @@ gpui_kit::actions!(bolt_launcher, [ToggleActions]);
 /// Poll interval for the auto-close-on-blur check.
 const BLUR_TICK: Duration = Duration::from_millis(100);
 
-/// 把 items 按 `item.group` 分组：同名组合并，组的位置按首次出现顺序。
-/// 返回「组名 → item 下标列表」，`IndexPath { section, row }` 经它解析回
-/// `items` 里的具体一行。
-fn group_items(items: &[LauncherItem]) -> Vec<(String, Vec<usize>)> {
-    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        match groups.iter_mut().find(|(name, _)| name == &item.group) {
-            Some((_, indices)) => indices.push(index),
-            None => groups.push((item.group.clone(), vec![index])),
-        }
+/// 平铺列表（参考 Raycast）：不分段，所有 item 按使用频率全局排序后放单组；
+/// `item.group` 只作为行尾的类型徽章显示。`IndexPath { section, row }` 的
+/// section 恒为 0，经它解析回 `items` 里的具体一行。
+fn flat_groups(items: &[LauncherItem]) -> Vec<(String, Vec<usize>)> {
+    if items.is_empty() {
+        return Vec::new();
     }
-    groups
+    vec![(String::new(), (0..items.len()).collect())]
 }
 
 /// 一次收集的结果：items、按组展开的下标，以及收集时的 revision。
@@ -62,7 +60,11 @@ fn collect_all(cx: &App) -> CollectedItems {
     for module in &cx.global::<AppShell>().modules {
         items.extend(module.collect_items(cx));
     }
-    let groups = group_items(&items);
+    // 使用频率排序（宿主公共能力）：全局混排，常用 item 排最前（Raycast 风格
+    // 平铺）。所有模块的 item 自动生效，模块自己不用做任何事。
+    let usage = usage::load(&usage::usage_path());
+    usage::sort_for_launcher(&mut items, &usage);
+    let groups = flat_groups(&items);
     let revision = cx.global::<AppShell>().items_revision.get();
     CollectedItems {
         items,
@@ -215,10 +217,12 @@ impl Launcher {
         self.items.get(index)
     }
 
-    fn on_confirm(&mut self, index: IndexPath, window: &mut Window) {
+    fn on_confirm(&mut self, index: IndexPath, window: &mut Window, cx: &mut App) {
         let Some(item) = self.resolve(index.section, index.row) else {
             return;
         };
+        // 使用频率：主回车确认即计数（所有模块的 item 通用）。
+        usage::record_confirm(cx, &item.id);
         // If the receiver is gone the app is shutting down: nothing left to do.
         let _ = self.requests.send(item.on_confirm.clone());
         window.remove_window();
@@ -282,7 +286,7 @@ impl Render for Launcher {
             .max_h(rems(40.))
             .placeholder("Search scripts or commands...")
             .on_confirm(move |index, window, app| {
-                let _ = this.update(app, |this, _cx| this.on_confirm(index, window));
+                let _ = this.update(app, |this, cx| this.on_confirm(index, window, cx));
             })
             .on_cancel(|window, _cx| {
                 window.remove_window();
@@ -299,8 +303,9 @@ impl Render for Launcher {
                     .into_any_element()
             });
 
-        for (heading, indices) in &self.groups {
-            let mut group = CommandGroup::new().label(heading.clone());
+        for (_, indices) in &self.groups {
+            // 平铺：单组、无组头（label 是 Option，不设就不渲染分组标题）。
+            let mut group = CommandGroup::new();
             for &index in indices {
                 let item = &self.items[index];
                 // id、subtitle 和额外 keywords（如应用的 original_name / bundle id / URL schemes）
@@ -320,6 +325,8 @@ impl Render for Launcher {
                         LauncherIcon::Image(_) => IconName::AppWindow,
                     })
                     .child(move |_, cx| {
+                        // 闭包体内会被 move 的内层闭包引用，先取值（颜色是 Copy）。
+                        let muted = cx.theme().muted_foreground;
                         h_flex()
                             .flex_1()
                             .gap_2()
@@ -341,13 +348,17 @@ impl Render for Launcher {
                             })
                             .child(div().child(item_clone.title.clone()))
                             .when_some(item_clone.subtitle.clone(), move |this, subtitle| {
-                                this.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(subtitle),
-                                )
+                                this.child(div().text_sm().text_color(muted).child(subtitle))
                             })
+                            // 行尾类型徽章（应用/脚本/…）：平铺后没有分组标题，
+                            // 靠它区分 item 类型（Raycast 的右侧行内标签）。
+                            .child(
+                                div()
+                                    .ml_auto()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(item_clone.group.clone()),
+                            )
                             .into_any_element()
                     })
                     .keywords(keywords);
@@ -455,7 +466,7 @@ impl Render for Launcher {
 mod tests {
     // 显式导入：`super::*` 会把父模块 `gpui_kit::*` 带入的 `#[gpui::test]`
     // 宏一并引进来，令 `#[test]` 递归展开。
-    use super::{LauncherItem, group_items};
+    use super::LauncherItem;
 
     fn item(id: &str, group: &str) -> LauncherItem {
         LauncherItem {
@@ -471,25 +482,13 @@ mod tests {
     }
 
     #[test]
-    fn groups_merge_by_name_and_keep_first_seen_order() {
-        let items = vec![
-            item("a", "内置"),
-            item("b", "脚本"),
-            item("c", "内置"),
-            item("d", "扩展"),
-            item("e", "脚本"),
-        ];
-        let groups = group_items(&items);
-        let names: Vec<&str> = groups.iter().map(|(name, _)| name.as_str()).collect();
-        assert_eq!(names, ["内置", "脚本", "扩展"]);
-        assert_eq!(groups[0].1, [0, 2]);
-        assert_eq!(groups[1].1, [1, 4]);
-        assert_eq!(groups[2].1, [3]);
-    }
-
-    #[test]
-    fn empty_items_yield_no_groups() {
-        assert!(group_items(&[]).is_empty());
+    fn flat_list_uses_one_section_and_empty_items_yield_none() {
+        // 平铺：所有 item 在同一 section，顺序即排序后的顺序。
+        let items = vec![item("a", "内置"), item("b", "脚本")];
+        let groups = super::flat_groups(&items);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].1, [0, 1]);
+        assert!(super::flat_groups(&[]).is_empty());
     }
 
     #[test]
