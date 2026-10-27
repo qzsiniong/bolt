@@ -383,7 +383,7 @@ impl Render for Launcher {
                     // 执行型动作：经 channel 发 LauncherAction，然后关窗口。
                     if let Some(spec) = &action.dialog {
                         let spec = spec.clone();
-                        let _ = window.open_alert_dialog(_app, move |alert, _, _| {
+                        window.open_alert_dialog(_app, move |alert, _, _| {
                             let mut dlg = alert
                                 .title(spec.title.clone())
                                 .description(spec.description.clone())

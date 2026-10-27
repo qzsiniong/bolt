@@ -25,6 +25,9 @@ pub(crate) struct AppShell {
     pub(crate) launcher: Option<AnyWindowHandle>,
     /// 取色浮窗组：每块显示器一个。再触发取色时整组先关再开。
     pub(crate) color_picker: Vec<AnyWindowHandle>,
+    /// 通知卡片窗口堆叠（index 0 贴屏幕底边距上方，越往后越靠下）；关闭时
+    /// 其下方的窗口上移补位。见 ui/notify_window.rs。
+    pub(crate) notify_windows: Vec<AnyWindowHandle>,
     /// Sender handed to each launcher, which pushes the confirmed item's
     /// action here; the app tick drains and executes it.
     pub(crate) launcher_tx: Sender<LauncherAction>,

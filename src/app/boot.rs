@@ -122,6 +122,9 @@ pub(crate) fn run() {
             // Launcher 里被确认的 item 闭包经这个 channel 回到 app tick 执行。
             let (launcher_tx, launcher_rx) = crossbeam_channel::unbounded();
 
+            // 通知卡片：mac_ffi::notify 入队，app tick drain 开窗。
+            crate::ui::notify_window::init_channel();
+
             let app_tick = cx.spawn(async move |cx| loop {
                 cx.background_executor().timer(APP_TICK).await;
                 let fired = hotkey::poll_pressed();
@@ -147,6 +150,7 @@ pub(crate) fn run() {
                         }
                     }
                     windows::drain_launcher_requests(&launcher_rx, cx);
+                    crate::ui::notify_window::drain_notifications(cx);
                 });
             });
 
@@ -197,6 +201,7 @@ pub(crate) fn run() {
             cx.set_global(AppShell {
                 launcher: None,
                 color_picker: Vec::new(),
+                notify_windows: Vec::new(),
                 launcher_tx,
                 modules,
                 items_revision: std::cell::Cell::new(0),

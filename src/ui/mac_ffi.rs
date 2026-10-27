@@ -113,22 +113,10 @@ pub(crate) fn copy_text(text: &str) -> Result<(), String> {
     }
 }
 
-/// 系统横幅通知（NSUserNotification）。title 在顶部加粗，body 在下方；
-/// 用于 Cmd+K 动作的即时反馈，比 Console 直观、不打断用户。
+/// 通知消息（自绘卡片）。title 加粗在顶部，body 在下方。
 ///
-/// 走 `osascript`：无额外依赖，一条 `Command::status()` 就够。applescript
-/// 里字符串要加引号，title 里出现 `"` 或 `\` 需要转义。
+/// 实际展示在 `ui/notify_window.rs`：只往 channel 推一条请求（app tick 每帧
+/// drain 开窗），这里保持无 gpui 依赖，所有调用方签名不变。
 pub(crate) fn notify(title: &str, body: &str) {
-    let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
-    let script = format!(
-        "display notification \"{}\" with title \"{}\"",
-        escaped_body, escaped_title
-    );
-    // 异步：通知是一次性的，阻塞也没意义；丢错（osascript 执行失败）也无
-    // 法恢复，只是横幅没弹出来。
-    let _ = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .status();
+    crate::ui::notify_window::push_notify(title, body);
 }
