@@ -3,12 +3,6 @@ name = "bolt"
 version = "0.1.0"
 edition = "2024"
 
-# cargo-patch-crate：声明要打补丁的 crate。
-# clone / cargo clean 后需先跑一次 `cargo patch-crate` 重建 target/patch/
-# 工作副本（Cargo 解析 [patch] 路径早于任何 build.rs，无法靠 build.rs 自举）。
-[package.metadata.patch]
-crates = ["gpui-component"]
-
 [dependencies]
 # gpui-kit = "0.7"
 gpui-kit = { version = "0.7.1", features = [
@@ -79,11 +73,6 @@ gpui-pre = { version = "=0.3.9", features = ["test-support"] }
 # 让全图只剩一份 QuickJS（quickjs-jit）。`[patch]` 只在根 manifest 生效，所以写在这里。
 [patch.crates-io]
 rquickjs = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3" }
-# 给 Command 加 search_icon / search_size builder（cargo-patch-crate 管理）：
-# 工作副本在 target/patch/（随 target 一起 gitignore），diff 提交在
-# patches/gpui-component+0.7.3.patch；改完工作副本后跑
-# `cargo patch-crate gpui-component` 重新导出 patch 文件。
-gpui-component = { path = "./target/patch/gpui-component-0.7.3" }
 
 # gpui-shell 的 gpui-base 是仓库内 path 依赖；改道到 registry 版，避免与
 # gpui-kit 依赖的 gpui-base 变成两份不同 crate（主题/类型会分裂）。

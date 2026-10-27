@@ -14,8 +14,10 @@
 
 use std::path::PathBuf;
 
+use gpui_kit::ImageFormat;
+
 use crate::console_channel::ConsoleChannel;
-use crate::ui::clipboard::{PasteContent, classify_text};
+use crate::ui::clipboard::{PasteContent, PendingPaste, classify_text};
 #[cfg(target_os = "macos")]
 use crate::ui::mac_ffi::{ns_data_bytes, ns_string, ns_string_to_rust};
 
@@ -26,9 +28,10 @@ pub(crate) const MAX_PIN_HEIGHT: f32 = 600.;
 /// 剪切板里读到的内容类型。
 pub enum PinContent {
     Image {
-        /// **PNG** 字节：非 PNG 的输入（TIFF/JPEG/GIF）在读取时就统一转码了，
-        /// 渲染端可以无条件按 `ImageFormat::Png` 解码。
+        /// 原始格式字节（PNG/TIFF/JPEG/GIF）：读取时不转码，渲染端按
+        /// `format` 解码（gpui 原生支持这四种）。
         bytes: Vec<u8>,
+        format: ImageFormat,
         /// 原始图像尺寸（像素），窗口初始大小据此裁剪。
         width: u32,
         height: u32,
@@ -78,10 +81,12 @@ impl PinContent {
         match content {
             PasteContent::Image {
                 bytes,
+                format,
                 width,
                 height,
             } => Some(PinContent::Image {
                 bytes,
+                format,
                 width,
                 height,
             }),
@@ -113,10 +118,11 @@ pub fn read_paste_content(console: &ConsoleChannel) -> Option<PasteContent> {
         // public.tiff）往往是系统给这个文件画的**图标**（1024×1024），不是图片
         // 内容本身，绝不能当图片 pin。所以只认文件本身，不再回退位图。
         match read_image_file(path) {
-            Ok((w, h, png)) => {
+            Ok((format, w, h, bytes)) => {
                 console.info(format!("pin 来源文件：{}（{w}×{h}）", path.display()));
                 return Some(PasteContent::Image {
-                    bytes: png,
+                    bytes,
+                    format,
                     width: w,
                     height: h,
                 });
@@ -129,7 +135,12 @@ pub fn read_paste_content(console: &ConsoleChannel) -> Option<PasteContent> {
         return Some(PasteContent::FilePath(path.clone()));
     }
 
-    for uti in ["public.png", "public.tiff", "public.jpeg", "public.gif"] {
+    for (uti, format) in [
+        ("public.png", ImageFormat::Png),
+        ("public.tiff", ImageFormat::Tiff),
+        ("public.jpeg", ImageFormat::Jpeg),
+        ("public.gif", ImageFormat::Gif),
+    ] {
         let uti_obj = ns_string(uti);
         if uti_obj.is_null() {
             continue;
@@ -139,20 +150,13 @@ pub fn read_paste_content(console: &ConsoleChannel) -> Option<PasteContent> {
             continue;
         };
 
-        // 统一成 PNG：渲染端固定按 PNG 解码，原样透传 JPEG/GIF 会解不出来。
-        let png = if is_png(&bytes) {
-            bytes
-        } else {
-            match convert_to_png(&bytes) {
-                Ok(b) => b,
-                Err(_) => continue,
-            }
-        };
-
-        if let Some((w, h)) = image_dimensions(&png) {
+        // 不转码：按 UTI 定格式，原始字节直接给渲染端（gpui 原生解码这四种
+        // 格式）。TIFF→PNG 的整读+重编码是粘贴卡顿的主因，一个字节都不碰。
+        if let Some((w, h)) = image_dimensions(&bytes) {
             console.info(format!("pin 来源位图：{uti}（{w}×{h}）"));
             return Some(PasteContent::Image {
-                bytes: png,
+                bytes: bytes.to_vec(),
+                format,
                 width: w,
                 height: h,
             });
@@ -192,6 +196,104 @@ pub fn read_paste_content(console: &ConsoleChannel) -> Option<PasteContent> {
 #[cfg(not(target_os = "macos"))]
 pub fn read_paste_content(_console: &ConsoleChannel) -> Option<PasteContent> {
     None
+}
+
+/// 只识别不读取：Cmd+V 时判定剪贴板里**是什么**（用于出类型 token 和过滤
+/// 列表），位图不读字节、图片文件不整读——那些慢活留给确认时的
+/// [`read_paste_content`]。分支顺序与 [`read_paste_content`] 一致，保证
+/// peek 的类型和确认时读出的内容对得上。
+#[cfg(target_os = "macos")]
+pub fn peek_paste(_console: &ConsoleChannel) -> Option<PendingPaste> {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    let pb: *mut AnyObject = unsafe {
+        let cls = AnyClass::get(c"NSPasteboard")?;
+        msg_send![cls, generalPasteboard]
+    };
+    if pb.is_null() {
+        return None;
+    }
+
+    let file_paths = pasteboard_file_paths(pb);
+    if let Some(path) = file_paths.first() {
+        // 文件形态：只看文件头 magic 判断是不是图片（整读 + 转码延迟到
+        // 确认时）；read_image_file 解不出的文件最终也按 FilePath 处理，
+        // 这里直接归 FilePath，两边一致。
+        return Some(match image_file_format(path) {
+            Some(_) => PendingPaste::Image(Some(path.clone())),
+            None => PendingPaste::Ready(PasteContent::FilePath(path.clone())),
+        });
+    }
+
+    // 位图 UTI：只确认类型存在（dataForType 返回非空即有），不读不转。
+    for uti in ["public.png", "public.tiff", "public.jpeg", "public.gif"] {
+        let uti_obj = ns_string(uti);
+        if uti_obj.is_null() {
+            continue;
+        }
+        let data: *mut AnyObject = unsafe { msg_send![pb, dataForType: uti_obj] };
+        if ns_data_bytes(data).is_some() {
+            return Some(PendingPaste::Image(None));
+        }
+    }
+
+    // 文本类读取便宜，与 read_paste_content 相同：HTML 优先于 plain-text。
+    let html_key = ns_string("public.html");
+    if !html_key.is_null() {
+        let raw: *mut AnyObject = unsafe { msg_send![pb, stringForType: html_key] };
+        if let Some(html) = ns_string_to_rust(raw) {
+            let text = html_to_text(&html);
+            if !text.trim().is_empty() {
+                return Some(PendingPaste::Ready(classify_text(text)));
+            }
+        }
+    }
+
+    let utf8_key = ns_string("public.utf8-plain-text");
+    if !utf8_key.is_null() {
+        let nsstr: *mut AnyObject = unsafe { msg_send![pb, stringForType: utf8_key] };
+        if let Some(text) = ns_string_to_rust(nsstr)
+            && !text.trim().is_empty()
+        {
+            return Some(PendingPaste::Ready(classify_text(text)));
+        }
+    }
+
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn peek_paste(_console: &ConsoleChannel) -> Option<PendingPaste> {
+    None
+}
+
+/// 只读文件头 16 字节按 magic 识别图片格式，不整读文件。
+fn image_file_format(path: &std::path::Path) -> Option<ImageFormat> {
+    use std::io::Read as _;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return None;
+    };
+    let mut head = [0u8; 16];
+    let n = file.read(&mut head).unwrap_or(0);
+    detect_image_format(&head[..n])
+}
+
+/// 按字节 magic 识别图片格式（png/jpeg/gif/tiff——macOS 剪贴板里的图片
+/// 基本都在这四种里，gpui 原生解码）。
+fn detect_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    if is_png(bytes) {
+        Some(ImageFormat::Png)
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some(ImageFormat::Jpeg)
+    } else if bytes.starts_with(b"GIF8") {
+        Some(ImageFormat::Gif)
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        Some(ImageFormat::Tiff)
+    } else {
+        None
+    }
 }
 
 /// 剪切板 HTML → 纯文本。
@@ -456,19 +558,17 @@ fn xml_unescape(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// 读一个本地图片文件 → (宽, 高, PNG 字节)。
+/// 读一个本地图片文件 → (格式, 宽, 高, 原始字节)。**不转码**：gpui 原生
+/// 解码 PNG/TIFF/JPEG/GIF，渲染与另存都用原格式；整读后只做 magic 识别
+/// 和文件头尺寸解析，一个像素都不碰。
 ///
 /// 返回具体的失败原因：文件形态下不能静默失败去回退图标位图，得让用户看到
 /// 到底是没权限还是文件不是图片。
-fn read_image_file(path: &std::path::Path) -> Result<(u32, u32, Vec<u8>), String> {
+fn read_image_file(path: &std::path::Path) -> Result<(ImageFormat, u32, u32, Vec<u8>), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("读取失败：{e}"))?;
-    let (w, h) = image_dimensions(&bytes).ok_or_else(|| "不是可解码的图片".to_string())?;
-    let png = if is_png(&bytes) {
-        bytes
-    } else {
-        convert_to_png(&bytes).map_err(|e| format!("转码 PNG 失败：{e}"))?
-    };
-    Ok((w, h, png))
+    let format = detect_image_format(&bytes).ok_or_else(|| "不是可解码的图片".to_string())?;
+    let (w, h) = image_dimensions(&bytes).ok_or_else(|| "图片头解析失败".to_string())?;
+    Ok((format, w, h, bytes))
 }
 
 /// `%E4%B8%AD` 这类文件 URL 转义还原成普通字符串。
@@ -506,38 +606,14 @@ fn is_png(bytes: &[u8]) -> bool {
 
 // ── 辅助：图片解码 / TIFF→PNG ─────────────────────────────────────────────
 
+/// 只读图片头拿宽高（不做全图解码）：读取链跑在 UI 线程（Cmd+V 的
+/// on_paste 回调里），全图解码一张 retina 截图也要几百毫秒。
 fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    let img = image::load_from_memory(bytes).ok()?;
-    Some((img.width(), img.height()))
-}
-
-fn convert_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    use image::ImageEncoder as _;
-    use image::codecs::png::PngEncoder;
-    use std::io::Cursor;
-
-    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
-    let mut out = Cursor::new(Vec::new());
-    {
-        let encoder = PngEncoder::new_with_quality(
-            &mut out,
-            image::codecs::png::CompressionType::Best,
-            image::codecs::png::FilterType::Adaptive,
-        );
-        // `as_rgba8()` 只在原图**本来就是** RGBA8 时才返回 Some；剪切板里的
-        // TIFF/JPEG/GIF 常见 8-bit/16-bit 的非 RGBA 格式，必须走 `to_rgba8()`。
-        let rgba = img.to_rgba8();
-        let (width, height) = rgba.dimensions();
-        encoder
-            .write_image(
-                rgba.as_raw(),
-                width,
-                height,
-                image::ExtendedColorType::Rgba8,
-            )
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(out.into_inner())
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
 }
 
 #[cfg(test)]
@@ -545,10 +621,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn png_measures_and_tiff_converts_to_png() {
-        // 便签的图片渲染与窗口尺寸都依赖「字节能解码出尺寸」这条链，
-        // 解不出来就会开成一个没有内容的空白窗口。这里用真编码出来的字节，
-        // 覆盖剪切板最常见的两种形态：PNG 直接用、TIFF（macOS 截图格式）转换后用。
+    fn image_dimensions_measures_header_only() {
+        // 便签的图片渲染与窗口尺寸都依赖「字节能解出头尺寸」这条链，解不出
+        // 就会开成一个没有内容的空白窗口。这里用真编码出来的字节，覆盖剪切
+        // 板最常见的两种形态：PNG 直接用、TIFF（macOS 截图格式）原样透传。
         use image::ImageEncoder as _;
         use std::io::Cursor;
 
@@ -571,16 +647,15 @@ mod tests {
                 .unwrap();
             out.into_inner()
         };
+        // 读取链不再转码：TIFF 按 magic 识别出格式、头里解出尺寸即可。
         assert_eq!(image_dimensions(&tiff), Some((3, 2)));
-
-        let converted = convert_to_png(&tiff).expect("TIFF 应能转成 PNG");
-        assert_eq!(image_dimensions(&converted), Some((3, 2)));
+        assert_eq!(detect_image_format(&tiff), Some(ImageFormat::Tiff));
+        assert_eq!(detect_image_format(&png), Some(ImageFormat::Png));
     }
 
     #[test]
-    fn read_image_file_decodes_png_and_normalizes_jpeg() {
-        // 覆盖「复制图片文件」这条路：读盘得到的必须是 PNG（渲染端固定按 PNG
-        // 解码），且尺寸取原图尺寸而不是文件图标的尺寸。
+    fn read_image_file_detects_format_and_size() {
+        // 覆盖「复制图片文件」这条路：不转码，返回原格式字节 + 原图尺寸。
         use crate::test_support::TempDir;
         use image::ImageEncoder as _;
         use std::io::Cursor;
@@ -594,10 +669,12 @@ mod tests {
         image::codecs::png::PngEncoder::new(&mut png)
             .write_image(rgba.as_raw(), 3, 2, image::ExtendedColorType::Rgba8)
             .unwrap();
-        std::fs::write(&png_path, png.into_inner()).unwrap();
-        let (w, h, bytes) = read_image_file(&png_path).expect("PNG 应能读出");
+        let png_bytes = png.into_inner();
+        std::fs::write(&png_path, &png_bytes).unwrap();
+        let (format, w, h, bytes) = read_image_file(&png_path).expect("PNG 应能读出");
+        assert_eq!(format, ImageFormat::Png);
         assert_eq!((w, h), (3, 2));
-        assert!(is_png(&bytes));
+        assert_eq!(bytes, png_bytes);
 
         let jpeg_path = dir.0.join("a.jpg");
         let mut jpeg = Cursor::new(Vec::new());
@@ -606,11 +683,13 @@ mod tests {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
             .write_image(rgb.as_raw(), 3, 2, image::ExtendedColorType::Rgb8)
             .unwrap();
-        std::fs::write(&jpeg_path, jpeg.into_inner()).unwrap();
-        let (w, h, bytes) = read_image_file(&jpeg_path).expect("JPEG 应能读出");
+        let jpeg_bytes = jpeg.into_inner();
+        std::fs::write(&jpeg_path, &jpeg_bytes).unwrap();
+        let (format, w, h, bytes) = read_image_file(&jpeg_path).expect("JPEG 应能读出");
+        assert_eq!(format, ImageFormat::Jpeg);
         assert_eq!((w, h), (3, 2));
-        // 关键：JPEG 必须在读取阶段就转成 PNG。
-        assert!(is_png(&bytes));
+        // 关键：JPEG 原样透传，不做任何转码。
+        assert_eq!(bytes, jpeg_bytes);
 
         assert!(read_image_file(&dir.0.join("missing.png")).is_err());
     }
@@ -620,6 +699,7 @@ mod tests {
         // 小图不放大；大图按比例缩进 800×600 上限；文本固定 320 宽。
         let small = PinContent::Image {
             bytes: vec![],
+            format: ImageFormat::Png,
             width: 400,
             height: 300,
         };
@@ -627,6 +707,7 @@ mod tests {
 
         let large = PinContent::Image {
             bytes: vec![],
+            format: ImageFormat::Tiff,
             width: 2400,
             height: 1200,
         };

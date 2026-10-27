@@ -33,6 +33,7 @@ pub(crate) fn open_pin(cx: &mut App, content: PinContent) {
         bytes,
         width,
         height,
+        ..
     } = &content
     {
         cx.global::<AppShell>().console_channel.info(format!(

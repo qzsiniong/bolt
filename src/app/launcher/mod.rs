@@ -2,12 +2,24 @@
 //! hotkey.
 //!
 //! Launcher 是应用的中心 UI，但它对「有哪些模块」一无所知：每次打开时从
-//! [`super::shell::AppShell::modules`] 逐个收集 [`LauncherItem`]，按
-//! `item.group` 分组渲染；confirm 时把 item 自带的 `on_confirm` 闭包经
-//! channel 发回 app tick 执行——confirm 回调里本窗口已经关了，闭包必须
-//! 脱离 launcher 实体独立存活（注释见 [`item::LauncherAction`]）。
+//! [`super::shell::AppShell::modules`] 逐个收集 [`LauncherItem`]，平铺渲染；
+//! 确认时把 item 自带的 `on_confirm` 闭包经 channel 发回 app tick 执行——
+//! confirm 回调里本窗口已经关了，闭包必须脱离 launcher 实体独立存活
+//! （注释见 [`item::LauncherAction`]）。
+//!
+//! 搜索框由宿主自定义：`Command::searchable(false)` 关掉 gpui-component 内置
+//! 搜索框与文本过滤，`Input` 放在 Command 外面。这样 Cmd+V 的剪贴板识别、
+//! 类型 token 的图标渲染和「token 后继续输入文字二次过滤」都不需要给依赖
+//! 打 patch；列表的过滤（文本 + 粘贴类型）统一在构建 model 时做。键盘上，
+//! Enter/Escape 从聚焦的 Input 以 action 形式冒泡到根（单行 Input 的
+//! enter/escape handler 会 propagate），↑↓ 的 MoveUp/MoveDown 对单行是
+//! no-op 且不阻止传播，keydown listener 收得到——三者在 root 统一分流。
 
 pub(crate) mod item;
+
+pub(crate) use item::{
+    DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module, PasteHandler,
+};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,48 +28,36 @@ use std::time::Duration;
 
 use crossbeam_channel::Sender;
 use gpui_kit::assets::IconName;
-use gpui_kit::base::h_flex;
-use gpui_kit::base::input::{InlineToken, InputContent};
+use gpui_kit::base::input::{InlineToken, InlineTokenContext, InlineTokenSpan, InputContent};
+use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::IndexPath;
+use gpui_kit::component::Sizable as _;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
+use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, InputToken};
 use gpui_kit::prelude::FluentBuilder as _;
 
 use super::usage;
 use gpui_kit::*;
 
 use super::shell::AppShell;
-use crate::modules::pin::clipboard::read_paste_content;
-use crate::ui::clipboard::PasteContent;
-pub(crate) use item::{
-    DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module, PasteHandler,
-};
+use crate::modules::pin::clipboard::{peek_paste, read_paste_content};
+use crate::ui::clipboard::{PasteContent, PendingPaste};
 
 gpui_kit::actions!(bolt_launcher, [ToggleActions]);
 
 /// Poll interval for the auto-close-on-blur check.
 const BLUR_TICK: Duration = Duration::from_millis(100);
 
-/// 平铺列表（参考 Raycast）：不分段，所有 item 按使用频率全局排序后放单组；
-/// `item.group` 只作为行尾的类型徽章显示。`IndexPath { section, row }` 的
-/// section 恒为 0，经它解析回 `items` 里的具体一行。
-fn flat_groups(items: &[LauncherItem]) -> Vec<(String, Vec<usize>)> {
-    if items.is_empty() {
-        return Vec::new();
-    }
-    vec![(String::new(), (0..items.len()).collect())]
-}
-
-/// 一次收集的结果：items、按组展开的下标，以及收集时的 revision。
+/// 一次收集的结果：items 与收集时的 revision。
 struct CollectedItems {
     items: Vec<LauncherItem>,
-    groups: Vec<(String, Vec<usize>)>,
     revision: u64,
 }
 
-/// 从所有模块收集 items 并分组；同时记下当前的 revision。
+/// 从所有模块收集 items；同时记下当前的 revision。
 ///
 /// Launcher 打开时收集一次；打开期间若有模块改了内容（例如应用图标生成完
 /// 成），模块会把 `AppShell::items_revision` 加一，下一次绘制时这里会被再
@@ -71,13 +71,8 @@ fn collect_all(cx: &App) -> CollectedItems {
     // 平铺）。所有模块的 item 自动生效，模块自己不用做任何事。
     let usage = usage::load(&usage::usage_path());
     usage::sort_for_launcher(&mut items, &usage);
-    let groups = flat_groups(&items);
     let revision = cx.global::<AppShell>().items_revision.get();
-    CollectedItems {
-        items,
-        groups,
-        revision,
-    }
+    CollectedItems { items, revision }
 }
 
 /// item 没声明 actions 时回退成单个「打开」（执行 on_confirm）。
@@ -95,9 +90,9 @@ fn actions_for(item: &LauncherItem) -> Vec<ItemAction> {
         item.actions.clone()
     };
 
-    // 搜索命中来源：label（title）、id、subtitle、item.keywords。
-    // Command 组件内部对 title/id/subtitle 已经做了匹配，keywords 是额外补
-    // 充的；把这几项完整列出来，方便调试和确认匹配来源。
+    // 搜索命中来源：label（title）、id、subtitle、item.keywords。过滤在
+    // visible_indices 里做（title/id/subtitle/keywords 都参与）；把这几项
+    // 列出来供「显示搜索关键词」调试动作展示。
     let item_id = item.id.clone();
     let title = item.title.clone();
     let subtitle = item.subtitle.clone();
@@ -135,30 +130,151 @@ fn actions_for(item: &LauncherItem) -> Vec<ItemAction> {
     actions
 }
 
-/// Cmd+K 动作面板的打开状态：自己的 CommandState（自带搜索框）+
-/// 打开那一刻拍下的动作列表快照。
+/// 把 token 覆盖的字节区间从文本里剥掉，剩下的手输片段拼空格。
+/// token spans 已按 range 有序且与文本同步（InputContent 一致性保证）。
+fn strip_token_text(text: &str, spans: &[InlineTokenSpan]) -> String {
+    if spans.is_empty() {
+        return text.trim().to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0usize;
+    for span in spans {
+        let range = span.range();
+        if range.start > last {
+            out.push_str(&text[last..range.start]);
+            out.push(' ');
+        }
+        last = last.max(range.end);
+    }
+    if last < text.len() {
+        out.push_str(&text[last..]);
+    }
+    out.trim().to_string()
+}
+
+/// 输入框的「有效查询」：剥掉类型 token 的占位文本，剩用户手输的部分。
+/// 粘贴 token 后继续输入文字，过滤就只看这部分。
+fn effective_query(input: &InputState) -> String {
+    strip_token_text(input.value().as_ref(), input.tokens())
+}
+
+/// item 是否命中查询：大小写不敏感的 contains 匹配，空查询匹配一切。
+/// 风格对齐 gpui-component 的 `CommandItem::matches`（逐字段 OR），
+/// 参与字段：title、id、subtitle、keywords。
+fn matches_query(item: &LauncherItem, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    let query = query.to_lowercase();
+
+    item.title.to_lowercase().contains(&query)
+        || item.id.to_lowercase().contains(&query)
+        || item
+            .subtitle
+            .as_ref()
+            .is_some_and(|subtitle| subtitle.to_lowercase().contains(&query))
+        || item
+            .keywords
+            .iter()
+            .any(|keyword| keyword.to_lowercase().contains(&query))
+}
+
+/// 按「有效查询」（[`matches_query`]）与粘贴类型能力过滤 items，返回可见
+/// items 的下标（渲染顺序）。这份列表同时是 `visible_indices`：选中/确认
+/// 的 `IndexPath.row` 都是它在列表里的位置。
+fn visible_indices(
+    items: &[LauncherItem],
+    query: &str,
+    paste: Option<&PendingPaste>,
+) -> Vec<usize> {
+    // 图片是惰性识别（还没读字节）：`accepts` 的契约是只按变体声明能力
+    // （不看字段值），空字节探针即可判定；确认时读出的才是真内容。
+    let image_probe;
+    let paste: Option<&PasteContent> = match paste {
+        Some(PendingPaste::Ready(content)) => Some(content),
+        Some(PendingPaste::Image(_)) => {
+            image_probe = PasteContent::Image {
+                bytes: Vec::new(),
+                format: ImageFormat::Png,
+                width: 0,
+                height: 0,
+            };
+            Some(&image_probe)
+        }
+        None => None,
+    };
+    items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| {
+            if let Some(content) = paste {
+                let Some(handler) = &item.paste else {
+                    return false;
+                };
+                if !(handler.accepts)(content) {
+                    return false;
+                }
+            }
+            matches_query(item, query)
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Cmd+K 动作面板：自己的 no-search Command + 底部搜索框 + 过滤后的动作列表。
 struct ActionsPanel {
     state: Entity<CommandState>,
+    input: Entity<InputState>,
+    /// 有效查询（剥 token 后的手输文本）。
+    query_filter: String,
+    /// 过滤条件变更计数（render 依它重置选中；set_selected_index 需要
+    /// window，事件回调里没有，统一挪到 render 处理）。
+    filter_epoch: u64,
+    /// render 已应用过的 filter_epoch。
+    applied_filter_epoch: u64,
+    /// 上一帧渲染的可见动作下标（row → actions 下标）。
+    visible: Vec<usize>,
     actions: Vec<ItemAction>,
 }
 
+impl ActionsPanel {
+    /// 面板可见动作下标（按 query_filter 的 contains 过滤 title）。
+    fn compute_visible(&self) -> Vec<usize> {
+        let query = self.query_filter.to_lowercase();
+        self.actions
+            .iter()
+            .enumerate()
+            .filter(|(_, action)| query.is_empty() || action.title.to_lowercase().contains(&query))
+            .map(|(index, _)| index)
+            .collect()
+    }
+}
+
 pub struct Launcher {
+    /// 主搜索框（宿主自有）：Cmd+V 识别、token 渲染、Change 订阅都挂它。
+    input: Entity<InputState>,
+    /// 有效查询（剥 token 后的手输文本）；随 input 的 Change 同步。
+    query_filter: String,
     state: Entity<CommandState>,
     items: Vec<LauncherItem>,
-    /// 组名 → item 下标；与 `items` 同寿命，渲染与 confirm 共用。
-    groups: Vec<(String, Vec<usize>)>,
     /// `items` 对应的 `AppShell::items_revision`。
     items_revision: u64,
-    /// 上一帧真正渲染进 Command 的 item 下标（row → items 下标）。确认回调
-    /// 的 IndexPath.row 是这份列表里的位置——粘贴激活时列表被压缩过，不能
-    /// 拿 row 去索引全量 items。
+    /// 过滤条件（query_filter / paste）变更计数；render 依它把选中重置到
+    /// 首项。
+    filter_epoch: u64,
+    /// render 已应用过的 `filter_epoch`。
+    applied_filter_epoch: u64,
+    /// 上一帧渲染进 Command 的 item 下标（row → items 下标）。确认回调的
+    /// IndexPath.row 是这份列表里的位置——粘贴/文本过滤后列表被压缩过，
+    /// 不能拿 row 去索引全量 items。
     visible_indices: Vec<usize>,
+    /// Cmd+V 识别出的粘贴（图片惰性：只识别类型，字节确认时才读）。Some 时
+    /// 列表过滤为声明能处理该类型的 items，回车把内容交给选中 item 的
+    /// paste handler。与 on_paste hook 闭包共享（Rc+RefCell）。
+    paste: Rc<RefCell<Option<PendingPaste>>>,
     /// Drained by the app shell, which executes the confirmed action.
     requests: Sender<LauncherAction>,
-    /// Cmd+V 识别出的内容；Some 时列表过滤为声明能处理它的 items，回车把
-    /// 内容交给选中 item 的 paste handler。与 on_paste hook 闭包共享
-    /// （Rc+RefCell；内容包 Arc，确认时 move 进 action 闭包不 clone 图片字节）。
-    paste: Rc<RefCell<Option<Arc<PasteContent>>>>,
     /// Cmd+K 动作面板；None = 关闭。
     panel: Option<ActionsPanel>,
     /// Auto-close-on-blur poll; ends when the view is dropped.
@@ -172,8 +288,17 @@ impl Launcher {
         requests: Sender<LauncherAction>,
     ) -> Self {
         let state = cx.new(|cx| CommandState::new(window, cx));
+        let input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search scripts or commands..."));
+        // 主输入框变化时重算过滤（用户打字 / 退格删 token）。
+        cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
+            if let InputEvent::Change = event {
+                this.sync_filter(cx)
+            }
+        })
+        .detach();
         // Start with the caret in the search field.
-        let focus = state.read(cx).focus_handle(cx);
+        let focus = input.read(cx).focus_handle(cx);
         focus.focus(window, cx);
 
         cx.bind_keys([KeyBinding::new("cmd-k", ToggleActions, None)]);
@@ -183,9 +308,9 @@ impl Launcher {
         // own load errors to the console.
         let CollectedItems {
             items,
-            groups,
             revision: items_revision,
         } = collect_all(cx);
+        let item_count = items.len();
 
         let window_handle = window.window_handle();
 
@@ -217,26 +342,37 @@ impl Launcher {
         });
 
         Self {
+            input,
+            query_filter: String::new(),
             state,
-            visible_indices: (0..items.len()).collect(),
             items,
-            groups,
             items_revision,
-            requests,
+            filter_epoch: 0,
+            applied_filter_epoch: 0,
+            visible_indices: (0..item_count).collect(),
             paste: Rc::new(RefCell::new(None)),
+            requests,
             panel: None,
             _blur_task: blur_task,
         }
     }
 
     fn resolve(&self, section: usize, row: usize) -> Option<&LauncherItem> {
-        // 平铺单组：row 直接对应上一帧渲染的可见列表（粘贴激活时已压缩）。
+        // 平铺单组：row 直接对应上一帧渲染的可见列表（过滤后已压缩）。
         if section != 0 {
             return None;
         }
         self.visible_indices
             .get(row)
             .and_then(|&index| self.items.get(index))
+    }
+
+    /// 主回车确认：读当前选中项走 [`Self::on_confirm`]（空列表无选中则忽略）。
+    fn confirm_main(&mut self, window: &mut Window, cx: &mut App) {
+        let Some(index) = self.state.read(cx).selected_index() else {
+            return;
+        };
+        self.on_confirm(index, window, cx);
     }
 
     fn on_confirm(&mut self, index: IndexPath, window: &mut Window, cx: &mut App) {
@@ -246,12 +382,35 @@ impl Launcher {
         // 使用频率：主回车确认即计数（所有模块的 item 通用）。
         usage::record_confirm(cx, &item.id);
         // 粘贴确认：识别内容还在时，把内容交给选中 item 的 paste handler。
-        // 同样经 channel 送出——窗口马上要关，闭包必须脱离 launcher 存活。
-        if let Some(content) = self.paste.borrow_mut().take()
+        // 图片在这里才真正读剪贴板 + 转 PNG——转码慢，挪到后台线程：回车
+        // 立即关窗（体感与普通确认一致），内容读好后 handler 才执行，pin
+        // 窗口晚几百毫秒出现。动作闭包都脱离 launcher 独立存活。
+        if let Some(pending) = self.paste.borrow_mut().take()
             && let Some(handler) = &item.paste
         {
             let run = handler.run.clone();
-            let _ = self.requests.send(Arc::new(move |cx| run(cx, &content)));
+            match pending {
+                PendingPaste::Ready(content) => {
+                    let content = Arc::new(content);
+                    let _ = self.requests.send(Arc::new(move |cx| run(cx, &content)));
+                }
+                PendingPaste::Image(_) => {
+                    // 剪贴板在后台读取完成前被清（读不出内容）时静默放弃：
+                    // 窗口已关，回退普通确认只会执行错动作。
+                    let console = cx.global::<AppShell>().console_channel.clone();
+                    let (tx, rx) = futures::channel::oneshot::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(read_paste_content(&console));
+                    });
+                    cx.spawn(async move |cx| {
+                        if let Ok(Some(content)) = rx.await {
+                            let content = Arc::new(content);
+                            cx.update(|cx| run(cx, &content));
+                        }
+                    })
+                    .detach();
+                }
+            }
             window.remove_window();
             return;
         }
@@ -260,13 +419,70 @@ impl Launcher {
         window.remove_window();
     }
 
+    /// 输入变化后重算有效查询，并标记过滤条件变更（render 会重置选中）。
+    fn sync_filter(&mut self, cx: &mut Context<Self>) {
+        let query = effective_query(self.input.read(cx));
+        if query == self.query_filter {
+            return;
+        }
+        self.query_filter = query;
+        self.filter_epoch += 1;
+        cx.notify();
+    }
+
+    /// Cmd+V：只识别剪贴板内容的类型（图片不读字节，见 [`PendingPaste`]），
+    /// 清空当前查询并在搜索框里放一个带图标的类型 token，列表随之过滤为
+    /// 声明能处理该内容的 items。识别不出（空剪贴板等）返回 false 走默认粘贴。
+    fn handle_paste(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let console = cx.global::<AppShell>().console_channel.clone();
+        let Some(pending) = peek_paste(&console) else {
+            return false;
+        };
+        // token 显示内容预览（文件名 / 前 n 个字符），图标照旧按类型映射。
+        let text = pending.token_text();
+        let icon_key = pending.icon_key();
+        self.paste.borrow_mut().replace(pending);
+        // 原子行内 token：文本流里占住预览文本，渲染成「图标 + 预览」徽章，
+        // 退格一次整体删除；id 存图标 key，渲染端按它映射 Lucide 图标。
+        let token = InlineToken::new(icon_key, text.as_str()).with_label(text.as_str());
+        let content_input = InputContent::new(text.as_str())
+            .with_token(0..text.len(), token)
+            .expect("token range exactly covers its own text");
+        self.input
+            .update(cx, |input, cx| input.set_value(content_input, window, cx));
+        // set_value 不发 Change 事件：手动同步过滤与选中。
+        self.query_filter = String::new();
+        self.filter_epoch += 1;
+        cx.notify();
+        true
+    }
+
+    /// ↑/↓：在可见序列里移动选中（`set_selected_index` 自带滚动到可见）。
+    fn move_selection(
+        &mut self,
+        position: usize,
+        delta: isize,
+        visible_len: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if visible_len == 0 {
+            return;
+        }
+        let next = (position as isize + delta).clamp(0, visible_len as isize - 1) as usize;
+        self.state.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(next)), window, cx);
+        });
+        cx.notify();
+    }
+
     /// Cmd+K：给当前选中项打开/关闭动作面板。
     fn toggle_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.panel.is_some() {
             self.close_actions(window, cx);
             return;
         }
-        // 选中项来自主列表的 selection；经 groups 反解回 items。
+        // 选中项来自主列表的 selection；经 visible_indices 反解回 items。
         let Some(index) = self.state.read(cx).selected_index() else {
             return;
         };
@@ -274,10 +490,30 @@ impl Launcher {
             return;
         };
         let state = cx.new(|cx| CommandState::new(window, cx));
-        let focus = state.read(cx).focus_handle(cx);
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索操作…"));
+        cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
+            if let InputEvent::Change = event
+                && let Some(panel) = this.panel.as_mut()
+            {
+                let query = effective_query(panel.input.read(cx));
+                if query != panel.query_filter {
+                    panel.query_filter = query;
+                    panel.filter_epoch += 1;
+                    cx.notify();
+                }
+            }
+        })
+        .detach();
+        // 焦点交给面板搜索框。
+        let focus = input.read(cx).focus_handle(cx);
         focus.focus(window, cx);
         self.panel = Some(ActionsPanel {
             state,
+            input,
+            query_filter: String::new(),
+            filter_epoch: 0,
+            applied_filter_epoch: 0,
+            visible: (0..actions_for(&item).len()).collect(),
             actions: actions_for(&item),
         });
         cx.notify();
@@ -286,75 +522,137 @@ impl Launcher {
     /// 关闭动作面板并把焦点还给主搜索框（不关窗口）。
     fn close_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.panel = None;
-        let focus = self.state.read(cx).focus_handle(cx);
+        let focus = self.input.read(cx).focus_handle(cx);
         focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// 面板确认：执行可见列表里当前选中的动作。
+    fn confirm_action_panel(&mut self, window: &mut Window, cx: &mut App) {
+        let (actions, visible, selected) = {
+            let Some(panel) = self.panel.as_ref() else {
+                return;
+            };
+            (
+                panel.actions.clone(),
+                panel.visible.clone(),
+                panel.state.read(cx).selected_index(),
+            )
+        };
+        let Some(index) = selected else {
+            return;
+        };
+        let Some(&row) = visible.get(index.row) else {
+            return;
+        };
+        let Some(action) = actions.get(row) else {
+            return;
+        };
+        // 展示型动作：直接弹 AlertDialog，不关窗口（面板保留）。
+        // 执行型动作：经 channel 发 LauncherAction，然后关窗口。
+        if let Some(spec) = &action.dialog {
+            let spec = spec.clone();
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                let mut dlg = alert
+                    .title(spec.title.clone())
+                    .description(spec.description.clone())
+                    .show_cancel(spec.show_cancel);
+                if let Some(ok) = &spec.ok_text {
+                    dlg = dlg.ok_text(ok.clone());
+                }
+                dlg.on_ok(move |_, _, _| true)
+            });
+        } else {
+            let _ = self.requests.send(action.run.clone());
+            window.remove_window();
+        }
+    }
+
+    /// 面板 ↑/↓ 移动选中。
+    fn move_panel_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = self.panel.as_ref() else {
+            return;
+        };
+        let visible_len = panel.visible.len();
+        if visible_len == 0 {
+            return;
+        }
+        let position = panel
+            .state
+            .read(cx)
+            .selected_index()
+            .filter(|index| index.section == 0 && index.row < visible_len)
+            .map(|index| index.row)
+            .unwrap_or(0);
+        let next = (position as isize + delta).clamp(0, visible_len as isize - 1) as usize;
+        panel.state.update(cx, |state, cx| {
+            state.set_selected_index(Some(IndexPath::new(next)), window, cx);
+        });
         cx.notify();
     }
 }
 
 impl Render for Launcher {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 模块可能在面板打开期间补齐 items（例如应用图标刚刚生成完）。
         // 只有 revision 变化时才重新收集，正常渲染只读一个 Cell。
         if cx.global::<AppShell>().items_revision.get() != self.items_revision {
             let collected = collect_all(cx);
             self.items = collected.items;
-            self.groups = collected.groups;
             self.items_revision = collected.revision;
         }
 
         // 粘贴 token 的生命周期维护：搜索框里的类型 token 被退格删掉后
-        // query 变空，此时清掉识别出的内容，恢复完整列表。
-        if self.paste.borrow().is_some() && self.state.read(cx).query(cx).trim().is_empty() {
+        // 输入框不再有 token，此时清掉识别出的内容，恢复完整列表。
+        let has_token = !self.input.read(cx).tokens().is_empty();
+        if self.paste.borrow().is_some() && !has_token {
             self.paste.borrow_mut().take();
+            self.filter_epoch += 1;
         }
 
         // A weak handle: the closure is stored in CommandState (a child of
         // this view), so a strong one would keep both entities alive forever.
         let this = cx.entity().downgrade();
+
+        // 过滤条件变更后把选中重置到首项（set_selected_index 需要 window，
+        // 事件回调里没有，统一挪到 render 处理）。
+        if self.applied_filter_epoch != self.filter_epoch {
+            self.applied_filter_epoch = self.filter_epoch;
+            let empty = {
+                let paste = self.paste.borrow();
+                visible_indices(&self.items, &self.query_filter, paste.as_ref()).is_empty()
+            };
+            self.state.update(cx, |state, cx| {
+                state.set_selected_index(
+                    if empty { None } else { Some(IndexPath::new(0)) },
+                    window,
+                    cx,
+                );
+            });
+        }
+
+        let visible = {
+            // 只在借用窗口内过滤（PendingPaste::Ready 里带字节，不能 clone）。
+            let paste = self.paste.borrow();
+            visible_indices(&self.items, &self.query_filter, paste.as_ref())
+        };
+        let visible_count = visible.len();
+        self.visible_indices = visible;
+
         let mut command = Command::new(&self.state)
-            // 闪电前缀图标 + 大号搜索框（vendor patch 加的 builder 方法）；
-            // Cmd+K 动作面板保持默认 Search 图标。
-            .search_icon(IconName::Zap)
-            .search_size(gpui_kit::component::Size::Large)
+            // 宿主自定义搜索框：关掉内置搜索框与内置文本过滤——no-search
+            // 模式下 Command 对喂进去的 items 不做任何过滤，所以下面只把
+            // 过滤后的可见项放进 model（过滤在上方 visible_indices 做完）。
+            .searchable(false)
             // Fill the window so the list (flex_1) stretches instead of
             // leaving a blank strip below the footer; raise the list's cap
             // accordingly (default 18.75rem is shorter than this window).
             .h_full()
             .max_h(rems(40.))
-            .placeholder("Search scripts or commands...")
             .on_confirm(move |index, window, app| {
                 let _ = this.update(app, |this, cx| this.on_confirm(index, window, cx));
             })
-            .on_cancel(|window, _cx| {
-                window.remove_window();
-            })
-            // Cmd+V：识别剪贴板内容（图片/文件/JSON/链接/文本），清空当前
-            // 查询并在搜索框里放一个类型 token，列表随之过滤为声明能处理
-            // 该内容的 items。识别不出（空剪贴板等）返回 false 走默认粘贴。
-            .on_paste({
-                let paste = self.paste.clone();
-                let state = self.state.clone();
-                move |_, window, cx| {
-                    let console = cx.global::<AppShell>().console_channel.clone();
-                    let Some(content) = read_paste_content(&console) else {
-                        return false;
-                    };
-                    let label = content.kind_label();
-                    *paste.borrow_mut() = Some(Arc::new(content));
-                    // 原子行内 token：文本流里占住类型名（「图片」等，即
-                    // query 的内容），渲染成徽章，退格一次整体删除。
-                    let token = InlineToken::new("paste", label).with_label(label);
-                    let input = InputContent::new(label)
-                        .with_token(0..label.len(), token)
-                        .expect("token range exactly covers its own text");
-                    state.update(cx, move |state, cx| {
-                        state.set_query_content(input, window, cx)
-                    });
-                    true
-                }
-            })
-            .footer(|state, _window, cx| {
+            .footer(move |_, _window, cx| {
                 div()
                     .px_3()
                     .py_2()
@@ -362,40 +660,16 @@ impl Render for Launcher {
                     .border_color(cx.theme().border)
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
-                    .child(format!("{} 个命令", state.matched_count()))
+                    .child(format!("{visible_count} 个命令"))
                     .into_any_element()
             });
 
-        // 粘贴激活：只保留声明能处理该内容的 items，并给它们补上类型名
-        // 关键词——query 现在就是类型 token 的文本（「图片」等），不补的话
-        // Command 自己的文本过滤会把列表清空。
-        let paste_filter = self.paste.borrow().clone();
-        let paste_label = paste_filter.as_ref().map(|content| content.kind_label());
-        let mut visible_indices = Vec::new();
-        for (_, indices) in &self.groups {
-            // 平铺：单组、无组头（label 是 Option，不设就不渲染分组标题）。
+        if !self.visible_indices.is_empty() {
+            // 平铺：单组、无组头（label 是 Option，不设就不渲染分组标题）；
+            // 只放可见项，model 里的 row == visible_indices 里的位置。
             let mut group = CommandGroup::new();
-            for &index in indices {
+            for &index in &self.visible_indices {
                 let item = &self.items[index];
-                if let Some(content) = &paste_filter {
-                    let Some(handler) = &item.paste else {
-                        continue;
-                    };
-                    if !(handler.accepts)(content) {
-                        continue;
-                    }
-                }
-                visible_indices.push(index);
-                // id、subtitle 和额外 keywords（如应用的 original_name / bundle id / URL schemes）
-                // 一起喂给 CommandItem。title (label) 本身也参与搜索。
-                let mut keywords = vec![item.id.clone()];
-                if let Some(subtitle) = &item.subtitle {
-                    keywords.push(subtitle.clone());
-                }
-                keywords.extend(item.keywords.clone());
-                if let Some(label) = paste_label {
-                    keywords.push(label.to_string());
-                }
                 let item_clone = item.clone();
                 let entry = CommandItem::new()
                     .label(item.title.clone())
@@ -441,36 +715,113 @@ impl Render for Launcher {
                                     .child(item_clone.group.clone()),
                             )
                             .into_any_element()
-                    })
-                    .keywords(keywords);
+                    });
                 group = group.item(entry);
             }
             command = command.group(group);
         }
-        // 同步给 confirm 用：回调的 row 是这份压缩后的列表位置。
-        self.visible_indices = visible_indices;
+
+        // 主搜索框：大号 + 闪电前缀（对齐原 Command 内置搜索框样式）。
+        let search_input = Input::new(&self.input)
+            .large()
+            .appearance(false)
+            .prefix(Icon::new(IconName::Zap).text_color(cx.theme().muted_foreground))
+            // 类型 token 渲染：id 存的是 icon_key，按它映射 Lucide 图标。
+            .token(move |ctx: &InlineTokenContext, _window, cx| {
+                let muted = cx.theme().muted_foreground;
+                let icon = match ctx.token().id().as_ref() {
+                    "image" => Some(IconName::Image),
+                    "file" => Some(IconName::FileText),
+                    "json" => Some(IconName::Braces),
+                    "link" => Some(IconName::Link),
+                    "text" => Some(IconName::Type),
+                    _ => None,
+                };
+                let mut token = InputToken::new(ctx);
+                if let Some(icon) = icon {
+                    token = token.icon(Icon::new(icon).text_color(muted));
+                }
+                token.into_any_element()
+            })
+            .on_paste({
+                let launcher = cx.entity();
+                move |_, window, cx| launcher.update(cx, |this, cx| this.handle_paste(window, cx))
+            });
 
         let mut root = div()
             .size_full()
             .relative()
+            .on_action(cx.listener(|this, _: &Enter, window, cx| {
+                if this.panel.is_some() {
+                    this.confirm_action_panel(window, cx);
+                } else {
+                    this.confirm_main(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &Escape, window, cx| {
+                if this.panel.is_some() {
+                    this.close_actions(window, cx);
+                } else {
+                    window.remove_window();
+                }
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                if !matches!(key, "up" | "down") || event.keystroke.modifiers.modified() {
+                    return;
+                }
+                cx.stop_propagation();
+                let delta = if key == "up" { -1 } else { 1 };
+                if this.panel.is_some() {
+                    this.move_panel_selection(delta, window, cx);
+                } else {
+                    let position = this
+                        .state
+                        .read(cx)
+                        .selected_index()
+                        .filter(|index| index.section == 0)
+                        .map(|index| index.row)
+                        .unwrap_or(0);
+                    let visible_len = this.visible_indices.len();
+                    this.move_selection(position, delta, visible_len, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &ToggleActions, window, cx| {
                 this.toggle_actions(window, cx);
             }))
-            .child(command);
+            .child(
+                v_flex()
+                    .size_full()
+                    .child(div().px_3().pt_3().child(search_input))
+                    .child(command),
+            );
 
-        // Cmd+K 动作面板：右下角浮层，自带搜索框的第二个 Command。
-        // Esc 只关面板（on_cancel 里 close_actions），Enter 执行选中动作。
-        if let Some(panel) = &self.panel {
+        // Cmd+K 动作面板：右下角浮层，列表在上、搜索框在底部（对齐 Raycast）。
+        if let Some(panel) = &mut self.panel {
+            // 过滤条件变更后把面板选中重置到首项。
+            if panel.applied_filter_epoch != panel.filter_epoch {
+                panel.applied_filter_epoch = panel.filter_epoch;
+                let empty = panel.compute_visible().is_empty();
+                panel.state.update(cx, |state, cx| {
+                    state.set_selected_index(
+                        if empty { None } else { Some(IndexPath::new(0)) },
+                        window,
+                        cx,
+                    );
+                });
+            }
+            panel.visible = panel.compute_visible();
+            let visible_rows = panel.visible.clone();
             let actions = panel.actions.clone();
             let requests = self.requests.clone();
-            let this = cx.entity().downgrade();
             let mut panel_command = Command::new(&panel.state)
+                .searchable(false)
                 .max_h(rems(22.))
-                // 搜索框放底部，对齐 Raycast 动作面板。
-                .search_bottom(true)
-                .placeholder("搜索操作…")
                 .on_confirm(move |index, window, _app| {
-                    let Some(action) = actions.get(index.row) else {
+                    let Some(&row) = visible_rows.get(index.row) else {
+                        return;
+                    };
+                    let Some(action) = actions.get(row) else {
                         return;
                     };
                     // 展示型动作：直接弹 AlertDialog，不关窗口（面板保留）。
@@ -491,38 +842,37 @@ impl Render for Launcher {
                         let _ = requests.send(action.run.clone());
                         window.remove_window();
                     }
-                })
-                .on_cancel(move |window, app| {
-                    let _ = this.update(app, |this, cx| this.close_actions(window, cx));
                 });
 
             let mut group = CommandGroup::new();
-            for action in &panel.actions {
+            for &row in &panel.visible {
+                let action = &panel.actions[row];
                 let title = action.title.clone();
                 let shortcut = action.shortcut;
-                group = group.item(
-                    CommandItem::new()
-                        .label(action.title.clone())
-                        .keywords(vec![action.title.clone()])
-                        .child(move |_, cx| {
-                            h_flex()
-                                .flex_1()
-                                .items_center()
-                                .justify_between()
-                                .child(div().child(title.clone()))
-                                .when_some(shortcut, |this, s| {
-                                    this.child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(s),
-                                    )
-                                })
-                                .into_any_element()
-                        }),
-                );
+                group = group.item(CommandItem::new().label(action.title.clone()).child(
+                    move |_, cx| {
+                        h_flex()
+                            .flex_1()
+                            .items_center()
+                            .justify_between()
+                            .child(div().child(title.clone()))
+                            .when_some(shortcut, |this, s| {
+                                this.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(s),
+                                )
+                            })
+                            .into_any_element()
+                    },
+                ));
             }
             panel_command = panel_command.group(group);
+
+            let panel_input = Input::new(&panel.input)
+                .appearance(false)
+                .prefix(Icon::new(IconName::Search).text_color(cx.theme().muted_foreground));
 
             root = root.child(
                 div()
@@ -537,7 +887,16 @@ impl Render for Launcher {
                     .border_color(cx.theme().border)
                     .bg(cx.theme().popover)
                     .shadow_lg()
-                    .child(panel_command),
+                    .overflow_hidden()
+                    .child(
+                        v_flex().child(panel_command).child(
+                            div()
+                                .border_t_1()
+                                .border_color(cx.theme().border)
+                                .p_2()
+                                .child(panel_input),
+                        ),
+                    ),
             );
         }
 
@@ -550,6 +909,8 @@ mod tests {
     // 显式导入：`super::*` 会把父模块 `gpui_kit::*` 带入的 `#[gpui::test]`
     // 宏一并引进来，令 `#[test]` 递归展开。
     use super::LauncherItem;
+    use gpui_kit::base::input::{InlineToken, InputContent};
+    use std::sync::Arc;
 
     fn item(id: &str, group: &str) -> LauncherItem {
         LauncherItem {
@@ -563,16 +924,6 @@ mod tests {
             actions: Vec::new(),
             paste: None,
         }
-    }
-
-    #[test]
-    fn flat_list_uses_one_section_and_empty_items_yield_none() {
-        // 平铺：所有 item 在同一 section，顺序即排序后的顺序。
-        let items = vec![item("a", "内置"), item("b", "脚本")];
-        let groups = super::flat_groups(&items);
-        assert_eq!(groups.len(), 1);
-        assert_eq!(groups[0].1, [0, 1]);
-        assert!(super::flat_groups(&[]).is_empty());
     }
 
     #[test]
@@ -607,5 +958,60 @@ mod tests {
         assert_eq!(actions[0].title, "第一个");
         assert_eq!(actions[1].title, "第二个");
         assert_eq!(actions[2].title, "显示搜索关键词");
+    }
+
+    #[test]
+    fn visible_indices_filters_by_query_and_paste_capability() {
+        use crate::ui::clipboard::{PasteContent, PendingPaste};
+        let mut pinnable = item("pin", "内置");
+        pinnable.paste = Some(super::item::PasteHandler {
+            accepts: |content: &PasteContent| matches!(content, PasteContent::Image { .. }),
+            run: Arc::new(|_, _| {}),
+        });
+        let plain = item("app", "应用");
+        let items = vec![pinnable, plain];
+
+        // 无过滤：全部可见。
+        assert_eq!(super::visible_indices(&items, "", None), vec![0, 1]);
+        // 文本过滤：title/id/keywords 任一包含（大小写不敏感）。
+        assert_eq!(super::visible_indices(&items, "APP", None), vec![1]);
+        // 粘贴图片（惰性：只有类型、空字节探针）：只有声明能处理图片的 pin
+        // 可见——顺带验证 accepts 按变体匹配的契约。
+        assert_eq!(
+            super::visible_indices(&items, "", Some(&PendingPaste::Image(None))),
+            vec![0]
+        );
+        // 粘贴 + 文本叠加。
+        assert_eq!(
+            super::visible_indices(&items, "pin", Some(&PendingPaste::Image(None))),
+            vec![0]
+        );
+        // 已读出的非图片内容（Ready）：pin 不接受。
+        assert!(
+            super::visible_indices(
+                &items,
+                "",
+                Some(&PendingPaste::Ready(PasteContent::Text("x".into())))
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn strip_token_text_keeps_hand_typed_parts() {
+        // 无 token：trim 后的原文。
+        assert_eq!(super::strip_token_text(" pin ", &[]), "pin");
+        // token 覆盖「图片」（6 字节）+ 手输 "pin"：剥掉 token 段。
+        let content = InputContent::new("图片")
+            .with_token(0..6, InlineToken::new("json", "图片").with_label("JSON"));
+        let input = content.expect("token covers its own text");
+        assert_eq!(super::strip_token_text("图片pin", input.tokens()), "pin");
+        // 只有 token：空查询。
+        let only = InputContent::new("图片")
+            .with_token(0..6, InlineToken::new("json", "图片").with_label("JSON"));
+        assert_eq!(
+            super::strip_token_text("图片", only.expect("valid").tokens()),
+            ""
+        );
     }
 }

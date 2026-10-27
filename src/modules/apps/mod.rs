@@ -158,10 +158,7 @@ fn items_from(data: &Arc<AppsData>) -> Vec<LauncherItem> {
         .collect()
 }
 
-fn item_for(
-    app: AppEntry,
-    icons: &HashMap<PathBuf, Vec<u8>>,
-) -> LauncherItem {
+fn item_for(app: AppEntry, icons: &HashMap<PathBuf, Vec<u8>>) -> LauncherItem {
     let icon = match icons.get(&app.path) {
         Some(bytes) => LauncherIcon::Image(ImageSource::Image(Arc::new(Image::from_bytes(
             ImageFormat::Png,

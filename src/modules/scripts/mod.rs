@@ -13,8 +13,8 @@ use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
 use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module, PasteHandler};
-use crate::model::script_store;
 use crate::model::script::Language;
+use crate::model::script_store;
 use crate::ui::clipboard::PasteContent;
 use crate::ui::mac_ffi;
 

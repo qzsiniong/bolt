@@ -106,7 +106,7 @@ mod tests {
 
     #[test]
     fn save_and_roundtrip() {
-        let tmp = tempfile_path();
+        let tmp = tempfile_path("save");
         let mut m = AliasMap::new();
         m.insert(
             "com.example.app".into(),
@@ -123,15 +123,17 @@ mod tests {
 
     #[test]
     fn corrupt_file_falls_back_to_defaults() {
-        let tmp = tempfile_path();
+        let tmp = tempfile_path("corrupt");
         std::fs::write(&tmp, "this is not json").unwrap();
         let result = read_json(&tmp);
         assert!(result.is_err());
         let _ = std::fs::remove_file(&tmp);
     }
 
-    fn tempfile_path() -> PathBuf {
+    /// 每个测试用独立文件名：同进程内所有测试共享 pid，若共用同一路径，
+    /// 并行时一个测试的 remove_file 会删掉另一个刚写好的文件（偶发挂）。
+    fn tempfile_path(name: &str) -> PathBuf {
         let pid = std::process::id();
-        PathBuf::from(format!("/tmp/bolt-aliases-test-{pid}.json"))
+        PathBuf::from(format!("/tmp/bolt-aliases-test-{name}-{pid}.json"))
     }
 }

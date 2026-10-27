@@ -7,6 +7,7 @@
 ## 特性
 
 - **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
+- **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
 - **外部扩展机制**：`extensions/<id>/` 目录（单一 `extension.json` 清单 + 入口）即为一个扩展，按 `kind` 分为脚本式与 UI 两类。
 - **UI 扩展（gpui-shell）**：清单里 `kind: "ui"`、入口固定为 `main.js`，脚本用 `export default class extends View` 描述界面，宿主在 GPUI 主线程渲染成独立原生窗口（无 WebView），支持热重载与清单声明置顶。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
@@ -24,15 +25,27 @@
 | 快捷键 | 操作 |
 | --- | --- |
 | `Alt + Space` | 唤起 / 关闭 Launcher |
+| `Cmd + V` | 识别剪贴板内容（图片/文件/JSON/链接/文本），出类型 token 并过滤命令 |
 | `Enter` | 执行选中的命令 |
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。列表分四组：**内置**（脚本管理 / 新建脚本）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**每个扩展一组**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
+Launcher 失焦后自动关闭。所有模块贡献的命令按使用频率**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展命令**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
 - 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（Console 输出会缓冲，待管理器打开后可见）。
+
+### 粘贴识别（Cmd+V）
+
+在 Launcher 里按 `Cmd + V`，先**识别**剪贴板里是什么，再决定行为：
+
+- 识别出**图片 / 本地文件 / JSON / 链接 / 文本**时，搜索框出现一个带类型图标的原子 token（文件显示文件名，JSON/链接/文本显示前 12 个字符，截图等无名字节流显示"图片"），列表立即过滤为声明能处理该内容的命令（如「Pin 剪切板」便签、JSON 编辑器）。
+- token 之后可以**继续输入文字二次过滤**；token 是原子单元，一次退格整体删除，删掉后列表恢复完整。
+- 回车把剪贴板内容交给选中命令的处理器。图片字节此时才真正读取（识别阶段不读字节不转码），且在后台线程完成——回车后 Launcher 立即关闭，不卡 UI。
+- 识别不出内容（空剪贴板等）时按普通粘贴处理。
+
+**零转码原则**：gpui 原生解码 PNG/TIFF/JPEG/GIF，剪贴板里的原始字节+格式一路透传到渲染端（便签显示、另存、复制回剪贴板都保持原格式）——macOS 剪贴板图片最常见的 TIFF 不再做"解码→重编码 PNG"的无用功，这也是同类工具「从剪贴板固定」能做到瞬时出现的关键。
 
 ### 应用启动器
 
@@ -183,12 +196,6 @@ export default class UiDemo extends View {
 
 - Rust（edition 2024，工具链 1.98+）
 - Node.js（`typescript-language-server` 通过 shebang 调用 `node`）
-- cargo-patch-crate（管理 `gpui-component` 的本地补丁，见「依赖补丁」）：
-
-```bash
-cargo install patch-crate
-```
-
 - 全局安装语言服务：
 
 ```bash
@@ -200,7 +207,6 @@ npm i -g typescript-language-server typescript
 ## 构建与运行
 
 ```bash
-cargo patch-crate   # 首次克隆 / cargo clean 后：重建 gpui-component 补丁工作副本（必跑，见下节）
 cargo run        # 调试运行
 cargo build      # 仅构建
 cargo test --bin bolt   # 运行测试
@@ -209,13 +215,11 @@ cargo test --bin bolt   # 运行测试
 ./scripts/build-macos-app.sh --clean  # 先 cargo clean 再完整打包
 ```
 
-### 依赖补丁（cargo-patch-crate）
+### 依赖说明（无本地补丁）
 
-项目对 `gpui-component` 打了本地补丁（给 `Command` 组件加了 `search_icon` / `search_size` builder，用于定制 Launcher 搜索框），用 [cargo-patch-crate](https://github.com/mokeyish/cargo-patch-crate) 管理：
+项目**不再对 gpui-kit 生态打本地补丁**：Launcher 主搜索框与 Cmd+K 动作面板都用原生能力实现——`Command::searchable(false)` 关掉内置搜索，宿主在 `Command` 外部自定义 `Input`（类型 token、粘贴识别、二次过滤全在宿主侧），无需 cargo-patch-crate 与 `patches/` 目录。
 
-- 补丁文件提交在 `patches/gpui-component+0.7.3.patch`；被补丁 crate 的工作副本在 `target/patch/`（随 `target` 一起不入库）。
-- **克隆后 / `cargo clean` 后必须先跑一次 `cargo patch-crate`** 重建工作副本，否则 `cargo build` 直接报 `target/patch/gpui-component-0.7.3/Cargo.toml` 不存在——Cargo 解析 `[patch]` 路径早于任何 build script，无法用 build.rs 自动引导。
-- 日常修改：直接编辑 `target/patch/gpui-component-0.7.3/` 里的代码，验证后跑 `cargo patch-crate gpui-component` 把改动重新导出为补丁文件，提交 `patches/` 即可。
+仓库仍保留两处 `[patch]`，但都是**版本改道**而非本地代码补丁：`rquickjs` 改道到 gpui-kit 仓库的兼容 facade（全图只链接一份 QuickJS）；`gpui-base` 改道到 registry 版，避免与 git 依赖产生两份不同 crate。
 
 ### 打包成 macOS .app
 
@@ -648,8 +652,8 @@ ctx.globals().set("console", console)?;
 | 文件 / 目录 | 职责 |
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
-| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`extensions/`（`manifest` 清单扫描 + `ui_window` UI 扩展窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；搜索框是宿主外部 `Input`——`Command::searchable(false)` 关掉内置搜索，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 负责剪贴板内容识别——Cmd+V 识别链与类型过滤的数据源）、`extensions/`（`manifest` 清单扫描 + `ui_window` UI 扩展窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
 | [src/ui/](src/ui) | 跨模块共享 UI：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |

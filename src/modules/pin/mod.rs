@@ -36,7 +36,7 @@ impl Module for PinModule {
             on_confirm: Arc::new(window::open_clipboard_pin),
             actions: Vec::new(),
             paste: Some(PasteHandler {
-                accepts: accepts,
+                accepts,
                 run: Arc::new(|cx: &mut App, content: &PasteContent| {
                     if let Some(pin) = PinContent::try_from_paste(content.clone()) {
                         window::open_pin(cx, pin);

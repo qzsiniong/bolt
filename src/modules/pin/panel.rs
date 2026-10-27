@@ -100,10 +100,10 @@ impl PinWindow {
 
     fn copy_to_clipboard(&self, cx: &Context<Self>) {
         match &self.content {
-            PinContent::Image { bytes, .. } => {
-                // 便签里的图片字节已经是 PNG（TIFF 等格式在读取时就转过了），
-                // 直接按 PNG 塞回剪切板；GPUI 的 ClipboardItem 没有 From<Vec<u8>>。
-                let image = Image::from_bytes(ImageFormat::Png, bytes.clone());
+            PinContent::Image { bytes, format, .. } => {
+                // 按原始格式塞回剪切板（读取时不转码，字节就是来源格式）；
+                // GPUI 的 ClipboardItem 没有 From<Vec<u8>>。
+                let image = Image::from_bytes(*format, bytes.clone());
                 cx.write_to_clipboard(image.into());
             }
             PinContent::Text(text) => cx.write_to_clipboard(text.clone().into()),
@@ -111,10 +111,23 @@ impl PinWindow {
     }
 
     /// 保存到用户选的路径：弹原生保存面板（`prompt_for_new_path`），
-    /// 默认目录为桌面、默认文件名为 `pin-<时间戳>.<png|txt>`。
+    /// 默认目录为桌面、默认文件名为 `pin-<时间戳>.<扩展名按来源格式>`。
     fn save_to_disk(&mut self, cx: &mut Context<Self>) {
         let (payload, ext) = match &self.content {
-            PinContent::Image { bytes, .. } => (bytes.clone(), "png"),
+            PinContent::Image { bytes, format, .. } => (
+                bytes.clone(),
+                match format {
+                    ImageFormat::Png => "png",
+                    ImageFormat::Tiff => "tiff",
+                    ImageFormat::Jpeg => "jpg",
+                    ImageFormat::Gif => "gif",
+                    ImageFormat::Bmp => "bmp",
+                    ImageFormat::Ico => "ico",
+                    ImageFormat::Pnm => "pnm",
+                    ImageFormat::Webp => "webp",
+                    ImageFormat::Svg => "svg",
+                },
+            ),
             PinContent::Text(text) => (text.clone().into_bytes(), "txt"),
         };
         let ts = std::time::SystemTime::now()
@@ -194,7 +207,7 @@ impl Render for PinWindow {
 
         // 内容区域：按类型渲染。
         let content_el = match &self.content {
-            PinContent::Image { bytes, .. } => {
+            PinContent::Image { bytes, format, .. } => {
                 // 不能走 `img("data:image/png;base64,…")`：那个字符串会被
                 // `url::Url::from_str` 判成合法 URI，进 `Resource::Uri` 去 fetch
                 // 资源，取不到就**静默**渲染成空白。gpui 也没有任何 `data:`
@@ -206,7 +219,7 @@ impl Render for PinWindow {
                 // 首帧它是 `Auto`，只给 `max_w/max_h` 会塌成 0×0（窗口全空）。
                 // 用窗口 bounds 的同一份 `display_size()` 就没这个问题。
                 let (w, h) = self.scaled_size();
-                let image = Arc::new(Image::from_bytes(ImageFormat::Png, bytes.clone()));
+                let image = Arc::new(Image::from_bytes(*format, bytes.clone()));
                 div()
                     .child(gpui_kit::img(image).w(px(w)).h(px(h)).rounded(px(4.)))
                     .into_any_element()
