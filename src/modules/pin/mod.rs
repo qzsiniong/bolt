@@ -13,7 +13,9 @@ use std::sync::Arc;
 use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
-use crate::app::launcher::{LauncherItem, Module};
+use crate::app::launcher::{LauncherItem, Module, PasteHandler};
+use crate::ui::clipboard::PasteContent;
+use clipboard::PinContent;
 
 /// Pin 模块：只贡献一条「Pin 剪切板」内置命令。
 pub(crate) struct PinModule;
@@ -33,6 +35,22 @@ impl Module for PinModule {
             keywords: Vec::new(),
             on_confirm: Arc::new(window::open_clipboard_pin),
             actions: Vec::new(),
+            paste: Some(PasteHandler {
+                accepts: accepts,
+                run: Arc::new(|cx: &mut App, content: &PasteContent| {
+                    if let Some(pin) = PinContent::try_from_paste(content.clone()) {
+                        window::open_pin(cx, pin);
+                    }
+                }),
+            }),
         }]
     }
+}
+
+/// 图片钉屏；链接 / 纯文本当便签钉（JSON / 文件路径不归 pin）。
+fn accepts(content: &PasteContent) -> bool {
+    matches!(
+        content,
+        PasteContent::Image { .. } | PasteContent::Url(_) | PasteContent::Text(_)
+    )
 }

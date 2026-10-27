@@ -9,12 +9,15 @@
 
 pub(crate) mod item;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use crossbeam_channel::Sender;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::h_flex;
+use gpui_kit::base::input::{InlineToken, InputContent};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
 use gpui_kit::component::IndexPath;
@@ -26,7 +29,11 @@ use super::usage;
 use gpui_kit::*;
 
 use super::shell::AppShell;
-pub(crate) use item::{DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module};
+use crate::modules::pin::clipboard::read_paste_content;
+use crate::ui::clipboard::PasteContent;
+pub(crate) use item::{
+    DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module, PasteHandler,
+};
 
 gpui_kit::actions!(bolt_launcher, [ToggleActions]);
 
@@ -142,8 +149,16 @@ pub struct Launcher {
     groups: Vec<(String, Vec<usize>)>,
     /// `items` 对应的 `AppShell::items_revision`。
     items_revision: u64,
+    /// 上一帧真正渲染进 Command 的 item 下标（row → items 下标）。确认回调
+    /// 的 IndexPath.row 是这份列表里的位置——粘贴激活时列表被压缩过，不能
+    /// 拿 row 去索引全量 items。
+    visible_indices: Vec<usize>,
     /// Drained by the app shell, which executes the confirmed action.
     requests: Sender<LauncherAction>,
+    /// Cmd+V 识别出的内容；Some 时列表过滤为声明能处理它的 items，回车把
+    /// 内容交给选中 item 的 paste handler。与 on_paste hook 闭包共享
+    /// （Rc+RefCell；内容包 Arc，确认时 move 进 action 闭包不 clone 图片字节）。
+    paste: Rc<RefCell<Option<Arc<PasteContent>>>>,
     /// Cmd+K 动作面板；None = 关闭。
     panel: Option<ActionsPanel>,
     /// Auto-close-on-blur poll; ends when the view is dropped.
@@ -203,18 +218,25 @@ impl Launcher {
 
         Self {
             state,
+            visible_indices: (0..items.len()).collect(),
             items,
             groups,
             items_revision,
             requests,
+            paste: Rc::new(RefCell::new(None)),
             panel: None,
             _blur_task: blur_task,
         }
     }
 
     fn resolve(&self, section: usize, row: usize) -> Option<&LauncherItem> {
-        let index = *self.groups.get(section)?.1.get(row)?;
-        self.items.get(index)
+        // 平铺单组：row 直接对应上一帧渲染的可见列表（粘贴激活时已压缩）。
+        if section != 0 {
+            return None;
+        }
+        self.visible_indices
+            .get(row)
+            .and_then(|&index| self.items.get(index))
     }
 
     fn on_confirm(&mut self, index: IndexPath, window: &mut Window, cx: &mut App) {
@@ -223,6 +245,16 @@ impl Launcher {
         };
         // 使用频率：主回车确认即计数（所有模块的 item 通用）。
         usage::record_confirm(cx, &item.id);
+        // 粘贴确认：识别内容还在时，把内容交给选中 item 的 paste handler。
+        // 同样经 channel 送出——窗口马上要关，闭包必须脱离 launcher 存活。
+        if let Some(content) = self.paste.borrow_mut().take()
+            && let Some(handler) = &item.paste
+        {
+            let run = handler.run.clone();
+            let _ = self.requests.send(Arc::new(move |cx| run(cx, &content)));
+            window.remove_window();
+            return;
+        }
         // If the receiver is gone the app is shutting down: nothing left to do.
         let _ = self.requests.send(item.on_confirm.clone());
         window.remove_window();
@@ -271,6 +303,12 @@ impl Render for Launcher {
             self.items_revision = collected.revision;
         }
 
+        // 粘贴 token 的生命周期维护：搜索框里的类型 token 被退格删掉后
+        // query 变空，此时清掉识别出的内容，恢复完整列表。
+        if self.paste.borrow().is_some() && self.state.read(cx).query(cx).trim().is_empty() {
+            self.paste.borrow_mut().take();
+        }
+
         // A weak handle: the closure is stored in CommandState (a child of
         // this view), so a strong one would keep both entities alive forever.
         let this = cx.entity().downgrade();
@@ -291,6 +329,31 @@ impl Render for Launcher {
             .on_cancel(|window, _cx| {
                 window.remove_window();
             })
+            // Cmd+V：识别剪贴板内容（图片/文件/JSON/链接/文本），清空当前
+            // 查询并在搜索框里放一个类型 token，列表随之过滤为声明能处理
+            // 该内容的 items。识别不出（空剪贴板等）返回 false 走默认粘贴。
+            .on_paste({
+                let paste = self.paste.clone();
+                let state = self.state.clone();
+                move |_, window, cx| {
+                    let console = cx.global::<AppShell>().console_channel.clone();
+                    let Some(content) = read_paste_content(&console) else {
+                        return false;
+                    };
+                    let label = content.kind_label();
+                    *paste.borrow_mut() = Some(Arc::new(content));
+                    // 原子行内 token：文本流里占住类型名（「图片」等，即
+                    // query 的内容），渲染成徽章，退格一次整体删除。
+                    let token = InlineToken::new("paste", label).with_label(label);
+                    let input = InputContent::new(label)
+                        .with_token(0..label.len(), token)
+                        .expect("token range exactly covers its own text");
+                    state.update(cx, move |state, cx| {
+                        state.set_query_content(input, window, cx)
+                    });
+                    true
+                }
+            })
             .footer(|state, _window, cx| {
                 div()
                     .px_3()
@@ -303,11 +366,26 @@ impl Render for Launcher {
                     .into_any_element()
             });
 
+        // 粘贴激活：只保留声明能处理该内容的 items，并给它们补上类型名
+        // 关键词——query 现在就是类型 token 的文本（「图片」等），不补的话
+        // Command 自己的文本过滤会把列表清空。
+        let paste_filter = self.paste.borrow().clone();
+        let paste_label = paste_filter.as_ref().map(|content| content.kind_label());
+        let mut visible_indices = Vec::new();
         for (_, indices) in &self.groups {
             // 平铺：单组、无组头（label 是 Option，不设就不渲染分组标题）。
             let mut group = CommandGroup::new();
             for &index in indices {
                 let item = &self.items[index];
+                if let Some(content) = &paste_filter {
+                    let Some(handler) = &item.paste else {
+                        continue;
+                    };
+                    if !(handler.accepts)(content) {
+                        continue;
+                    }
+                }
+                visible_indices.push(index);
                 // id、subtitle 和额外 keywords（如应用的 original_name / bundle id / URL schemes）
                 // 一起喂给 CommandItem。title (label) 本身也参与搜索。
                 let mut keywords = vec![item.id.clone()];
@@ -315,6 +393,9 @@ impl Render for Launcher {
                     keywords.push(subtitle.clone());
                 }
                 keywords.extend(item.keywords.clone());
+                if let Some(label) = paste_label {
+                    keywords.push(label.to_string());
+                }
                 let item_clone = item.clone();
                 let entry = CommandItem::new()
                     .label(item.title.clone())
@@ -366,6 +447,8 @@ impl Render for Launcher {
             }
             command = command.group(group);
         }
+        // 同步给 confirm 用：回调的 row 是这份压缩后的列表位置。
+        self.visible_indices = visible_indices;
 
         let mut root = div()
             .size_full()
@@ -478,6 +561,7 @@ mod tests {
             keywords: Vec::new(),
             on_confirm: std::sync::Arc::new(|_| {}),
             actions: Vec::new(),
+            paste: None,
         }
     }
 

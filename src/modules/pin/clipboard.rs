@@ -1,15 +1,21 @@
-//! 剪切板读取：NSPasteboard → [`PinContent`]。
+//! 剪切板读取：NSPasteboard → [`PasteContent`]（pin 自己再转 [`PinContent`]）。
 //!
 //! macOS 上直接发原始 Objective-C 消息（objc2 0.6 的 `msg_send!`）：
-//! `[NSPasteboard generalPasteboard]` 拿共享剪切板，按优先级尝试图片
-//! （`public.png` / `public.tiff` / `public.jpeg` / `public.gif`）、文本
-//! （`public.utf8-plain-text`）。不用 `objc2-app-kit` / `objc2-foundation`
-//! 是因为它们目前依赖 objc2 0.5，会与本项目的 objc2 0.6 同时进入依赖图。
-//! 图片字节再喂给 `image` 拿尺寸，窗口初始 bounds 用得到。
+//! `[NSPasteboard generalPasteboard]` 拿共享剪切板，按优先级尝试文件形态
+//! （`public.file-url`）、图片（`public.png` / `public.tiff` / `public.jpeg` /
+//! `public.gif`）、文本（`public.html` / `public.utf8-plain-text`）。不用
+//! `objc2-app-kit` / `objc2-foundation` 是因为它们目前依赖 objc2 0.5，会与
+//! 本项目的 objc2 0.6 同时进入依赖图。图片字节再喂给 `image` 拿尺寸，窗口
+//! 初始 bounds 用得到。
+//!
+//! `read_paste_content` 返回宿主公共的 [`PasteContent`]（ui/clipboard.rs），
+//! Launcher 的 Cmd+V 识别直接用它；[`read_clipboard`] 是 pin 的薄壳
+//! （非图片文件不 pin，保持 pin 原有语义）。
 
 use std::path::PathBuf;
 
 use crate::console_channel::ConsoleChannel;
+use crate::ui::clipboard::{PasteContent, classify_text};
 #[cfg(target_os = "macos")]
 use crate::ui::mac_ffi::{ns_data_bytes, ns_string, ns_string_to_rust};
 
@@ -59,8 +65,37 @@ pub(crate) fn default_save_dir() -> PathBuf {
 
 // ── 平台分派 ──────────────────────────────────────────────────────────────
 
-#[cfg(target_os = "macos")]
+/// pin 的入口：读出 [`PasteContent`] 后转成 pin 能展示的类型。非图片文件
+/// 不 pin（保持 pin 原有语义）。
 pub fn read_clipboard(console: &ConsoleChannel) -> Option<PinContent> {
+    read_paste_content(console).and_then(PinContent::try_from_paste)
+}
+
+impl PinContent {
+    /// [`PasteContent`] → pin 展示类型：图片原样；非图片文件不 pin（None）；
+    /// 其余文本类当文本便签。
+    pub(crate) fn try_from_paste(content: PasteContent) -> Option<PinContent> {
+        match content {
+            PasteContent::Image {
+                bytes,
+                width,
+                height,
+            } => Some(PinContent::Image {
+                bytes,
+                width,
+                height,
+            }),
+            PasteContent::Json(t) | PasteContent::Url(t) | PasteContent::Text(t) => {
+                Some(PinContent::Text(t))
+            }
+            // pin 是图片/文本便签；文件路径交给 scripts 等 handler。
+            PasteContent::FilePath(_) => None,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn read_paste_content(console: &ConsoleChannel) -> Option<PasteContent> {
     use objc2::msg_send;
     use objc2::runtime::{AnyClass, AnyObject};
 
@@ -80,7 +115,7 @@ pub fn read_clipboard(console: &ConsoleChannel) -> Option<PinContent> {
         match read_image_file(path) {
             Ok((w, h, png)) => {
                 console.info(format!("pin 来源文件：{}（{w}×{h}）", path.display()));
-                return Some(PinContent::Image {
+                return Some(PasteContent::Image {
                     bytes: png,
                     width: w,
                     height: h,
@@ -90,7 +125,8 @@ pub fn read_clipboard(console: &ConsoleChannel) -> Option<PinContent> {
         }
         // 文件形态下不要落到文本分支：Finder 同时把文件名（如 `1995.jpg`）
         // 写进 plain-text 类型，pin 出来会是一个只有文件名的文本便签。
-        return None;
+        // 不是可解码图片的文件按「文件路径」交给能处理文件的 handler（scripts）。
+        return Some(PasteContent::FilePath(path.clone()));
     }
 
     for uti in ["public.png", "public.tiff", "public.jpeg", "public.gif"] {
@@ -115,7 +151,7 @@ pub fn read_clipboard(console: &ConsoleChannel) -> Option<PinContent> {
 
         if let Some((w, h)) = image_dimensions(&png) {
             console.info(format!("pin 来源位图：{uti}（{w}×{h}）"));
-            return Some(PinContent::Image {
+            return Some(PasteContent::Image {
                 bytes: png,
                 width: w,
                 height: h,
@@ -135,7 +171,7 @@ pub fn read_clipboard(console: &ConsoleChannel) -> Option<PinContent> {
                     "pin 来源 HTML（已转纯文本，{} 字）",
                     text.chars().count()
                 ));
-                return Some(PinContent::Text(text));
+                return Some(classify_text(text));
             }
         }
     }
@@ -146,10 +182,15 @@ pub fn read_clipboard(console: &ConsoleChannel) -> Option<PinContent> {
         if let Some(text) = ns_string_to_rust(nsstr)
             && !text.trim().is_empty()
         {
-            return Some(PinContent::Text(text));
+            return Some(classify_text(text));
         }
     }
 
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn read_paste_content(_console: &ConsoleChannel) -> Option<PasteContent> {
     None
 }
 

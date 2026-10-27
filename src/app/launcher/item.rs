@@ -10,6 +10,8 @@ use gpui_kit::App;
 use gpui_kit::ImageSource;
 use gpui_kit::assets::IconName;
 
+use crate::ui::clipboard::PasteContent;
+
 /// item 点击后的执行逻辑。
 ///
 /// 用 `Arc + Send + Sync` 是因为确认请求要经 crossbeam channel 传到 app
@@ -17,6 +19,21 @@ use gpui_kit::assets::IconName;
 /// 实体，闭包必须脱离它独立存活。实际只在主线程被调用；闭包只捕获
 /// `PathBuf` / `String` / 扩展数据等 `Send + Sync` 值， bound 是诚实的。
 pub type LauncherAction = Arc<dyn Fn(&mut App) + Send + Sync>;
+
+/// 粘贴内容的处理逻辑：确认时经同一个 channel 送出（同 [`LauncherAction`]
+/// 的存活约束），内容本体 move 进闭包。
+pub type PasteAction = Arc<dyn Fn(&mut App, &PasteContent) + Send + Sync>;
+
+/// 声明 item 能处理哪种粘贴内容（Launcher 的 Cmd+V 识别）。
+///
+/// `accepts` 是无状态的 fn 指针（声明式、可 Copy）；模块只对自己能处理的
+/// 变体返回 true。新增内容类型 = `PasteContent` 加变体 + 目标模块改这里。
+/// token 徽章显示的类型名由内容本身决定（`PasteContent::kind_label`）。
+#[derive(Clone)]
+pub struct PasteHandler {
+    pub accepts: fn(&PasteContent) -> bool,
+    pub run: PasteAction,
+}
 
 /// Cmd+K 动作面板里的一个动作：标题 + 可选快捷键提示 + 执行闭包。
 ///
@@ -91,6 +108,9 @@ pub struct LauncherItem {
     /// Cmd+K 动作面板的动作列表。为空时 Launcher 回退成单个「打开」
     /// （执行 [`Self::on_confirm`]），模块不用为普通 item 手写。
     pub actions: Vec<ItemAction>,
+    /// 能处理的粘贴内容（Cmd+V 识别后按此过滤）。None = 与粘贴无关，
+    /// 不参与粘贴过滤。声明后回车确认时内容会传给 handler 的 `run`。
+    pub paste: Option<PasteHandler>,
 }
 
 /// 一个内容模块：为 Launcher 提供 items。

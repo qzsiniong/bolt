@@ -12,8 +12,10 @@ use std::sync::Arc;
 use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
-use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module};
+use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module, PasteHandler};
 use crate::model::script_store;
+use crate::model::script::Language;
+use crate::ui::clipboard::PasteContent;
 use crate::ui::mac_ffi;
 
 /// Scripts 模块：提供「脚本管理」「新建脚本」两条内置命令，以及脚本目录里
@@ -43,6 +45,7 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             keywords: vec![String::from("jbgl"), String::from("bolt")],
             on_confirm: Arc::new(|cx| window::open_manager(cx, false)),
             actions: Vec::new(),
+            paste: None,
         },
         LauncherItem {
             id: "scripts.new".to_string(),
@@ -53,6 +56,7 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
             keywords: Vec::new(),
             on_confirm: Arc::new(|cx| window::open_manager(cx, true)),
             actions: Vec::new(),
+            paste: None,
         },
     ];
 
@@ -108,6 +112,20 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
                     dialog: None,
                 },
             ],
+            // 粘贴一个脚本文件（Finder 复制 .py/.sh/…）时直接运行。
+            paste: Some(PasteHandler {
+                accepts: |content: &PasteContent| {
+                    matches!(
+                        content,
+                        PasteContent::FilePath(p) if Language::from_path(p.as_path()).is_some()
+                    )
+                },
+                run: Arc::new(|cx: &mut App, content: &PasteContent| {
+                    if let PasteContent::FilePath(path) = content {
+                        crate::runtime::run_path(cx, path.as_path());
+                    }
+                }),
+            }),
         });
     }
     items

@@ -129,6 +129,7 @@ mod tests {
             keywords: Vec::new(),
             on_confirm: Arc::new(|_: &mut App| {}),
             actions: Vec::new(),
+            paste: None,
         }
     }
 

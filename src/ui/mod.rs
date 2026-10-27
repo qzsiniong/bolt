@@ -3,6 +3,7 @@
 //! Per-feature views (script manager, launcher, JSON editor) live under
 //! `src/modules/<feature>/`.
 
+pub(crate) mod clipboard;
 pub(crate) mod editor_ops;
 pub(crate) mod interaction_window;
 #[cfg(target_os = "macos")]

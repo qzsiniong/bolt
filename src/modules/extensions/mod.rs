@@ -62,6 +62,7 @@ fn items_in(dir: &Path) -> (Vec<LauncherItem>, Vec<String>) {
                 keywords: Vec::new(),
                 on_confirm: Arc::new(move |cx| crate::runtime::run_path(cx, &entry)),
                 actions: Vec::new(),
+                paste: None,
             });
         }
     }
@@ -85,6 +86,7 @@ fn items_in(dir: &Path) -> (Vec<LauncherItem>, Vec<String>) {
             keywords: Vec::new(),
             on_confirm: Arc::new(move |cx| ui_window::open_extension_ui(cx, opened.clone())),
             actions: Vec::new(),
+            paste: None,
         });
     }
 

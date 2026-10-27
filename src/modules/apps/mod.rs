@@ -154,13 +154,12 @@ fn items_from(data: &Arc<AppsData>) -> Vec<LauncherItem> {
     data.apps
         .iter()
         .cloned()
-        .map(|app| item_for(app, data, &icons))
+        .map(|app| item_for(app, &icons))
         .collect()
 }
 
 fn item_for(
     app: AppEntry,
-    data: &Arc<AppsData>,
     icons: &HashMap<PathBuf, Vec<u8>>,
 ) -> LauncherItem {
     let icon = match icons.get(&app.path) {
@@ -174,7 +173,6 @@ fn item_for(
 
     let path = app.path;
     let name = app.name;
-    let data = data.clone();
 
     // 搜索关键词：title 本地化后可能是中文（微信），但用户也可能输入
     // wechat / weixin。所以把 original_name、bundle id、URL schemes 都
@@ -236,6 +234,7 @@ fn item_for(
         keywords,
         on_confirm: primary,
         actions,
+        paste: None,
     }
 }
 

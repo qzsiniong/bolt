@@ -11,7 +11,8 @@ use std::sync::Arc;
 use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
-use crate::app::launcher::{LauncherItem, Module};
+use crate::app::launcher::{LauncherItem, Module, PasteHandler};
+use crate::ui::clipboard::PasteContent;
 
 /// JSON 编辑器模块：只贡献一条「JSON 编辑器」内置命令。
 pub(crate) struct JsonEditorModule;
@@ -37,6 +38,15 @@ fn open_item() -> LauncherItem {
         keywords: Vec::new(),
         on_confirm: Arc::new(window::open_json_editor),
         actions: Vec::new(),
+        // 粘贴 JSON 文本时接手：内容直接进编辑器。
+        paste: Some(PasteHandler {
+            accepts: |content: &PasteContent| matches!(content, PasteContent::Json(_)),
+            run: Arc::new(|cx: &mut App, content: &PasteContent| {
+                if let PasteContent::Json(text) = content {
+                    window::open_json_editor_with(cx, text.clone());
+                }
+            }),
+        }),
     }
 }
 

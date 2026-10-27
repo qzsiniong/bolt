@@ -98,7 +98,7 @@ pub struct JsonEditorPanel {
 }
 
 impl JsonEditorPanel {
-    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>, content: String) -> Self {
         let editor = cx.new(|ecx| {
             EditorState::new(window, ecx)
                 .language("json")
@@ -112,6 +112,15 @@ impl JsonEditorPanel {
                 .placeholder("粘贴或输入 JSON …")
         });
 
+        // 粘贴 JSON 开窗时注入初始内容：写入编辑器并同步 last_text，
+        // 不走「大段插入 → 自动格式化」路径（保持剪贴板原样）。
+        let last_text = if content.is_empty() {
+            String::new()
+        } else {
+            editor.update(cx, |state, ecx| state.set_value(&content, window, ecx));
+            content
+        };
+
         let subscription = cx.subscribe(&editor, |this, _state, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 this.on_editor_change(cx);
@@ -124,7 +133,7 @@ impl JsonEditorPanel {
             // 本窗口默认不置顶，与开窗时的窗口层级一致（unpinned）。
             pin: cx.new(|_| WindowPin::new(false)),
             suppress: false,
-            last_text: String::new(),
+            last_text,
             status: String::new(),
             pending_set: None,
             _subscription: subscription,

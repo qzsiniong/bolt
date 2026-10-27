@@ -14,6 +14,13 @@ use crate::app::shell::AppShell;
 /// handle if it's still alive, otherwise activate the app and create a fresh
 /// one. Mirrors the script manager's `open_manager`.
 pub(crate) fn open_json_editor(cx: &mut App) {
+    open_json_editor_with(cx, String::new())
+}
+
+/// 同 [`open_json_editor`]，但以给定内容开窗（粘贴 JSON 时的入口）。已存在
+/// 的编辑器窗口被激活时**不**写入新内容（避免覆盖用户正在编辑的东西），
+/// 只有新开窗口才带初始内容。
+pub(crate) fn open_json_editor_with(cx: &mut App, content: String) {
     cx.activate(true);
 
     let existing = cx.global_mut::<JsonEditorState>().window.take();
@@ -49,7 +56,7 @@ pub(crate) fn open_json_editor(cx: &mut App) {
     };
 
     let opened = gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| JsonEditorPanel::new(window, cx))
+        cx.new(|cx| JsonEditorPanel::new(window, cx, content))
     });
     match opened {
         Ok((handle, _panel)) => {

@@ -38,6 +38,7 @@ impl Module for ColorPickerModule {
             ],
             on_confirm: Arc::new(window::open),
             actions: Vec::new(),
+            paste: None,
         }]
     }
 }
