@@ -9,7 +9,7 @@ use gpui_kit::*;
 use super::assets::ExtensionAssets;
 use super::shell::{APP_TICK, AppShell};
 use super::shell_log;
-use super::{hotkey, tray, windows};
+use super::{hotkey, tray, usage, windows};
 use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
 use crate::model::{project_gen, script_store};
@@ -53,6 +53,10 @@ pub(crate) fn run() {
         eprintln!("generate project files: {e}");
     }
     let registry = Arc::new(registry);
+
+    // 启动时裁剪一次使用记录：删掉超过保留期的老事件，避免文件无限增长
+    // （`record` 只裁被记录的那一个 item）。
+    usage::prune_usage();
 
     // Spawn the language server before the UI so the editor gets diagnostics,
     // completions and hover from the start. Failure reason is surfaced in the

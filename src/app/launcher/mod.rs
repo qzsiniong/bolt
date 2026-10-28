@@ -39,7 +39,7 @@ use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandSt
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, InputToken};
 use gpui_kit::prelude::FluentBuilder as _;
 
-use super::usage;
+use super::{keywords, usage};
 use gpui_kit::*;
 
 use super::shell::AppShell;
@@ -67,12 +67,13 @@ fn collect_all(cx: &App) -> CollectedItems {
     for module in &cx.global::<AppShell>().modules {
         items.extend(module.collect_items(cx));
     }
-    // 使用频率排序（宿主公共能力）：全局混排，常用 item 排最前（Raycast 风格
-    // 平铺）。所有模块的 item 自动生效，模块自己不用做任何事。
-    let usage = usage::load(&usage::usage_path());
-    usage::sort_for_launcher(&mut items, &usage);
+    // 使用频率排序（宿主公共能力）：按时间衰减分数全局混排，最近常用过的
+    // item 排最前（Raycast 风格平铺）。所有模块的 item 自动生效，模块自己
+    // 不用做任何事。
+    let scores = usage::score_map();
+    usage::sort_for_launcher(&mut items, &scores);
     // 用户编辑过的搜索关键词（item-keywords.json）覆盖模块默认值。
-    usage::apply_keyword_overrides(&mut items, &usage::keywords_path());
+    keywords::apply(&mut items, &keywords::path());
     let revision = cx.global::<AppShell>().items_revision.get();
     CollectedItems { items, revision }
 }
@@ -141,7 +142,7 @@ fn actions_for(item: &LauncherItem) -> Vec<ItemAction> {
             title: format!("编辑搜索关键词 — {title}"),
             initial: keywords.join(", "),
             ok_text: Some("保存".to_string()),
-            on_submit: Arc::new(move |cx, text| usage::set_keywords(cx, &edited_id, &text)),
+            on_submit: Arc::new(move |cx, text| keywords::set(cx, &edited_id, &text)),
         }),
     });
     actions
@@ -1045,12 +1046,12 @@ mod tests {
 
     #[test]
     fn parse_keywords_splits_and_trims() {
-        use super::usage;
+        use super::keywords;
         assert_eq!(
-            usage::parse_keywords("微信, wechat，pin"),
+            keywords::parse("微信, wechat，pin"),
             vec!["微信".to_string(), "wechat".to_string(), "pin".to_string()]
         );
-        assert!(usage::parse_keywords("  , ， ").is_empty());
+        assert!(keywords::parse("  , ， ").is_empty());
     }
 
     #[test]

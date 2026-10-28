@@ -871,6 +871,7 @@ name = "bolt"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "core-graphics 0.24.0",
  "crossbeam-channel",
  "dirs 5.0.1",

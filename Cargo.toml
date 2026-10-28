@@ -60,6 +60,7 @@ gpui-shell = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3", d
 # gpui-shell 通过 tracing 上报脚本 console 输出、加载失败与热重载结果；
 # 不装 subscriber 这些事件会被静默丢弃（见 src/app/shell_log.rs）。
 tracing = "0.1"
+chrono = "0.4.45"
 
 [dev-dependencies]
 # 让单元测试能用 gpui 的 headless 测试平台跑 gpui-shell 的 `check`：真实加载

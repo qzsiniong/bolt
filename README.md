@@ -30,7 +30,7 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。所有模块贡献的命令按使用频率**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展命令**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
+Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展命令**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
@@ -64,7 +64,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 **自定义搜索词**：所有 item（应用、脚本、Pin 等）统一通过 Launcher 动作面板的「**编辑搜索关键词**」修改，保存到 `~/Library/Application Support/bolt/item-keywords.json`（按 item id 覆盖整个 keywords，多个词用逗号分隔，留空恢复默认）。应用会在此基础上叠加内置默认别名（源码维护在 `src/modules/apps/default-aliases.json`，`include_str!` 编进二进制）；编辑过的 item 以编辑值为准。
 
-**使用统计**：最近使用的应用排在前。使用次数与时间戳持久化在 `~/Library/Application Support/bolt/apps-usage.json`，图标缓存放在 `app-icons/` 子目录。
+**使用统计**：排序不是简单的「用得多就靠前」，而是对每次确认记一个时间点、按 `Σ exp(-λ·距今天数)` 打分（默认只在最近 30 天内计分、90 天后丢弃），所以**最近用过**的会压过**很早以前用过很多次**的，长期不用则自然滑落。记录持久化在 `~/Library/Application Support/bolt/item-usage.json`（`item id → [使用时间点…]`），图标缓存放在 `app-icons/` 子目录。打分与裁剪实现在 [src/core/smart_rank.rs](src/core/smart_rank.rs)。
 
 ### 外部扩展
 
@@ -292,7 +292,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`apps-usage.json`（使用统计）、`app-icons/`（图标缓存）、`item-keywords.json`（用户编辑的搜索关键词）、`item-usage.json`（item 使用统计）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）。
 
 ## 快捷键
 
@@ -650,10 +650,11 @@ ctx.globals().set("console", console)?;
 | [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
+| [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |
 
-分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放脚本执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。
+分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放脚本执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端，`core` 放与领域无关、可单独测试的通用基础设施。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。
 
 ## 架构要点
 

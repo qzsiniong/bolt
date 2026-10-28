@@ -9,6 +9,7 @@
 
 mod app;
 mod console_channel;
+mod core;
 mod host;
 mod lsp;
 mod model;
