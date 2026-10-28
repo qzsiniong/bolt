@@ -51,14 +51,27 @@ pub struct ItemAction {
     pub dialog: Option<DialogSpec>,
 }
 
-/// AlertDialog 展示类动作的配置。所有字段都带默认值：调用方只写 title
-/// 和 description 就够了，ok_text 不传默认"关闭"，show_cancel 默认 false。
+/// AlertDialog 型动作的配置：纯展示（[`DialogSpec::Info`]）或带输入框编辑
+/// （[`DialogSpec::Edit`]）。Launcher 收到后直接在当前窗口 open AlertDialog、
+/// 不走 channel、不关窗口。
 #[derive(Clone)]
-pub struct DialogSpec {
-    pub title: String,
-    pub description: String,
-    pub ok_text: Option<String>,
-    pub show_cancel: bool,
+pub enum DialogSpec {
+    /// 纯展示：description 文本 + 确认按钮（如显示搜索关键词）。
+    Info {
+        title: String,
+        description: String,
+        ok_text: Option<String>,
+        show_cancel: bool,
+    },
+    /// 带输入框的编辑动作：初始值来自当前状态，OK 时把输入内容交给
+    /// `on_submit`（此时窗口还开着；闭包只拿 `&mut App`，别碰 launcher）。
+    /// 输入框自带说明文案（placeholder 由 Launcher 统一给）。
+    Edit {
+        title: String,
+        initial: String,
+        ok_text: Option<String>,
+        on_submit: Arc<dyn Fn(&mut App, String) + Send + Sync>,
+    },
 }
 
 /// 列表行左侧的图标：内置图标，或应用自己的内存图片。

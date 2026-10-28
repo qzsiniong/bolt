@@ -58,20 +58,11 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 3. Bundle Identifier（`com.tencent.xinWeChat`）
 4. URL schemes（CFBundleURLTypes 里的 `weixin` / `wechat`）
 5. 原始 Info.plist 值（`en.lproj` 等其他语言覆盖——企业微信会同时保留"WeCom"这个英文名）
-6. 用户可编辑的别名表（`~/Library/Application Support/bolt/app-aliases.json`）
+6. 内置默认别名表（`weixin` → 企业微信等，编译进二进制）
 
 **显示名解析**：按系统语言优先级找 `InfoPlist.strings`——先 `zh-Hans-CN` 再 `zh-Hans` 再 `Base` 最后 `en`。企业微信这种特殊布局（`zh-Hans.lproj` 目录存在但没有 `InfoPlist.strings`，`Base.lproj` 才有"企业微信"）也能正确取到中文名。
 
-**别名配置文件**（JSON，首次启动自动播种默认值，可直接编辑）：
-
-```json
-{
-  "com.tencent.WeWorkMac": ["weixin", "wechat", "企业微信", "企微", "workwechat"],
-  "com.tencent.xinWeChat": ["微信", "wx"]
-}
-```
-
-格式是 `{ "bundle.id": ["alias1", "alias2", ...] }`。默认表随源码维护在 `src/modules/apps/default-aliases.json`（用 `include_str!` 编进二进制），应用数据目录里的 `app-aliases.json` 优先级更高，用户可以往里自由加别名。文件损坏会静默退回内置默认表，不阻塞启动。
+**自定义搜索词**：所有 item（应用、脚本、Pin 等）统一通过 Launcher 动作面板的「**编辑搜索关键词**」修改，保存到 `~/Library/Application Support/bolt/item-keywords.json`（按 item id 覆盖整个 keywords，多个词用逗号分隔，留空恢复默认）。应用会在此基础上叠加内置默认别名（源码维护在 `src/modules/apps/default-aliases.json`，`include_str!` 编进二进制）；编辑过的 item 以编辑值为准。
 
 **使用统计**：最近使用的应用排在前。使用次数与时间戳持久化在 `~/Library/Application Support/bolt/apps-usage.json`，图标缓存放在 `app-icons/` 子目录。
 
@@ -301,7 +292,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`apps-usage.json`（使用统计）、`app-icons/`（图标缓存）、`app-aliases.json`（用户可编辑的搜索别名）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`apps-usage.json`（使用统计）、`app-icons/`（图标缓存）、`item-keywords.json`（用户编辑的搜索关键词）、`item-usage.json`（item 使用统计）。
 
 ## 快捷键
 

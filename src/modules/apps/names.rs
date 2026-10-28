@@ -24,8 +24,9 @@ use std::path::Path;
 /// 非 macOS 或 objc 调用整体失败时静默跳过：所有 entry 保持文件名和空
 /// keywords，调用方不需要做额外处理。
 pub(crate) fn fill_display_names_and_keywords(apps: &mut [crate::modules::apps::scan::AppEntry]) {
-    // 从磁盘读别名表；首次启动自动播种默认值，文件损坏回退内置默认。
-    let aliases = crate::modules::apps::aliases::load();
+    // 内置默认别名表（不做磁盘 IO）；用户自定义搜索词统一走 launcher 的
+    // 「编辑搜索关键词」（item-keywords.json 按 item id 覆盖整个 keywords）。
+    let aliases = crate::modules::apps::aliases::default_aliases();
 
     #[cfg(target_os = "macos")]
     {

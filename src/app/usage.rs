@@ -56,14 +56,81 @@ pub(crate) fn load(path: &Path) -> UsageMap {
         .collect()
 }
 
-pub(crate) fn save(path: &Path, usage: &UsageMap) -> Result<(), String> {
+/// JSON 落盘的公共尾部：建目录 → pretty 序列化 → 写文件。
+fn write_json<T: serde::Serialize>(path: &Path, value: &T, what: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("创建目录 {} 失败：{e}", dir.display()))?;
     }
-    let json =
-        serde_json::to_string_pretty(usage).map_err(|e| format!("序列化使用记录失败：{e}"))?;
+    let json = serde_json::to_string_pretty(value).map_err(|e| format!("序列化{what}失败：{e}"))?;
     std::fs::write(path, json).map_err(|e| format!("写入 {} 失败：{e}", path.display()))
+}
+
+pub(crate) fn save(path: &Path, usage: &UsageMap) -> Result<(), String> {
+    write_json(path, usage, "使用记录")
+}
+
+/// 用户编辑过的搜索关键词（item id → keywords 覆盖值）。没有条目的 item
+/// 用模块 collect 时的默认 keywords；key 被删掉 = 恢复模块默认。
+pub(crate) type KeywordOverrides = HashMap<String, Vec<String>>;
+
+/// `~/Library/Application Support/bolt/item-keywords.json`
+pub(crate) fn keywords_path() -> PathBuf {
+    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("bolt");
+    path.push("item-keywords.json");
+    path
+}
+
+/// 读关键词覆盖表：文件缺失或损坏都当作空表（全部用模块默认）。
+pub(crate) fn load_keywords(path: &Path) -> KeywordOverrides {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+/// 把覆盖表套到收集好的 items 上：模块声明的 keywords 让位给用户编辑值。
+pub(crate) fn apply_keyword_overrides(items: &mut [LauncherItem], path: &Path) {
+    let overrides = load_keywords(path);
+    if overrides.is_empty() {
+        return;
+    }
+    for item in items {
+        if let Some(keywords) = overrides.get(&item.id) {
+            item.keywords = keywords.clone();
+        }
+    }
+}
+
+/// 编辑框文本 → keywords：逗号（中英文）分隔，去首尾空白与空项。
+pub(crate) fn parse_keywords(text: &str) -> Vec<String> {
+    text.split([',', '，'])
+        .map(str::trim)
+        .filter(|kw| !kw.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// 保存用户编辑的关键词：空输入 = 删掉覆盖条目（恢复模块默认）；其余按
+/// item id 覆盖。落盘失败经 console 告警，不影响当前窗口。
+pub(crate) fn set_keywords(cx: &App, item_id: &str, text: &str) {
+    let keywords = parse_keywords(text);
+    let path = keywords_path();
+    let mut overrides = load_keywords(&path);
+    if keywords.is_empty() {
+        overrides.remove(item_id);
+    } else {
+        overrides.insert(item_id.to_string(), keywords);
+    }
+    if let Err(e) = write_json(&path, &overrides, "搜索关键词") {
+        cx.global::<crate::app::shell::AppShell>()
+            .console_channel
+            .warn(format!("保存搜索关键词失败：{e}"));
+    }
+    // 让下一次 collect 拿到新关键词（打开中的 launcher 下一次绘制重收集）。
+    let shell = cx.global::<crate::app::shell::AppShell>();
+    shell.items_revision.set(shell.items_revision.get() + 1);
 }
 
 /// 记一次使用：count +1 并刷新最近使用时间。
