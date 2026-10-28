@@ -11,7 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::clipboard::{self, PinContent};
-use crate::ui::window_pin::set_window_level;
+use crate::ui::window_pin::{move_window_origin, set_window_level};
 
 /// 悬停操作菜单的右上角小按钮的图标名 / 提示语 / 点击回调。
 #[derive(Clone, Debug)]
@@ -53,7 +53,9 @@ impl PinWindow {
     }
 
     /// 滚轮缩放：上滚放大、下滚缩小，夹在 10%–800%。窗口同步改尺寸，
-    /// 否则图片会被窗口裁掉或者四周露底。
+    /// 否则图片会被窗口裁掉或者四周露底。缩放以**光标为锚点**（参考
+    /// macshot）：光标下的内容缩放前后保持在同一屏幕位置，光标即放大镜
+    /// 中心，不用边滚边挪窗口。
     fn on_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_image() {
             return;
@@ -69,11 +71,33 @@ impl PinWindow {
         if (next - self.zoom).abs() < 1e-4 {
             return;
         }
+        self.apply_zoom(next, event.position, window, cx);
+        cx.stop_propagation();
+    }
+
+    /// 应用新的缩放倍率：窗口同步 resize（否则图片被裁/露底），并按光标
+    /// 锚点调整窗口位置——resize 锚定在 macOS 左下角（视觉上顶边不动），
+    /// 光标下的内容会漂移 fx·Δsize，把窗口反向平移回去。cursor 是窗口内
+    /// 坐标（越界时公式照样外推成立）。滚轮缩放与「点徽标回 100%」共用。
+    fn apply_zoom(
+        &mut self,
+        next: f32,
+        cursor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let old = window.bounds();
         self.zoom = next;
         let (w, h) = self.scaled_size();
         window.resize(size(px(w), px(h)));
+        if old.size.width > px(0.) && old.size.height > px(0.) {
+            let fx = cursor.x / old.size.width;
+            let fy = cursor.y / old.size.height;
+            let dx = fx * (old.size.width - px(w));
+            let dy = fy * (old.size.height - px(h));
+            move_window_origin(window, dx.to_f64(), dy.to_f64());
+        }
         cx.notify();
-        cx.stop_propagation();
     }
 
     fn on_drag_down(&mut self, event: &MouseDownEvent, window: &mut Window) {
@@ -198,6 +222,32 @@ impl Render for PinWindow {
                 }
             });
 
+        // 窗口级按键（窗口没有 keymap binding，keydown listener 每帧都能
+        // 收到）：Esc 关闭便签；Cmd+Q 就地拦截为关闭便签（参考 macshot）——
+        // 贴图连按 Cmd+Q 会把整个应用退掉，这不是用户预期。Capture 阶段
+        // 最先拿到事件。
+        //
+        // `on_key_event` 断言只能在 paint 期调用，而 `Render::render` 在
+        // 布局期就执行了——挂在一个零尺寸 `canvas` 的 paint 回调里（每帧
+        // 重建注册一次，与 "next frame" 语义一致）。
+        root = root.child(gpui_kit::canvas(
+            |_, _, _| (),
+            |_, _, window: &mut Window, _: &mut App| {
+                window.on_key_event(
+                    |event: &KeyDownEvent,
+                     phase: DispatchPhase,
+                     window: &mut Window,
+                     _: &mut App| {
+                        let hit = event.keystroke.key == "escape"
+                            || (event.keystroke.key == "q" && event.keystroke.modifiers.platform);
+                        if hit && phase == DispatchPhase::Capture {
+                            window.remove_window();
+                        }
+                    },
+                );
+            },
+        ));
+
         // 右上角操作菜单（悬停时浮现）。
         let hover_buttons = if self.hovered {
             Some(self.action_buttons(cx))
@@ -280,6 +330,8 @@ impl PinWindow {
         if self.is_image() {
             row = row.child(
                 div()
+                    // 需要 `.id()`：`on_click` 只挂在 `Stateful<Div>` 上。
+                    .id("pin-zoom-badge")
                     .h(px(24.))
                     .px(px(9.))
                     .rounded_full()
@@ -288,6 +340,15 @@ impl PinWindow {
                     .items_center()
                     .text_color(Hsla::white())
                     .text_size(px(11.))
+                    // 点击徽标一键回 100%（macshot 同款；已 100% 则无操作）。
+                    // 拦下 mouse_down 防止触发整窗拖动 / 双击关闭。
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                        if (this.zoom - 1.).abs() < 1e-4 {
+                            return;
+                        }
+                        this.apply_zoom(1., event.position(), window, cx);
+                    }))
                     .child(format!("{:.0}%", self.zoom * 100.)),
             );
         }
