@@ -196,18 +196,20 @@ fn item_for(app: AppEntry, icons: &HashMap<PathBuf, Vec<u8>>) -> LauncherItem {
         ItemAction {
             title: "在 Finder 中显示".to_string(),
             shortcut: None,
-            run: Arc::new(move |_| match mac_ffi::reveal_in_finder(&reveal_path) {
-                Ok(()) => mac_ffi::notify(
-                    "Bolt",
-                    &format!(
-                        "已在 Finder 中显示 {}",
-                        reveal_path
-                            .file_name()
-                            .map(|s| s.to_string_lossy().into_owned())
-                            .unwrap_or_default()
-                    ),
-                ),
-                Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
+            // 投递到工作线程：`open` 不该卡 UI 帧，也不该在 GPUI 回调里同步激活
+            // 别的 App（见 mac_ffi::reveal_in_background 的注释）。
+            run: Arc::new({
+                let display = reveal_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                move |_| {
+                    let display = display.clone();
+                    mac_ffi::reveal_in_background(reveal_path.clone(), move |result| match result {
+                        Ok(()) => mac_ffi::notify("Bolt", &format!("已在 Finder 中显示 {display}")),
+                        Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
+                    })
+                }
             }),
             dialog: None,
         },

@@ -5,7 +5,7 @@
 //! 结构体会让它立刻悬空。同理，manager 只在插件注册之前注册——之后不再往
 //! `managers` 里 push，Vec 不会 realloc，指针一直有效。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -15,9 +15,10 @@ use plux_js_manager::{
 };
 use plux_rs::function::FunctionOutput;
 use plux_rs::utils::{RegisterPluginError, UnloadPluginError, UnregisterPluginError};
-use plux_rs::{Bundle, Loader};
+use plux_rs::{Bundle, Info, Loader};
 
 use super::manifest;
+use super::prefs;
 
 pub(crate) type ExtensionsLoader = Loader<'static, FunctionOutput, PluginMeta>;
 
@@ -83,10 +84,45 @@ pub(crate) struct ExtensionsHost {
     /// `AlreadyExistsIDAndVersion`，元数据与运行时都留在旧内容上。开发期改完代码
     /// 忘了升版本号是常事，指纹就是"磁盘变了"的唯一证据。
     fingerprints: HashMap<Bundle, u64>,
+    /// 禁用列表文件的位置（`extensions-disabled.json`）。测试传临时路径，
+    /// 免得读到开发机上真实的偏好。
+    disabled_path: PathBuf,
+    /// 被用户禁用的插件 id。`refresh` 每轮从磁盘重读，这样手改文件也能生效。
+    disabled: BTreeSet<String>,
+    /// 每个插件目录的绝对路径（按 bundle 键）。清单写坏的目录不在
+    /// `loader` 里，[`ExtensionsHost::inventory`] 只能靠它把行补全。
+    roots: HashMap<Bundle, PathBuf>,
+}
+
+/// 扩展管理窗口的一行：一个插件目录（含清单写坏的）。
+///
+/// 全是快照值：拿到之后不再借用 `Loader`，可以放心 move 进 UI。
+#[derive(Clone, Debug)]
+pub(crate) struct PluginEntry {
+    pub(crate) bundle: Bundle,
+    pub(crate) root: PathBuf,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) command_count: usize,
+    pub(crate) ui_command_count: usize,
+    pub(crate) permissions: Vec<String>,
+    pub(crate) enabled: bool,
+    /// plux 注册表里有它。清单写坏 / 被禁用时为 `false`。
+    pub(crate) registered: bool,
+    /// 同 id 有更高版本：注册保留（给依赖解析），但命令与运行时让位。
+    pub(crate) shadowed: bool,
+    /// 声明依赖它的已注册插件。
+    pub(crate) dependents: Vec<Bundle>,
+    pub(crate) runtime: Option<RuntimeState>,
+    pub(crate) last_error: Option<String>,
+    /// 清单读取 / 校验失败的原因（此时 `registered == false`）。
+    pub(crate) manifest_error: Option<String>,
 }
 
 impl ExtensionsHost {
-    pub(crate) fn new(extensions_dir: &Path, env: Arc<dyn JsEnv>) -> Self {
+    /// `disabled_path` 是启用/禁用列表的落盘位置；调用方给 `prefs::path()`，
+    /// 测试给临时目录里的文件。
+    pub(crate) fn new(extensions_dir: &Path, env: Arc<dyn JsEnv>, disabled_path: &Path) -> Self {
         let manager = JsManager::new(env);
         let store = manager.store().clone();
 
@@ -96,6 +132,9 @@ impl ExtensionsHost {
             .err()
             .map(|e| format!("注册 JS 插件管理器失败：{e}"));
 
+        // 先读一次：首轮 refresh 之前 `commands()` 就该知道谁被禁用。
+        let (disabled, _) = prefs::load(disabled_path);
+
         Self {
             loader,
             store,
@@ -104,6 +143,9 @@ impl ExtensionsHost {
             live: None,
             rebuilt_at: HashMap::new(),
             fingerprints: HashMap::new(),
+            disabled_path: disabled_path.to_path_buf(),
+            disabled,
+            roots: HashMap::new(),
         }
     }
 
@@ -115,6 +157,13 @@ impl ExtensionsHost {
             return report;
         }
 
+        // 每轮重读：用户手改 `extensions-disabled.json` 也该生效。
+        let (disabled, warning) = prefs::load(&self.disabled_path);
+        if let Some(warning) = warning {
+            report.notices.push(warning);
+        }
+        self.disabled = disabled;
+
         let (dirs, scan_errors) = manifest::scan(&self.extensions_dir);
         report.errors.extend(scan_errors);
         // 先按目录名算"磁盘上有谁"：注册失败（清单写坏）也算存在。
@@ -122,6 +171,7 @@ impl ExtensionsHost {
             .iter()
             .filter_map(|dir| plux_js_manager::manifest::bundle_from_dir(dir).ok())
             .collect();
+        let mut roots: HashMap<Bundle, PathBuf> = HashMap::with_capacity(dirs.len());
 
         for dir in dirs {
             let Some(path) = dir.to_str() else {
@@ -133,6 +183,22 @@ impl ExtensionsHost {
             // 目录名不合规时 register_plugin 会报一条统一的错，这里不重复判断。
             let bundle = plux_js_manager::manifest::bundle_from_dir(&dir).ok();
             let fingerprint = dir_fingerprint(&dir);
+            if let Some(bundle) = &bundle {
+                roots.insert(bundle.clone(), dir.clone());
+            }
+
+            // 被禁用的插件：不注册、已注册的注销（连带卸运行时）。
+            // 指纹仍要记基线，否则重新启用时会被误判成"内容变更"。
+            if let Some(bundle) = &bundle
+                && self.disabled.contains(&bundle.id)
+            {
+                self.disable_bundle(bundle, &mut report);
+                if let Some(fingerprint) = fingerprint {
+                    self.fingerprints.insert(bundle.clone(), fingerprint);
+                }
+                continue;
+            }
+
             let update_baseline = match &bundle {
                 Some(bundle) => self.reload_if_changed(bundle, fingerprint, &mut report),
                 None => true,
@@ -160,9 +226,239 @@ impl ExtensionsHost {
             self.rebuilt_at.retain(|bundle, _| live.contains(bundle));
             self.fingerprints.retain(|bundle, _| live.contains(bundle));
         }
+        self.roots = roots;
         self.drop_stale(&mut report.errors);
         self.drop_shadowed();
         report
+    }
+
+    /// 把一个被禁用的插件从注册表摘掉（连带卸运行时）。
+    ///
+    /// 被已加载的插件依赖时 plux 拒绝卸载：不强拆，只把事实报出来。此时
+    /// `commands()` 的禁用过滤仍然让它从 Launcher 里消失，重启后不再注册。
+    fn disable_bundle(&mut self, bundle: &Bundle, report: &mut RefreshReport) {
+        match self.loader.unregister_plugin_by_bundle(bundle) {
+            // 本来就没注册（首轮扫描、或上次清单写坏）：无事可做。
+            Ok(()) | Err(UnregisterPluginError::NotFound) => {}
+            Err(UnregisterPluginError::UnloadError(UnloadPluginError::CurrentlyUsesDepend {
+                plugin,
+                ..
+            })) => report.notices.push(format!(
+                "插件 {} 已禁用，但被 {} v{} 依赖，本次运行仍会加载；重启后不再加载",
+                bundle.id, plugin.id, plugin.version
+            )),
+            Err(error) => report
+                .errors
+                .push(format!("插件 {} 禁用失败：{error}", bundle.id)),
+        }
+    }
+
+    /// 插件的清单与状态快照，供扩展管理窗口渲染。
+    ///
+    /// **纯内存、不扫盘**：数据来自上一次 `refresh` / `reload` 的结果，所以窗口
+    /// 可以每帧调。想反映磁盘现状就先 `refresh`（窗口打开时一次、每次操作后一次）。
+    pub(crate) fn inventory(&self) -> Vec<PluginEntry> {
+        // 最高版本口径与 `commands()` / `drop_shadowed` 一致。
+        let mut highest: HashMap<&str, &Bundle> = HashMap::new();
+        for plugin in self.loader.get_plugins() {
+            let bundle = &plugin.info().bundle;
+            match highest.get(bundle.id.as_str()) {
+                Some(kept) if kept.version >= bundle.version => {}
+                _ => {
+                    highest.insert(bundle.id.as_str(), bundle);
+                }
+            }
+        }
+
+        let mut entries = Vec::new();
+        let mut registered: HashSet<Bundle> = HashSet::new();
+        for plugin in self.loader.get_plugins() {
+            let info = plugin.info();
+            let bundle = &info.bundle;
+            let meta = &info.info;
+            registered.insert(bundle.clone());
+            entries.push(PluginEntry {
+                shadowed: highest
+                    .get(bundle.id.as_str())
+                    .is_some_and(|kept| kept.version > bundle.version),
+                dependents: self.dependents_of(bundle),
+                runtime: self.store.state(bundle),
+                last_error: self.store.last_error(bundle).map(|e| e.to_string()),
+                enabled: !self.disabled.contains(&bundle.id),
+                registered: true,
+                bundle: bundle.clone(),
+                root: meta.root.clone(),
+                name: meta.display_name().to_string(),
+                description: meta.manifest.description.clone(),
+                command_count: meta.commands().len(),
+                ui_command_count: meta
+                    .commands()
+                    .iter()
+                    .filter(|command| command.ui.is_some())
+                    .count(),
+                permissions: meta.manifest.permissions.clone(),
+                manifest_error: None,
+            });
+        }
+
+        // 磁盘上有、注册表里没有：清单写坏了（或者被 plux 拒了）。
+        if let Some(live) = &self.live {
+            for bundle in live {
+                if registered.contains(bundle) {
+                    continue;
+                }
+                let root = self.roots.get(bundle).cloned().unwrap_or_else(|| {
+                    self.extensions_dir.join(format!(
+                        "{}-v{}.{}",
+                        bundle.id, bundle.version, bundle.format
+                    ))
+                });
+                let manifest_error = plux_js_manager::manifest::read(&root)
+                    .err()
+                    .unwrap_or_else(|| "未注册（原因见 Console）".to_string());
+                entries.push(PluginEntry {
+                    shadowed: highest
+                        .get(bundle.id.as_str())
+                        .is_some_and(|kept| kept.version > bundle.version),
+                    dependents: Vec::new(),
+                    runtime: None,
+                    last_error: None,
+                    enabled: !self.disabled.contains(&bundle.id),
+                    registered: false,
+                    bundle: bundle.clone(),
+                    root,
+                    name: bundle.id.clone(),
+                    description: None,
+                    command_count: 0,
+                    ui_command_count: 0,
+                    permissions: Vec::new(),
+                    manifest_error: Some(manifest_error),
+                });
+            }
+        }
+
+        entries.sort_by(|left, right| {
+            left.bundle
+                .id
+                .cmp(&right.bundle.id)
+                .then_with(|| right.bundle.version.cmp(&left.bundle.version))
+        });
+        entries
+    }
+
+    /// 谁声明依赖 `bundle`（只看已注册的插件）。
+    ///
+    /// plux 只在目标**已加载**时才拦 `unregister`；不加载时它会静默摘下，依赖方
+    /// 下次加载失败才发现。所以确认框要能提前说出这句话。
+    fn dependents_of(&self, bundle: &Bundle) -> Vec<Bundle> {
+        let mut dependents = Vec::new();
+        for plugin in self.loader.get_plugins() {
+            let info = plugin.info();
+            let meta = &info.info;
+            let depends = meta.depends().iter().chain(meta.optional_depends().iter());
+            let hit = depends
+                .into_iter()
+                .any(|depend| *depend == *bundle && depend.version.matches(&bundle.version));
+            if hit {
+                dependents.push(info.bundle.clone());
+            }
+        }
+        dependents
+    }
+
+    /// 重新读取清单并重建运行时。UI 窗口由调用方先关掉（`ops::reload`）。
+    pub(crate) fn reload(&mut self, bundle: &Bundle) -> Result<RefreshReport, String> {
+        if self.disabled.contains(&bundle.id) {
+            return Err(format!("插件 {} 已被禁用，先启用再重载", bundle.id));
+        }
+        let root = self
+            .root_of(bundle)
+            .ok_or_else(|| format!("找不到插件目录：{} v{}", bundle.id, bundle.version))?;
+
+        match self.loader.unregister_plugin_by_bundle(bundle) {
+            Ok(()) | Err(UnregisterPluginError::NotFound) => {}
+            Err(UnregisterPluginError::UnloadError(UnloadPluginError::CurrentlyUsesDepend {
+                plugin,
+                ..
+            })) => {
+                return Err(format!(
+                    "插件 {} 被 {} v{} 依赖，无法重载",
+                    bundle.id, plugin.id, plugin.version
+                ));
+            }
+            Err(error) => return Err(format!("注销插件 {} 失败：{error}", bundle.id)),
+        }
+
+        // 冷却与指纹都是"旧运行时"的账，重载后要重新记。
+        self.rebuilt_at.remove(bundle);
+        self.fingerprints.remove(bundle);
+
+        let Some(path) = root.to_str() else {
+            return Err(format!("插件路径不是合法 UTF-8：{}", root.display()));
+        };
+        let mut report = RefreshReport::default();
+        match self.loader.register_plugin(path) {
+            Ok(_) | Err(RegisterPluginError::AlreadyExistsIDAndVersion(..)) => {}
+            Err(error) => report.errors.push(format!(
+                "扩展加载失败 {}：{}",
+                root.display(),
+                describe(&error)
+            )),
+        }
+        let refreshed = self.refresh();
+        report.errors.extend(refreshed.errors);
+        report.notices.extend(refreshed.notices);
+        Ok(report)
+    }
+
+    /// 只注销、不碰磁盘：卸载的第一步。被依赖时返回 `Err`，调用方不得继续删目录。
+    pub(crate) fn forget(&mut self, bundle: &Bundle) -> Result<(), String> {
+        match self.loader.unregister_plugin_by_bundle(bundle) {
+            Ok(()) | Err(UnregisterPluginError::NotFound) => {}
+            Err(UnregisterPluginError::UnloadError(UnloadPluginError::CurrentlyUsesDepend {
+                plugin,
+                ..
+            })) => {
+                return Err(format!(
+                    "插件 {} 被 {} v{} 依赖，先卸载依赖方",
+                    bundle.id, plugin.id, plugin.version
+                ));
+            }
+            Err(error) => return Err(format!("注销插件 {} 失败：{error}", bundle.id)),
+        }
+        // plux 的 unregister 会先 unload；这里兜一次底，防止某条路径漏了。
+        self.store.unload(bundle);
+        self.rebuilt_at.remove(bundle);
+        self.fingerprints.remove(bundle);
+        self.roots.remove(bundle);
+        if let Some(live) = &mut self.live {
+            live.remove(bundle);
+        }
+        Ok(())
+    }
+
+    fn root_of(&self, bundle: &Bundle) -> Option<PathBuf> {
+        self.roots.get(bundle).cloned().or_else(|| {
+            self.loader
+                .get_plugin_by_bundle(bundle)
+                .map(|plugin| plugin.info().info.root.clone())
+        })
+    }
+
+    /// 启用 / 禁用某个插件 id，立即生效并落盘。
+    ///
+    /// 先写盘再改内存：`refresh` 每轮都会重读文件，内存里"只改了一半"的状态
+    /// 下一轮就会被磁盘覆盖，反而更难排查。写盘失败 = 操作整体失败（不改内存）。
+    pub(crate) fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<RefreshReport, String> {
+        let mut next = self.disabled.clone();
+        if enabled {
+            next.remove(id);
+        } else {
+            next.insert(id.to_string());
+        }
+        prefs::save(&self.disabled_path, &next)?;
+        self.disabled = next;
+        Ok(self.refresh())
     }
 
     /// 内容变了、版本号没变：先注销旧条目，让调用方紧接着重新注册。
@@ -291,6 +587,10 @@ impl ExtensionsHost {
         for plugin in self.loader.get_plugins() {
             let info = plugin.info();
             let bundle = &info.bundle;
+            // 禁用的插件不出现在任何地方：即使因为「被依赖不能卸」还留在注册表里。
+            if self.disabled.contains(&bundle.id) {
+                continue;
+            }
             if self
                 .live
                 .as_ref()
@@ -334,6 +634,10 @@ impl ExtensionsHost {
     /// 否则 `load_plugin_by_bundle` 会因为 `is_load == true` 直接 Ok，什么都不重建。
     pub(crate) fn ensure_loaded(&mut self, target: &CommandTarget) -> Result<(), String> {
         let bundle = &target.bundle;
+        // 兜底：残留 item、RunService 直接投递都不该把被禁用的插件拉起来。
+        if self.disabled.contains(&bundle.id) {
+            return Err(format!("插件 {} 已被禁用", bundle.id));
+        }
         let registered = self
             .loader
             .get_plugin_by_bundle(bundle)
@@ -413,7 +717,7 @@ mod tests {
             registry: Arc::new(registry),
             console,
         });
-        ExtensionsHost::new(&tmp.0, env)
+        ExtensionsHost::new(&tmp.0, env, &tmp.0.join("extensions-disabled.json"))
     }
 
     /// 测试里的插件身份：`(id, version)` 由 bundle 一处说清。
@@ -894,5 +1198,281 @@ mod tests {
             "{:?}",
             report.errors
         );
+    }
+
+    #[test]
+    fn disabled_plugin_is_never_registered() {
+        let tmp = TempDir::new("host-disabled");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'go'; }",
+        );
+
+        let mut host = host(&tmp);
+        let report = host.set_enabled("demo", false).expect("disable");
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(host.commands().is_empty());
+        assert!(
+            host.loader
+                .get_plugin_by_bundle(&bundle("demo", "1.0.0"))
+                .is_none(),
+            "disabled plugin must not be registered"
+        );
+    }
+
+    #[test]
+    fn disabling_a_loaded_plugin_unloads_its_runtime() {
+        let tmp = TempDir::new("host-disable-loaded");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'go'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        let target = host.commands().into_iter().next().expect("one command");
+        host.ensure_loaded(&target).expect("loads");
+        let store = host.store();
+        wait_state(&store, &bundle("demo", "1.0.0"), RuntimeState::Ready);
+        assert!(store.is_loaded(&bundle("demo", "1.0.0")));
+
+        host.set_enabled("demo", false).expect("disable");
+        assert!(
+            store.state(&bundle("demo", "1.0.0")).is_none(),
+            "runtime must be unloaded together with the registration"
+        );
+        assert!(host.commands().is_empty());
+    }
+
+    #[test]
+    fn re_enabling_restores_commands_without_a_reload_notice() {
+        let tmp = TempDir::new("host-reenable");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'go'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        host.set_enabled("demo", false).expect("disable");
+        assert!(host.commands().is_empty());
+
+        // 重新启用不该触发"内容已变更"：禁用期间指纹基线一直跟着更新。
+        let report = host.set_enabled("demo", true).expect("enable");
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert!(report.notices.is_empty(), "{:?}", report.notices);
+        assert_eq!(host.commands().len(), 1);
+    }
+
+    #[test]
+    fn disabled_plugin_with_a_loaded_dependent_is_hidden_and_reported() {
+        let tmp = TempDir::new("host-disable-dependent");
+        write_plugin(
+            &tmp,
+            "base-v1.0.0.js",
+            r#"{ "id": "base", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'base'; }",
+        );
+        write_plugin(
+            &tmp,
+            "app-v1.0.0.js",
+            r#"{ "id": "app", "version": "1.0.0", "depends": ["base@*"], "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'app'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        for target in host.commands() {
+            host.ensure_loaded(&target).expect("both load");
+        }
+
+        // plux 会拒绝卸载被依赖的 base：注册表留着，但命令必须消失。
+        let report = host.set_enabled("base", false).expect("disable");
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.notices.len(), 1, "{:?}", report.notices);
+        assert!(report.notices[0].contains("依赖"), "{:?}", report.notices);
+        let ids: Vec<String> = host
+            .commands()
+            .into_iter()
+            .map(|command| command.plugin_id)
+            .collect();
+        assert_eq!(ids, vec!["app".to_string()]);
+
+        // 启用回来后，命令也跟着回来。
+        host.set_enabled("base", true).expect("enable");
+        let ids: Vec<String> = host
+            .commands()
+            .into_iter()
+            .map(|command| command.plugin_id)
+            .collect();
+        assert_eq!(ids, vec!["app".to_string(), "base".to_string()]);
+    }
+
+    #[test]
+    fn inventory_lists_broken_manifests() {
+        let tmp = TempDir::new("host-inventory-broken");
+        write_plugin(
+            &tmp,
+            "bad-v1.0.0.js",
+            r#"{ "id": "bad", "version": "1.0.0", "commands": "nope" }"#,
+            "",
+        );
+
+        let mut host = host(&tmp);
+        assert!(!host.refresh().errors.is_empty());
+        let entries = host.inventory();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert!(!entries[0].registered);
+        assert!(entries[0].enabled);
+        assert_eq!(entries[0].bundle.id, "bad");
+        assert!(
+            entries[0]
+                .manifest_error
+                .as_deref()
+                .is_some_and(|error| error.contains("解析 extension.json 失败")),
+            "{:?}",
+            entries[0].manifest_error
+        );
+    }
+
+    #[test]
+    fn inventory_marks_shadowed_versions_and_dependents() {
+        let tmp = TempDir::new("host-inventory");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'v1'; }",
+        );
+        write_plugin(
+            &tmp,
+            "demo-v2.0.0.js",
+            r#"{ "id": "demo", "version": "2.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'v2'; }",
+        );
+        write_plugin(
+            &tmp,
+            "app-v1.0.0.js",
+            r#"{ "id": "app", "version": "1.0.0", "depends": ["demo@*"], "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'app'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        let entries = host.inventory();
+
+        let v1 = entries
+            .iter()
+            .find(|entry| entry.bundle.id == "demo" && entry.bundle.version.to_string() == "1.0.0")
+            .expect("v1");
+        let v2 = entries
+            .iter()
+            .find(|entry| entry.bundle.id == "demo" && entry.bundle.version.to_string() == "2.0.0")
+            .expect("v2");
+        assert!(v1.shadowed, "low version should be shadowed");
+        assert!(!v2.shadowed);
+
+        // 依赖方按 id+版本区间算：app 声明的 demo@* 覆盖两个版本。
+        assert_eq!(v2.dependents.len(), 1, "{:?}", v2.dependents);
+        assert_eq!(v2.dependents[0].id, "app");
+        assert_eq!(v2.command_count, 1);
+        assert_eq!(v2.ui_command_count, 0);
+        assert!(v2.manifest_error.is_none());
+    }
+
+    #[test]
+    fn reload_after_manifest_edit_updates_metadata() {
+        let tmp = TempDir::new("host-reload");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Old" }] }"#,
+            "export function go() { return 'v1'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        assert_eq!(host.commands()[0].title, "Old");
+
+        std::fs::write(
+            tmp.0.join("demo-v1.0.0.js/extension.json"),
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "New" }] }"#,
+        )
+        .unwrap();
+
+        let report = host.reload(&bundle("demo", "1.0.0")).expect("reload");
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(host.commands()[0].title, "New");
+    }
+
+    #[test]
+    fn reload_is_refused_while_disabled() {
+        let tmp = TempDir::new("host-reload-disabled");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'go'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        host.set_enabled("demo", false).expect("disable");
+        let error = host
+            .reload(&bundle("demo", "1.0.0"))
+            .expect_err("must refuse");
+        assert!(error.contains("已被禁用"), "{error}");
+    }
+
+    #[test]
+    fn forget_unregisters_without_touching_the_disk() {
+        let tmp = TempDir::new("host-forget");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'go'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        host.forget(&bundle("demo", "1.0.0")).expect("forget");
+
+        assert!(host.commands().is_empty());
+        assert!(
+            host.loader
+                .get_plugin_by_bundle(&bundle("demo", "1.0.0"))
+                .is_none()
+        );
+        // 目录还在，下一轮 refresh 又把它捡回来（卸载的调用方负责真的删目录）。
+        assert!(host.refresh().errors.is_empty());
+        assert_eq!(host.commands().len(), 1);
+    }
+
+    #[test]
+    fn ensure_loaded_refuses_a_disabled_plugin() {
+        let tmp = TempDir::new("host-disabled-load");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'go'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        let mut target = host.commands().into_iter().next().expect("one command");
+        host.set_enabled("demo", false).expect("disable");
+
+        // 模拟"残留 item"：拿被禁用插件的历史 target 直接要求加载。
+        target.bundle = bundle("demo", "1.0.0");
+        let error = host.ensure_loaded(&target).expect_err("must refuse");
+        assert!(error.contains("已被禁用"), "{error}");
     }
 }

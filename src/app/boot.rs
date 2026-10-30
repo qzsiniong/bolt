@@ -115,7 +115,11 @@ pub(crate) fn run() {
                 registry: registry.clone(),
                 console: console_channel.clone(),
             });
-            let extensions_host = ExtensionsHost::new(&extensions_dir, js_env);
+            let extensions_host = ExtensionsHost::new(
+                &extensions_dir,
+                js_env,
+                &crate::modules::extensions::prefs::path(),
+            );
             let plugin_store = extensions_host.store();
 
             let run_service = cx.new(|_cx| {
@@ -210,6 +214,9 @@ pub(crate) fn run() {
                 assets: extension_assets,
                 shell_runtime,
                 host: std::cell::RefCell::new(extensions_host),
+                manager: None,
+                create: None,
+                registry: registry.clone(),
             });
 
             let modules = crate::modules::default_modules(cx);

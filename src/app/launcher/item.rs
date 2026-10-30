@@ -24,6 +24,10 @@ pub type LauncherAction = Arc<dyn Fn(&mut App) + Send + Sync>;
 /// 的存活约束），内容本体 move 进闭包。
 pub type PasteAction = Arc<dyn Fn(&mut App, &PasteContent) + Send + Sync>;
 
+/// 编辑型 dialog 提交时把输入内容交回的逻辑（同 [`LauncherAction`] 的存活
+/// 约束：只拿 `&mut App`，别碰 launcher —— 对话框还开着，窗口仍在借用中）。
+pub type SubmitAction = Arc<dyn Fn(&mut App, String) + Send + Sync>;
+
 /// 声明 item 能处理哪种粘贴内容（Launcher 的 Cmd+V 识别）。
 ///
 /// `accepts` 是无状态的 fn 指针（声明式、可 Copy）；模块只对自己能处理的
@@ -70,7 +74,18 @@ pub enum DialogSpec {
         title: String,
         initial: String,
         ok_text: Option<String>,
-        on_submit: Arc<dyn Fn(&mut App, String) + Send + Sync>,
+        on_submit: SubmitAction,
+    },
+    /// 需要用户点一下确认才执行的动作（卸载这类不可撤销的操作）。
+    ///
+    /// `on_ok` 与 [`LauncherAction`] 同约束——只拿 `&mut App`，别碰 launcher
+    /// 自己（对话框还开着，窗口仍在借用中）。
+    Confirm {
+        title: String,
+        description: String,
+        ok_text: Option<String>,
+        cancel_text: Option<String>,
+        on_ok: LauncherAction,
     },
 }
 

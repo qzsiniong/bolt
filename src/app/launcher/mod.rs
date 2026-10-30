@@ -22,7 +22,7 @@ pub(crate) mod item;
 pub(crate) mod panel;
 
 pub(crate) use item::{
-    ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module, PasteHandler,
+    DialogSpec, ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module, PasteHandler,
 };
 
 use std::cell::RefCell;

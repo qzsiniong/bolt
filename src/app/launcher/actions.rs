@@ -147,6 +147,40 @@ pub(crate) fn open_action_dialog(window: &mut Window, cx: &mut App, spec: &Dialo
                 dlg
             });
         }
+        DialogSpec::Confirm {
+            title,
+            description,
+            ok_text,
+            cancel_text,
+            on_ok,
+        } => {
+            let (title, description, ok_text, cancel_text, on_ok) = (
+                title.clone(),
+                description.clone(),
+                ok_text.clone(),
+                cancel_text.clone(),
+                on_ok.clone(),
+            );
+            window.open_alert_dialog(cx, move |alert, _, _| {
+                let mut dlg = alert
+                    .title(title.clone())
+                    .description(description.clone())
+                    .show_cancel(true);
+                if let Some(ok) = &ok_text {
+                    dlg = dlg.ok_text(ok.clone());
+                }
+                if let Some(cancel) = &cancel_text {
+                    dlg = dlg.cancel_text(cancel.clone());
+                }
+                dlg.on_ok({
+                    let on_ok = on_ok.clone();
+                    move |_, _, cx| {
+                        on_ok(cx);
+                        true
+                    }
+                })
+            });
+        }
     }
 }
 

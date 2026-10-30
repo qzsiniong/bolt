@@ -90,7 +90,7 @@ pub fn generate_project_files(dir: &Path, registry: &HostRegistry) -> Result<(),
     Ok(())
 }
 
-fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
+pub(crate) fn write_if_changed(path: &Path, content: &str) -> Result<(), String> {
     if let Ok(existing) = std::fs::read_to_string(path)
         && existing == content
     {

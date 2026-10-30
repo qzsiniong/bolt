@@ -15,6 +15,7 @@ use super::editor::EditorPanel;
 use crate::app::shell::AppShell;
 use crate::model::script::{Language, Script};
 use crate::model::script_store;
+use crate::ui::mac_ffi;
 
 /// Emitted when the user picks a script from the list.
 #[derive(Clone, Debug)]
@@ -181,19 +182,22 @@ impl ScriptListPanel {
 
     /// Open the scripts directory in Finder.
     fn reveal_scripts_dir(&mut self, cx: &mut Context<Self>) {
-        if let Err(e) = script_store::reveal_in_finder(&self.scripts_dir, false) {
-            let console = cx.global::<AppShell>().console_channel.clone();
-            console.warn(format!("打开脚本目录失败：{e}"));
-        }
+        let console = cx.global::<AppShell>().console_channel.clone();
+        mac_ffi::open_in_background(self.scripts_dir.clone(), move |result| {
+            if let Err(e) = result {
+                console.warn(format!("打开脚本目录失败：{e}"));
+            }
+        });
     }
 
     /// Select a script file in Finder.
     fn reveal_script(&mut self, file_name: String, cx: &mut Context<Self>) {
-        let path = self.scripts_dir.join(file_name);
-        if let Err(e) = script_store::reveal_in_finder(&path, true) {
-            let console = cx.global::<AppShell>().console_channel.clone();
-            console.warn(format!("在 Finder 中显示脚本失败：{e}"));
-        }
+        let console = cx.global::<AppShell>().console_channel.clone();
+        mac_ffi::reveal_in_background(self.scripts_dir.join(file_name), move |result| {
+            if let Err(e) = result {
+                console.warn(format!("在 Finder 中显示脚本失败：{e}"));
+            }
+        });
     }
 
     fn confirm_delete(&mut self, file_name: String, cx: &mut Context<Self>) {

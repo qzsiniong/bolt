@@ -5,11 +5,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui_kit::{AnyWindowHandle, Global};
 
 use super::host::ExtensionsHost;
 use crate::app::assets::ExtensionAssets;
+use crate::host::HostRegistry;
 
 /// Extensions 模块状态，随 app 生命周期存活的 Global。
 pub(crate) struct ExtensionsState {
@@ -24,6 +26,12 @@ pub(crate) struct ExtensionsState {
     /// plux 插件宿主。`collect_items` 只拿到 `&App`，而注册插件要 `&mut Loader`，
     /// 故用 `RefCell`（GPUI 单线程，不会并发借用）。
     pub(crate) host: RefCell<ExtensionsHost>,
+    /// 「扩展管理」窗口单例。
+    pub(crate) manager: Option<AnyWindowHandle>,
+    /// 「新建扩展」窗口单例。
+    pub(crate) create: Option<AnyWindowHandle>,
+    /// 宿主模块注册表：新建扩展时用它写出 `bolt.d.ts`。
+    pub(crate) registry: Arc<HostRegistry>,
 }
 
 impl Global for ExtensionsState {}

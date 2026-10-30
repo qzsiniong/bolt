@@ -11,6 +11,7 @@
 - **插件化扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
 - **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在插件自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
 - **fail-closed 插件权限**：脚本命令要用的危险 API（文件读写、网络、exec、env、输入注入）必须在清单 `permissions` 里声明，缺省一个都不给；普通脚本全权（等同自己写的代码）。详见[信任模型](docs/trust-model.md)。
+- **扩展管理与新建**：管理窗口一个列表看全插件（版本、状态徽标、声明权限、被谁依赖、清单/运行错误），每个插件可重载 / 禁用（**真不加载**）/ 在 Finder 中显示 / 打开数据目录 / 卸载（移到废纸篓）；「新建扩展」选模板（脚本 / UI / 两者）即生成带 `bolt.d.ts`、`gpui-kit.d.ts` 的可运行插件目录，IDE 直接补全。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
@@ -31,10 +32,11 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条插件命令一条：带 `ui` 的开窗口，其余的在插件运行时里执行）。
+Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 扩展管理 / 新建扩展 / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条插件命令一条：带 `ui` 的开窗口，其余的在插件运行时里执行。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
+- **扩展管理 / 新建扩展**：见[管理、禁用与卸载](#管理禁用与卸载)与[新建扩展](#新建扩展)；插件级动作（重载 / 禁用 / 卸载等）在每条扩展命令的 Cmd+K 面板里也有一份。
 - 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（Console 输出会缓冲，待管理器打开后可见）。
 
 ### 粘贴识别（Cmd+V）
@@ -180,6 +182,56 @@ export async function hello({ command, plugin, root, argv }) {
 - **同 id 同版本但目录内容变了**（开发期最容易踩的坑：改完代码忘了升版本号）会被识别并自动重新注册：清单重读、运行时按新代码重建，Console 里留一条 info 提示“内容已变更”。判断依据是目录指纹（相对路径 + 大小 + 修改时间，跳过 `node_modules` 与生成的 `.d.ts`），内容没变就完全不动运行时——所以反复唤出 Launcher 不会打断正在用的插件。被已加载插件依赖着的插件不能这样重载，此时报 warn，升版本号才能生效。
 - 加载失败（入口语法错误等）后修好文件，再执行一次命令即可重建运行时。
 - 两种目录会被跳过：没有 `extension.json` 的目录（作者的草稿等）静默忽略；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `extension.json` 安装的能力冲突。
+
+#### 管理、禁用与卸载
+
+两个内置命令在 Launcher 里搜得到（分组「内置」）：**扩展管理**（`extensions.open-manager`）与**新建扩展**（`extensions.new`）。另外每条插件命令的 Cmd+K 动作面板里都带同一套**插件级动作**，不必先开管理窗口。
+
+**管理窗口**（单例，960×640）：左侧列表显示展示名、版本与状态徽标（`已禁用` / `异常` / `被遮蔽` / `运行中` / `已退出`）；右侧详情是只读快照——注册状态、命令条数（其中 UI 命令几条）、声明了哪些权限、插件目录、数据目录、被谁依赖、清单错误、最近一次运行错误；底部操作条就是那套插件级动作。
+
+渲染期**不扫盘**：`inventory()` 只遍历内存（上一次 `refresh` 的结果），所以窗口每帧重绘也不会碰磁盘；磁盘扫描和 Console 报告只发生在开窗、点「刷新」以及每次操作之后。
+
+插件级动作固定为：
+
+| 动作 | 行为 |
+| --- | --- |
+| 重新加载 | 注销旧条目 → 关掉该插件的 UI 窗口 → 重新扫描。改完清单/入口不想升版本号时用它，下一次执行命令就用新代码 |
+| 禁用插件 / 启用插件 | 见下 |
+| 在 Finder 中显示 | 打开插件目录所在位置 |
+| 打开数据目录 | 打开 `extensions-data/<id>/`（不存在就建） |
+| 卸载插件… | 确认框 → 关窗 → 注销 → **移到废纸篓** → 重新扫描 |
+
+**禁用是真不加载**，不是把命令藏起来：禁用列表按插件 **id** 持久化在 `~/Library/Application Support/bolt/extensions-disabled.json`（`{ "disabled": ["demo"] }`），所以重装或升版本之后禁用状态仍然沿用。扫描时被禁用的插件**不注册**，`commands()` 与 `ensure_loaded()` 也各兜一道底——命令从 Launcher 消失，运行时不创建（已加载的靠注销顺带卸掉）。重新启用不需要重启，也不会多出一条「内容已变更」提示。
+
+**被依赖时的两种处理，都不做半成功**：
+
+- 禁用：注销时若 plux 拒绝（`CurrentlyUsesDepend`，说明有**已加载**的插件正依赖它），本次运行仍会注册，Console 说明「重启后不再加载」；命令照样从 Launcher 隐藏。
+- 卸载：`forget` 先做（不碰磁盘），被依赖就直接报错中止——目录一个字节都不动，提示先卸依赖方。
+
+**卸载走系统废纸篓**：`NSFileManager.trashItemAtURL:` 走 macOS 正统入口（可撤销、Finder 里能看到）；失败时（远程卷、权限）退回 `~/.Trash` 重命名，重名追加时间戳后缀；两条都失败就**不删**，只报错并保留原目录。确认框里会写清依赖方、以及 debug 构建下"仓库目录会出现在 git status 里"。
+
+#### 新建扩展
+
+「新建扩展」是独立窗口（单例，640×560），填完直接落盘成一个可用的插件目录，**不需要重启也不需要再手写清单**：
+
+- **id / 展示名 / 版本**：id 会被当作目录名，所以白名单是 `[a-z0-9][a-z0-9-]*`（≤64 字符、不能以 `-` 结尾）。校验的最后一步是把 `<id>-v<version>.js` 用 `Bundle` 解析回来**逐字比对**——`-v`、`.`、大写、空格这些会拆坏 bundle 的输入在这里就被挡住，而不是等下次扫描时在 Console 报错。
+- **模板三选一**：脚本命令（`index.js` + 一条脚本命令）、UI 窗口（`main.js` + 一条 `ui` 命令）、两者都要（两个入口 + 两条命令）。
+- **权限勾选**（脚本模板）：`fs` / `net` / `exec` / `env` / `typeStr`，不勾就是 fail-closed。
+- **剪贴板授权**（UI 模板）：写进 `ui.capabilities.clipboard`。
+- 表单实时显示目标目录、目录已存在的冲突，以及「同 id 已有版本」的提醒（多版本可以共存，但 Launcher 只显示最高版本）。
+- **「创建」只在真能建的时候可点**：字段不合法、目标目录被占、或刚建完同一个目录时按钮置灰。创建成功后那行「目录已存在」不会留下来——刚建的那个目录不算冲突，否则成功提示旁边会挂一条红字，看着像失败。改 id 或版本号即恢复可点。
+- 落盘中途失败（写文件/写声明出错）会把刚建的目录整个删掉，不留半成品占着名字，改完再点就能重试。
+- **debug 构建下目标目录就是仓库 `extensions/`**：与宿主扫描的是同一份（`scaffold::target_dir` 跟着 `active_extensions_dir()` 走），建完立刻出现在 Launcher 与管理窗口里，界面同时提示它会出现在 `git status` 里；release 构建写用户数据目录 `~/Library/Application Support/bolt/extensions/`。
+
+生成物自带类型提示，编辑器开箱即用（`.gitignore` 里也列了这三样，因为它们是生成物）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `bolt.d.ts` | 宿主模块声明（`declare module "bolt"`）：`typeStr` / `requestFocus` / `confirm` / `pickPath` / `scanQr` / 文件与 `fetch` 等，随宿主版本重写 |
+| `gpui-kit.d.ts` | UI 命令的声明，仅在含 UI 命令时生成 |
+| `jsconfig.json` | 只在目录里没有任何 jsconfig/tsconfig 时写一次（`checkJs` + `strict`），所以模板里的 JSDoc 是真有用的 |
+
+纯 UI 模板不写 `bolt.d.ts`——那里根本没有 `bolt` 模块，写了只会让编辑器补全出一堆不存在的 API。
 
 ### 仓库自带插件
 
@@ -714,6 +766,8 @@ declare module "my-utils" {
 
 如果省略 `declaration`，框架会按 `.export("xxx")` 自动生成 `export const xxx: any;`（适合快速原型，但无类型信息）。推荐始终手写完整的 `declaration`，以获得 IDE 补全和诊断。
 
+这些声明在扩展目录里落成 `bolt.d.ts`（由 `HostRegistry::write_type_declarations` 汇总全部宿主模块）。「新建扩展」生成插件时会自动写一份，UI 命令另配 `gpui-kit.d.ts` 与 `jsconfig.json`——详见[新建扩展](#新建扩展)。
+
 ### 进阶：注入全局对象（非模块）
 
 除了 `import` 模块，也可以直接在 QuickJS 全局命名空间注入对象。内置的 `console` 和定时器就是这样实现的——它们不是模块，而是运行时直接挂在 `globalThis` 上：
@@ -734,7 +788,7 @@ ctx.globals().set("console", console)?;
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
 | [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；拆成 `item` 契约、`collect` 收集排序、`filter` 查询/粘贴过滤、`actions` 动作构建、`panel` Cmd+K 浮层、`mod` 主视图与键盘分流；搜索框是宿主外部 `Input`——`Command::searchable(false)` 关掉内置搜索，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接 + 插件清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表持久化、`actions` 插件级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载等落地操作、`manager/` 扩展管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
 | [src/ui/](src/ui) | 跨模块共享 UI 与纯前端逻辑：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`clipboard/`（NSPasteboard 读取与内容识别：`mod` 类型与 peek/read 入口、`files` Finder 文件条目、`html` 富文本转纯文本、`image` 格式与尺寸识别；`read_paste_content` 供 Launcher Cmd+V 与 pin 共用） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 执行链路：`runner`（普通脚本的 QuickJS 运行 + 插件命令的 `run_plugin`）、`interaction`（宿主交互桥）、`interaction_window_manager`（待命/进度/确认浮窗与 pickPath 选择器的状态机）、`run_service`（应用级运行服务：任务队列、取消与状态广播，`RunTask` 分脚本与插件两种）、`ts_transform`（swc 类型擦除） |
@@ -755,4 +809,6 @@ ctx.globals().set("console", console)?;
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
 - **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。两侧的「说明符 → 磁盘文件」与「宿主模块转发源码生成」是**同一份实现**（`plux_js_manager::{resolve_file, forwarding_module_source}`），不再各写一遍。转发模块是**转发函数**而不是一次性解构——宿主 API 分两批安装（加载时装基础函数、每轮命令前装交互 API），解构会把加载时的 `undefined` 固化进 const 绑定。
 - **插件权限的落点**：`HostModule::export_guarded` 登记每个导出所需的权限；`JsEnv::host_modules(permissions)` 按插件清单把导出拆成「允许 / 拒绝」两半，拒绝项在转发模块里生成抛错桩（`import` 不炸，调用时点名缺哪个权限）。脚本链路不经过这道过滤——用户脚本全权。
+- **禁用是数据层过滤，不是 UI 遮掩**：禁用集合在 `refresh` 里生效（被禁用的插件整条跳过注册），`commands()` 与 `ensure_loaded()` 再各兜一道底。所以 Launcher、扩展管理窗口、RunService 三条路径自动一致——没有任何一处需要"记得过滤"。同理卸载的顺序就是正确性：先注销（plux 在被依赖时拒绝）再动磁盘，被依赖时磁盘一个字节都不会变。
+- **别在 GPUI 回调里同步激活别的 App**：窗口事件处理器跑在 `App::update` 里（App 已被借用），此时若同步调 `-[NSWorkspace selectFile:…]` 之类的「切前台」API，AppKit 可能在自己的调用栈里就把 `windowDidResignKey` / 激活回调派发回来，GPUI 的回调路径再借一次 App → `RefCell already borrowed` 直接 abort（`cargo run` 里表现为 `failed to initiate panic, error 3`）。所以全项目只有一对入口：`mac_ffi::reveal_in_background`（选中）与 `mac_ffi::open_in_background`（打开），底层都是 `/usr/bin/open`（激活交给子进程与 launchd），线程与结果回调由它们内部管，调用方只管给一个错误处理闭包。四个调用点（扩展动作、新建扩展窗口、脚本列表、应用 / 脚本的 Cmd+K）都走这一对。
 - **补全修正**：`typescript-language-server` 返回的候选带全量列表且无 `text_edit`，provider 侧按光标前缀过滤，并补齐 `text_edit` 范围，避免成员访问时点号被替换吞掉。

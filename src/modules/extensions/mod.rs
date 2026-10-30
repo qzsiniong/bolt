@@ -10,9 +10,15 @@
 //! 内容变了而版本号没变：那时注册表里的元数据与跑着的引擎都停在旧内容上，宿主
 //! 主动注销并按新内容重新注册（见 `host::ExtensionsHost::refresh`）。
 
+pub(crate) mod actions;
+pub(crate) mod create;
 pub(crate) mod host;
 pub(crate) mod js_env;
+pub(crate) mod manager;
 pub(crate) mod manifest;
+pub(crate) mod ops;
+pub(crate) mod prefs;
+pub(crate) mod scaffold;
 pub(crate) mod state;
 pub(crate) mod ui_window;
 
@@ -23,10 +29,11 @@ use std::sync::Arc;
 use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
-use crate::app::launcher::{LauncherAction, LauncherItem, Module};
+use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module};
 use crate::app::shell::AppShell;
 
-use host::CommandTarget;
+use actions::{ActionSubject, extension_actions};
+use host::{CommandTarget, RefreshReport};
 use state::ExtensionsState;
 
 /// Extensions 模块：扫描插件根，把每条命令变成一条 launcher item。
@@ -48,16 +55,52 @@ impl Module for ExtensionsModule {
         };
 
         if !report.errors.is_empty() || !report.notices.is_empty() {
-            let console = cx.global::<AppShell>().console_channel.clone();
-            for error in report.errors {
-                console.warn(error);
-            }
-            for notice in report.notices {
-                console.info(notice);
-            }
+            report_to_console(cx, &report);
         }
 
-        items_in(&targets)
+        let mut items = builtin_items();
+        items.extend(items_in(&targets));
+        items
+    }
+}
+
+/// 不依赖任何插件的内置入口：管理窗口、新建扩展。
+fn builtin_items() -> Vec<LauncherItem> {
+    vec![
+        LauncherItem {
+            id: "extensions.open-manager".to_string(),
+            title: "扩展管理".to_string(),
+            subtitle: Some("查看状态、启用/禁用、重载、卸载".to_string()),
+            icon: IconName::Puzzle.into(),
+            group: "内置".to_string(),
+            keywords: vec!["extensions".to_string(), "manager".to_string()],
+            on_confirm: Arc::new(manager::window::open_manager),
+            actions: Vec::new(),
+            paste: None,
+        },
+        LauncherItem {
+            id: "extensions.new".to_string(),
+            title: "新建扩展".to_string(),
+            subtitle: Some("生成插件目录、清单与类型声明".to_string()),
+            icon: IconName::FilePlus.into(),
+            group: "内置".to_string(),
+            keywords: vec!["extensions".to_string(), "new".to_string()],
+            on_confirm: Arc::new(create::window::open_create),
+            actions: Vec::new(),
+            paste: None,
+        },
+    ]
+}
+
+/// 把一次扫描的结论写进 Console：`errors` 是插件坏了，`notices` 是"没坏，只是
+/// 你可能想升个版本号"。
+pub(crate) fn report_to_console(cx: &App, report: &RefreshReport) {
+    let console = cx.global::<AppShell>().console_channel.clone();
+    for error in &report.errors {
+        console.warn(error.clone());
+    }
+    for notice in &report.notices {
+        console.info(notice.clone());
     }
 }
 
@@ -74,6 +117,16 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
                 Arc::new(move |cx| exec::run_command(cx, captured.clone()))
             };
 
+            // 主操作放第一条（回车等价），插件级管理动作跟在后面：这样
+            // `actions_for` 不再补默认「打开」，用户也不用背两套入口。
+            let mut actions: Vec<ItemAction> = vec![ItemAction {
+                title: if ui { "打开窗口" } else { "运行" }.to_string(),
+                shortcut: Some("↵"),
+                run: on_confirm.clone(),
+                dialog: None,
+            }];
+            actions.extend(extension_actions(&ActionSubject::from_target(target)));
+
             LauncherItem {
                 id: target.item_id(),
                 title: target.title.clone(),
@@ -89,7 +142,7 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
                 group: "扩展".to_string(),
                 keywords: vec![target.plugin_id.clone(), target.command_id.clone()],
                 on_confirm,
-                actions: Vec::new(),
+                actions,
                 paste: None,
             }
         })
@@ -155,6 +208,43 @@ mod tests {
     #[test]
     fn empty_plugin_yields_no_items() {
         assert!(items_in(&[]).is_empty());
+    }
+
+    #[test]
+    fn builtin_items_open_the_manager_and_the_create_form() {
+        let items = builtin_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "extensions.open-manager");
+        assert_eq!(items[0].group, "内置");
+        assert_eq!(items[1].id, "extensions.new");
+        assert_eq!(items[1].group, "内置");
+    }
+
+    #[test]
+    fn items_carry_plugin_actions_and_keep_the_defaults() {
+        let items = items_in(&[target("hello", None)]);
+        let titles: Vec<&str> = items[0]
+            .actions
+            .iter()
+            .map(|action| action.title.as_str())
+            .collect();
+        assert_eq!(
+            titles,
+            vec![
+                "运行",
+                "重新加载",
+                "禁用插件",
+                "在 Finder 中显示",
+                "打开数据目录",
+                "卸载插件…",
+            ]
+        );
+
+        // actions 非空 → actions_for 不再补「打开」，但两条关键词动作照旧追加。
+        let all = crate::app::launcher::actions::actions_for(&items[0]);
+        let titles: Vec<&str> = all.iter().map(|action| action.title.as_str()).collect();
+        assert_eq!(titles.last(), Some(&"编辑搜索关键词"));
+        assert_eq!(titles.len(), 6 + 2);
     }
 
     #[test]

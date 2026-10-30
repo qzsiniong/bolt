@@ -77,6 +77,36 @@ impl Render for ExtensionChrome {
     }
 }
 
+/// 关掉某个插件的所有 UI 窗口，返回关掉的数量。
+///
+/// 重载 / 卸载前必须调：gpui-shell 的 watcher 与已加载视图都指向那个目录，
+/// 目录被替换或移走之后它们只会一路报错，比关窗难排查得多。
+pub(crate) fn close_plugin_windows(cx: &mut App, root: &std::path::Path) -> usize {
+    let handles: Vec<PathBuf> = {
+        let state = cx.global::<ExtensionsState>();
+        state
+            .ui_windows
+            .keys()
+            .filter(|path| path.as_path() == root)
+            .cloned()
+            .collect()
+    };
+    let mut closed = 0;
+    for path in handles {
+        let Some(handle) = cx.global_mut::<ExtensionsState>().ui_windows.remove(&path) else {
+            continue;
+        };
+        // 句柄失效说明窗口已经关了，不算这次关的。
+        if handle
+            .update(cx, |_, window, _| window.remove_window())
+            .is_ok()
+        {
+            closed += 1;
+        }
+    }
+    closed
+}
+
 /// 打开（或聚焦）一条 UI 命令的窗口。
 pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     let console = cx.global::<AppShell>().console_channel.clone();

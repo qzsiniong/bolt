@@ -87,18 +87,24 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
                 ItemAction {
                     title: "在 Finder 中显示".to_string(),
                     shortcut: None,
-                    run: Arc::new(move |_| match mac_ffi::reveal_in_finder(&reveal_path) {
-                        Ok(()) => mac_ffi::notify(
-                            "Bolt",
-                            &format!(
-                                "已在 Finder 中显示 {}",
-                                reveal_path
-                                    .file_name()
-                                    .map(|s| s.to_string_lossy().into_owned())
-                                    .unwrap_or_default()
-                            ),
-                        ),
-                        Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
+                    // 同 apps 模块：open 走工作线程，别占 UI 帧。
+                    run: Arc::new({
+                        let display = reveal_path
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        move |_| {
+                            let display = display.clone();
+                            mac_ffi::reveal_in_background(reveal_path.clone(), move |result| {
+                                match result {
+                                    Ok(()) => mac_ffi::notify(
+                                        "Bolt",
+                                        &format!("已在 Finder 中显示 {display}"),
+                                    ),
+                                    Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
+                                }
+                            })
+                        }
                     }),
                     dialog: None,
                 },
