@@ -163,6 +163,7 @@ mod tests {
             entry: "index.js".into(),
             depends: Vec::new(),
             optional_depends: Vec::new(),
+            permissions: Vec::new(),
             commands: Vec::new(),
         };
         assert_eq!(manifest.display_name(), "demo");

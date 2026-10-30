@@ -50,14 +50,20 @@ pub fn register(registry: &mut HostRegistry) {
         HostModule::new("bolt")
             .declaration(DECLARATION)
             .export("sleep")
-            .export("readFile")
-            .export("writeFile")
-            .export("listDir")
-            .export("fetch")
-            .export("exec")
-            .export("env")
+            // fs：全盘任意路径读写。
+            .export_guarded("readFile", "fs")
+            .export_guarded("writeFile", "fs")
+            .export_guarded("listDir", "fs")
+            // net：任意网络请求。
+            .export_guarded("fetch", "net")
+            // exec：sh -c 任意命令。
+            .export_guarded("exec", "exec")
+            // env：读进程环境变量。
+            .export_guarded("env", "env")
             .export("exit")
-            .export("typeStr")
+            // typeStr：向焦点窗口注入键盘输入。
+            .export_guarded("typeStr", "typeStr")
+            // 交互 API 不需要声明：用户当场看到并操作弹窗/选择器。
             .export("requestFocus")
             .export("confirm")
             .export("pickPath")

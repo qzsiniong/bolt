@@ -45,13 +45,17 @@ impl JsEnv for BoltJsEnv {
         bolt::install_interaction(ctx, &run.bridge)
     }
 
-    fn host_modules(&self) -> Vec<HostModuleSpec> {
+    fn host_modules(&self, permissions: &[String]) -> Vec<HostModuleSpec> {
         self.registry
             .modules
             .values()
-            .map(|module| HostModuleSpec {
-                name: module.name.clone(),
-                exports: module.exports().to_vec(),
+            .map(|module| {
+                let (exports, denied) = module.exports_for(permissions);
+                HostModuleSpec {
+                    name: module.name.clone(),
+                    exports,
+                    denied,
+                }
             })
             .collect()
     }

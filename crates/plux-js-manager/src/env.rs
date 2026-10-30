@@ -13,10 +13,15 @@ use rquickjs::Ctx;
 ///
 /// 模块本体由宿主在 `install_base` 里挂到 `globalThis.__<name>` 上；loader 只负责
 /// 生成一个转发模块，把 `exports` 里的名字重新导出。
+///
+/// `exports` 与 `denied` 是同一份宿主导出清单按插件权限过滤后的两半：`exports`
+/// 允许调用，`denied` 里的 `(导出名, 权限名)` 会生成调用即抛错的占位函数——
+/// `import` 不炸，但一调用就能看到"清单缺什么权限"的明确报错。
 #[derive(Clone, Debug)]
 pub struct HostModuleSpec {
     pub name: String,
     pub exports: Vec<String>,
+    pub denied: Vec<(String, String)>,
 }
 
 /// 日志级别：宿主要把它映射成 Console 面板的样式。
@@ -46,7 +51,12 @@ pub trait JsEnv: Send + Sync + 'static {
     fn install_scope<'js>(&self, ctx: &Ctx<'js>, scope: &dyn Scope) -> rquickjs::Result<()>;
 
     /// 脚本可以 `import` 的宿主模块清单。
-    fn host_modules(&self) -> Vec<HostModuleSpec>;
+    ///
+    /// `permissions` 是当前插件清单里声明的权限（`extension.json` 的
+    /// `permissions`）。实现应当按它过滤每个模块的导出：需要未声明权限的导出
+    /// 名放进 `HostModuleSpec::denied`（带上所需权限名），其余放进 `exports`。
+    /// 哪个导出需要哪个权限由宿主自己定义。
+    fn host_modules(&self, permissions: &[String]) -> Vec<HostModuleSpec>;
 
     /// 源码预处理：`.ts` 去类型。`.js` 原样返回。
     fn prepare_source(&self, path: &Path, code: &str) -> Result<String, String>;
@@ -68,7 +78,7 @@ impl JsEnv for EmptyEnv {
         Ok(())
     }
 
-    fn host_modules(&self) -> Vec<HostModuleSpec> {
+    fn host_modules(&self, _permissions: &[String]) -> Vec<HostModuleSpec> {
         Vec::new()
     }
 

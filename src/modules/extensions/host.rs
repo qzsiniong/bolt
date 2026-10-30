@@ -173,7 +173,7 @@ mod tests {
     use crate::modules::extensions::js_env::BoltJsEnv;
     use crate::modules::extensions::manifest;
     use crate::test_support::TempDir;
-    use plux_js_manager::{CancelToken, InvokeRequest, MANIFEST_FILE};
+    use plux_js_manager::{CancelToken, InvokeRequest, JsError, MANIFEST_FILE};
 
     fn host(tmp: &TempDir) -> ExtensionsHost {
         let mut registry = HostRegistry::new();
@@ -240,7 +240,7 @@ mod tests {
         write_plugin(
             &tmp,
             "probe-v1.0.0.js",
-            r#"{ "id": "probe", "version": "1.0.0", "commands": [{ "id": "home", "title": "Home" }] }"#,
+            r#"{ "id": "probe", "version": "1.0.0", "permissions": ["env"], "commands": [{ "id": "home", "title": "Home" }] }"#,
             "import { env } from 'bolt';\nexport function home() { return env('HOME') ?? 'unset'; }",
         );
 
@@ -258,6 +258,39 @@ mod tests {
             )
             .expect("home should run");
         assert!(output.is_some_and(|text| !text.is_empty()));
+    }
+
+    #[test]
+    fn undeclared_permissions_throw_at_call_time() {
+        // fail-closed：清单没声明 fs，import 不炸，调用 writeFile 抛出点名报错。
+        let tmp = TempDir::new("host-perm-denied");
+        write_plugin(
+            &tmp,
+            "guard-v1.0.0.js",
+            r#"{ "id": "guard", "version": "1.0.0", "commands": [{ "id": "write", "title": "Write" }] }"#,
+            "import { writeFile } from 'bolt';\nexport function write() { writeFile('/tmp/nope', 'x'); }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().is_empty());
+        let target = host.commands().into_iter().next().expect("one command");
+        host.ensure_loaded(&target).expect("guard should load");
+
+        let error = host
+            .store()
+            .invoke(
+                "guard",
+                "1.0.0",
+                InvokeRequest::new("write", CancelToken::new()),
+            )
+            .expect_err("denied call must throw");
+        match error {
+            JsError::Script(message) => {
+                assert!(message.contains("未声明权限"), "{message}");
+                assert!(message.contains("fs"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::{Ctx, Error, Module, Result};
 
-use crate::env::JsEnv;
+use crate::env::{HostModuleSpec, JsEnv};
 
 /// 恒等 resolver 的替代品：见模块头部说明，它会把相对说明符变成绝对路径。
 pub struct PluginResolver {
@@ -51,16 +51,17 @@ impl Resolver for PluginResolver {
 pub struct PluginLoader {
     root: PathBuf,
     env: Arc<dyn JsEnv>,
-    /// 宿主模块名 → 导出名列表。
-    host_modules: HashMap<String, Vec<String>>,
+    /// 宿主模块名 → 按本插件权限过滤后的导出（exports + denied 两半）。
+    host_modules: HashMap<String, HostModuleSpec>,
 }
 
 impl PluginLoader {
-    pub fn new(root: PathBuf, env: Arc<dyn JsEnv>) -> Self {
+    /// `permissions` 是插件清单里声明的权限（缺省为空 = 全关）。
+    pub fn new(root: PathBuf, env: Arc<dyn JsEnv>, permissions: &[String]) -> Self {
         let host_modules = env
-            .host_modules()
+            .host_modules(permissions)
             .into_iter()
-            .map(|module| (module.name, module.exports))
+            .map(|module| (module.name.clone(), module))
             .collect();
         Self {
             root,
@@ -83,8 +84,8 @@ impl Loader for PluginLoader {
         //    API），而入口模块在 install_base 之后、第一次 install_scope 之前就
         //    求值了——一次性解构会把当时的 undefined 固化进 const 绑定，插件里
         //    `import { confirm } from 'bolt'` 永远拿到 undefined。
-        if let Some(exports) = self.host_modules.get(name) {
-            let source = forwarding_module_source(name, exports);
+        if let Some(spec) = self.host_modules.get(name) {
+            let source = forwarding_module_source(name, &spec.exports, &spec.denied);
             return Module::declare(ctx.clone(), name, source);
         }
 
@@ -114,10 +115,14 @@ impl Loader for PluginLoader {
 /// `install_scope`），解构会把求值时刻的 `undefined` 固化进 const 绑定，
 /// 后装的函数在 `import` 命名空间里永远是 undefined。
 ///
-/// 宿主（bolt）的普通脚本 loader 复用同一份生成逻辑，保证两条链路行为
-/// 一致。
-pub fn forwarding_module_source(name: &str, exports: &[String]) -> String {
-    if exports.is_empty() {
+/// `denied` 是 `(导出名, 权限名)`：清单没声明对应权限的导出也照常出现在
+/// 模块里，但函数体是抛错桩——`import` 不炸，一调用就能看到"清单缺什么
+/// 权限"的明确报错，而不是模糊的 `undefined is not a function`。
+///
+/// 宿主（bolt）的普通脚本 loader 复用同一份生成逻辑（`denied` 传空），
+/// 保证两条链路行为一致。
+pub fn forwarding_module_source(name: &str, exports: &[String], denied: &[(String, String)]) -> String {
+    if exports.is_empty() && denied.is_empty() {
         return "// empty host module".to_string();
     }
     let forwards = exports
@@ -125,6 +130,11 @@ pub fn forwarding_module_source(name: &str, exports: &[String]) -> String {
         .map(|export| {
             format!("export function {export}(...args) {{ return globalThis.__{name}.{export}(...args); }}")
         })
+        .chain(denied.iter().map(|(export, permission)| {
+            format!(
+                "export function {export}(...args) {{ throw new Error('插件未声明权限 \"{permission}\"：请在 extension.json 的 permissions 中加入 \"{permission}\"'); }}"
+            )
+        }))
         .collect::<Vec<_>>()
         .join("\n");
     format!("{forwards}\n")
@@ -194,5 +204,35 @@ mod tests {
             Some(tmp.0.join("pkg/index.js"))
         );
         assert_eq!(resolve_file(&tmp.0, "", "missing.js"), None);
+    }
+
+    #[test]
+    fn denied_exports_become_throwing_stubs() {
+        let source = forwarding_module_source(
+            "bolt",
+            &["confirm".to_string()],
+            &[("readFile".to_string(), "fs".to_string())],
+        );
+        assert!(
+            source.contains("return globalThis.__bolt.confirm(...args);"),
+            "allowed export must forward: {source}"
+        );
+        assert!(
+            source.contains("throw new Error('插件未声明权限 \"fs\""),
+            "denied export must throw with the permission name: {source}"
+        );
+    }
+
+    #[test]
+    fn all_denied_still_emits_a_module() {
+        let source = forwarding_module_source(
+            "bolt",
+            &[],
+            &[("fetch".to_string(), "net".to_string())],
+        );
+        assert!(
+            source.contains("export function fetch"),
+            "denied-only module must still export the name: {source}"
+        );
     }
 }

@@ -23,6 +23,20 @@ pub const UI_ENTRY: &str = "main.js";
 /// 本 manager 认的 bundle 格式（目录名后缀）。
 pub const PLUGIN_FORMAT: &str = "js";
 
+/// 脚本命令可声明的权限名。缺省（不写 `permissions`）一个都不给：fail-closed。
+///
+/// - `fs` — readFile / writeFile / listDir（全盘任意路径）
+/// - `net` — fetch（任意网络请求）
+/// - `exec` — exec（`sh -c` 任意命令）
+/// - `env` — env（读进程环境变量）
+/// - `typeStr` — typeStr（向焦点窗口注入键盘输入）
+///
+/// 交互 API（confirm / pickPath / scanQr / requestFocus）、`sleep`、`exit`
+/// 与 console / 定时器不需要声明：它们要么由用户当场交互，要么无副作用。
+/// 剪贴板目前只在 UI 命令（gpui-shell）里暴露，由 `ui.capabilities.clipboard`
+/// 开关，与这里的权限名互不相干。
+pub const PERMISSIONS: &[&str] = &["fs", "net", "exec", "env", "typeStr"];
+
 /// 一个插件目录的清单。宽松解析（忽略未知字段）。
 #[derive(Clone, Debug, Deserialize)]
 pub struct PluginManifest {
@@ -40,6 +54,9 @@ pub struct PluginManifest {
     pub depends: Vec<String>,
     #[serde(default)]
     pub optional_depends: Vec<String>,
+    /// 脚本命令要用的权限名，取值见 [`PERMISSIONS`]。缺省为空：什么都不给。
+    #[serde(default)]
+    pub permissions: Vec<String>,
     #[serde(default)]
     pub commands: Vec<PluginCommand>,
 }
@@ -261,6 +278,16 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
     let depends = parse_depends(&manifest.depends)?;
     let optional_depends = parse_depends(&manifest.optional_depends)?;
 
+    // 权限名从紧校验：拼错的权限名如果不报错，作者会以为已经拿到能力。
+    for permission in &manifest.permissions {
+        if !PERMISSIONS.contains(&permission.as_str()) {
+            return Err(format!(
+                "未知权限 `{permission}`（清单 permissions）：合法值为 {}",
+                PERMISSIONS.join(", ")
+            ));
+        }
+    }
+
     Ok(PluginPackage {
         manifest,
         bundle,
@@ -478,6 +505,29 @@ mod tests {
         write_plugin(&tmp, "demo-v1.0.0.js", bad, &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("bad req must fail");
         assert!(err.contains("版本要求"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn permissions_default_to_empty_and_validate_names() {
+        // 缺省全关：没写 permissions 的清单解析为空列表。
+        let tmp = TempDir::new("manifest-perm-default");
+        write_plugin(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
+        assert!(package.manifest.permissions.is_empty());
+
+        // 声明合法权限原样保留。
+        let tmp = TempDir::new("manifest-perm-ok");
+        let manifest = r#"{ "id": "demo", "version": "1.0.0", "permissions": ["fs", "net"] }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
+        assert_eq!(package.manifest.permissions, ["fs", "net"]);
+
+        // 拼错的权限名必须报错，否则作者会以为已经拿到能力。
+        let tmp = TempDir::new("manifest-perm-typo");
+        let manifest = r#"{ "id": "demo", "version": "1.0.0", "permissions": ["fss"] }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("typo must fail");
+        assert!(err.contains("未知权限") && err.contains("fs, net, exec, env, typeStr"), "{err}");
     }
 
     #[test]

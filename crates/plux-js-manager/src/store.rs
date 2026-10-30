@@ -86,12 +86,16 @@ impl PluginStore {
     }
 
     /// 确保插件已有常驻运行时；已加载时直接返回。
+    ///
+    /// `permissions` 是插件清单里声明的权限（缺省为空 = 全关），运行时据此
+    /// 过滤宿主模块的导出。
     pub fn ensure_loaded(
         &self,
         id: &str,
         version: &str,
         root: &Path,
         entry: &Path,
+        permissions: &[String],
     ) -> Result<(), JsError> {
         let key = (id.to_string(), version.to_string());
         if self.workers.lock().contains_key(&key) {
@@ -103,6 +107,7 @@ impl PluginStore {
             version: version.to_string(),
             root: root.to_path_buf(),
             entry: entry.to_path_buf(),
+            permissions: permissions.to_vec(),
         };
         let worker = PluginWorker::spawn(spec, self.env.clone())?;
 
@@ -254,7 +259,7 @@ mod tests {
             Ok(())
         }
 
-        fn host_modules(&self) -> Vec<crate::env::HostModuleSpec> {
+        fn host_modules(&self, _permissions: &[String]) -> Vec<crate::env::HostModuleSpec> {
             Vec::new()
         }
 
@@ -283,7 +288,7 @@ mod tests {
         let store = PluginStore::new(env.clone());
         let root = tmp.0.join(dir);
         store
-            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"))
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
             .expect("plugin should load");
         (tmp, store, env)
     }
@@ -365,7 +370,7 @@ mod tests {
         let store = PluginStore::new(env);
         let root = tmp.0.join("demo-v1.0.0.js");
         store
-            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"))
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
             .expect("plugin should load");
 
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("nested"));
@@ -454,7 +459,7 @@ mod tests {
     }
 
     /// 带宿主模块的环境：`install_base` 只装基础函数，`install_scope` 才装
-    /// `typeStr`——复现 bolt 的真实时序。
+    /// `typeStr`——复现 bolt 的真实时序。`typeStr` 需要 `typeStr` 权限。
     struct ScopedEnv {
         logs: Arc<Mutex<Vec<String>>>,
     }
@@ -481,11 +486,18 @@ mod tests {
             Ok(())
         }
 
-        fn host_modules(&self) -> Vec<crate::env::HostModuleSpec> {
-            vec![crate::env::HostModuleSpec {
+        fn host_modules(&self, permissions: &[String]) -> Vec<crate::env::HostModuleSpec> {
+            let mut spec = crate::env::HostModuleSpec {
                 name: "bolt".to_string(),
-                exports: vec!["base".to_string(), "typeStr".to_string()],
-            }]
+                exports: vec!["base".to_string()],
+                denied: Vec::new(),
+            };
+            if permissions.iter().any(|p| p == "typeStr") {
+                spec.exports.push("typeStr".to_string());
+            } else {
+                spec.denied.push(("typeStr".to_string(), "typeStr".to_string()));
+            }
+            vec![spec]
         }
 
         fn prepare_source(&self, _path: &Path, code: &str) -> Result<String, String> {
@@ -509,7 +521,11 @@ mod tests {
     fn host_module_exports_track_apis_installed_after_load() {
         let tmp = TempDir::new("store-scope-module");
         let dir = "demo-v1.0.0.js";
-        tmp.write(&format!("{dir}/{MANIFEST_FILE}"), &manifest("demo"));
+        // 声明 typeStr 权限：转发模块里 typeStr 是真转发。
+        tmp.write(
+            &format!("{dir}/{MANIFEST_FILE}"),
+            r#"{ "id": "demo", "name": "Demo", "version": "1.0.0", "entry": "index.js", "permissions": ["typeStr"] }"#,
+        );
         tmp.write(
             &format!("{dir}/index.js"),
             "import * as bolt from 'bolt';\nexport function hello() { return `${typeof bolt.typeStr}|${bolt.typeStr('hi')}`; }",
@@ -519,7 +535,13 @@ mod tests {
         let store = PluginStore::new(env);
         let root = tmp.0.join(dir);
         store
-            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"))
+            .ensure_loaded(
+                "demo",
+                "1.0.0",
+                &root,
+                &root.join("index.js"),
+                &["typeStr".to_string()],
+            )
             .expect("plugin should load");
 
         // 调用时带上 scope，install_scope 才会把 typeStr 装上。
@@ -529,5 +551,33 @@ mod tests {
             store.invoke("demo", "1.0.0", request).unwrap().as_deref(),
             Some("function|hi")
         );
+    }
+
+    #[test]
+    fn undeclared_permission_throws_a_naming_error_at_call_time() {
+        // fail-closed：清单不声明 typeStr，import 不炸，调用时抛出点名报错。
+        let tmp = TempDir::new("store-perm-denied");
+        let dir = "demo-v1.0.0.js";
+        tmp.write(&format!("{dir}/{MANIFEST_FILE}"), &manifest("demo"));
+        tmp.write(
+            &format!("{dir}/index.js"),
+            "import { base, typeStr } from 'bolt';\nexport function hello() { return typeStr('x'); }",
+        );
+
+        let env = Arc::new(ScopedEnv::default());
+        let store = PluginStore::new(env);
+        let root = tmp.0.join(dir);
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .expect("plugin should load");
+
+        let error = call(&store, "hello").unwrap_err();
+        match error {
+            JsError::Script(message) => {
+                assert!(message.contains("未声明权限"), "{message}");
+                assert!(message.contains("typeStr"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }

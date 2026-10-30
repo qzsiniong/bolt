@@ -10,6 +10,7 @@
 - **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
 - **插件化扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
 - **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在插件自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
+- **fail-closed 插件权限**：脚本命令要用的危险 API（文件读写、网络、exec、env、输入注入）必须在清单 `permissions` 里声明，缺省一个都不给；普通脚本全权（等同自己写的代码）。详见[信任模型](docs/trust-model.md)。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
@@ -116,6 +117,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 | `description` | | 插件说明 |
 | `entry` | | 脚本命令入口，默认 `index.js`，只接受 `.js` / `.ts`。**纯 UI 插件不需要**：没有脚本命令时这个字段根本不读，也不用在目录里放 `index.js` |
 | `depends` / `optional_depends` | | `["base@^1.0"]` 形式的依赖声明，映射到 plux 的 `Depend`（不带 `@` 表示任意版本） |
+| `permissions` | | 脚本命令要用的权限名，如 `["fs", "net"]`。**缺省一个都不给（fail-closed）**：没声明的危险 API 在调用时抛错，报错里会写明缺哪个权限。详见[信任模型](docs/trust-model.md) |
 | `commands` | | 命令数组；**省略时会自动补一条 id 为 `run`、标题为插件展示名的命令** |
 
 `commands[*]` 的字段：
@@ -162,7 +164,7 @@ export async function hello({ command, plugin, root, argv }) {
 - **资源上限**：栈 8 MiB、堆 64 MiB；入口模块加载超时 30 秒。
 - 命令返回后宿主给残留的定时器 / 未决 Promise 200 ms 预算跑完，不会因为一个没清掉的 `setInterval` 卡住下一次调用。
 
-插件脚本与普通脚本拥有相同的能力：`console`、定时器、`bolt` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `requestFocus` / `confirm` / `pickPath` / `scanQr`）。交互 API 挂在常驻上下文上，每轮执行前用当轮的交互桥覆盖一次，所以进度窗、确认框、中止按钮都跟着当次命令走。
+插件脚本与普通脚本的能力来源相同：`console`、定时器、`bolt` 内置模块以及全部宿主交互 API（`typeStr` / `requestFocus` / `confirm` / `pickPath` / `scanQr`）。差别在权限：**普通脚本全权**（脚本编辑器里看得见全部代码，等同你自己写的）；**插件脚本命令受清单 `permissions` 约束**，未声明的危险 API（`readFile` / `writeFile` / `listDir` / `fetch` / `exec` / `env` / `typeStr`）调用时抛错。交互 API 挂在常驻上下文上，每轮执行前用当轮的交互桥覆盖一次，所以进度窗、确认框、中止按钮都跟着当次命令走。
 
 #### 错误隔离与生效时机
 
@@ -238,7 +240,7 @@ export default class DemoPanel extends View {
 - 状态就是视图字段，改完调用 `cx.notify()` 触发重绘。
 - 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
 - 数据目录：`~/Library/Application Support/bolt/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
-- **权限由宿主按 `ui` 块构建**：宿主始终授予「读插件目录 + 读/写自己的数据目录 + `storage` + `exit`」；`ui.capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。插件目录被当作你自己写的代码，不做审批弹窗。
+- **权限由宿主按 `ui` 块构建**：宿主始终授予「读插件目录 + 读/写自己的数据目录 + `storage` + `exit`」；`ui.capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。UI 命令不经 `bolt` 模块，不适用 `permissions` 声明。整体信任模型（哪些代码默认拿什么、边界在哪）见[信任模型](docs/trust-model.md)。
 - **宿主自绘标题栏**：每个 UI 命令的窗口顶部由宿主提供一条标题栏（插件名 + 右上角置顶图钉），下方才是插件自己的界面。插件脚本无需也无法自绘这一区域。
 - 首次加载会在插件目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
 - **debug 构建**下保存 `main.js` 即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
@@ -743,4 +745,5 @@ ctx.globals().set("console", console)?;
 - **插件生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 懒加载 / 读元数据」；真正的命令执行交给 `PluginStore`（`Arc` 可跨线程），因此打开 Launcher 扫描插件不会卡住 UI，命令也不会阻塞主线程。
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
 - **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。两侧的「说明符 → 磁盘文件」与「宿主模块转发源码生成」是**同一份实现**（`plux_js_manager::{resolve_file, forwarding_module_source}`），不再各写一遍。转发模块是**转发函数**而不是一次性解构——宿主 API 分两批安装（加载时装基础函数、每轮命令前装交互 API），解构会把加载时的 `undefined` 固化进 const 绑定。
+- **插件权限的落点**：`HostModule::export_guarded` 登记每个导出所需的权限；`JsEnv::host_modules(permissions)` 按插件清单把导出拆成「允许 / 拒绝」两半，拒绝项在转发模块里生成抛错桩（`import` 不炸，调用时点名缺哪个权限）。脚本链路不经过这道过滤——用户脚本全权。
 - **补全修正**：`typescript-language-server` 返回的候选带全量列表且无 `text_edit`，provider 侧按光标前缀过滤，并补齐 `text_edit` 范围，避免成员访问时点号被替换吞掉。

@@ -67,13 +67,15 @@ if (!handler) {
 }
 "#;
 
-/// 工人线程需要知道的插件身份与路径。
+/// 工人线程需要知道的插件身份、路径与权限。
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerSpec {
     pub id: String,
     pub version: String,
     pub root: PathBuf,
     pub entry: PathBuf,
+    /// 清单里声明的权限（`extension.json` 的 `permissions`），缺省为空。
+    pub permissions: Vec<String>,
 }
 
 pub(crate) enum WorkerMsg {
@@ -219,10 +221,13 @@ async fn build_engine(
         .set_interrupt_handler(Some(Box::new(move || flag.load(Ordering::SeqCst))))
         .await;
 
-    let loader = PluginLoader::new(spec.root.clone(), env.clone());
+    let loader = PluginLoader::new(spec.root.clone(), env.clone(), &spec.permissions);
     let resolver = PluginResolver::new(
         spec.root.clone(),
-        env.host_modules().into_iter().map(|m| m.name).collect(),
+        env.host_modules(&spec.permissions)
+            .into_iter()
+            .map(|m| m.name)
+            .collect(),
     );
     runtime.set_loader(resolver, loader).await;
 

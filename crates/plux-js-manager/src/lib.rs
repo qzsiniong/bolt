@@ -28,8 +28,8 @@ pub use error::JsError;
 pub use loader::{forwarding_module_source, resolve_file};
 pub use manager::JsManager;
 pub use manifest::{
-    MANIFEST_FILE, PLUGIN_FORMAT, PluginCommand, PluginManifest, PluginPackage, UI_ENTRY,
-    UiCapabilities, UiSpec,
+    MANIFEST_FILE, PERMISSIONS, PLUGIN_FORMAT, PluginCommand, PluginManifest, PluginPackage,
+    UI_ENTRY, UiCapabilities, UiSpec,
 };
 pub use meta::PluginMeta;
 pub use store::{DEFAULT_TIMEOUT, InvokeRequest, PluginStore, bundle_key};

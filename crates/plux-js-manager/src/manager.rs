@@ -77,6 +77,7 @@ impl<'a> Manager<'a, FunctionOutput, PluginMeta> for JsManager {
                 &info.bundle.version.to_string(),
                 &meta.root,
                 entry,
+                &meta.manifest.permissions,
             )
             .map_err(boxed)
     }

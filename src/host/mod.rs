@@ -29,6 +29,10 @@ pub struct HostModule {
     pub name: String,
     declaration: String,
     exports: Vec<String>,
+    /// 导出名 → 所需权限（见 `plux_js_manager::PERMISSIONS`）。没登记的导出
+    /// 不需要声明。插件运行时用它把导出拆成"允许 / 拒绝"两半；普通脚本链路
+    /// 不看它（脚本 = 用户自己写的代码，全权）。
+    required: HashMap<String, String>,
     installer: Installer,
 }
 
@@ -38,6 +42,7 @@ impl HostModule {
             name: name.into(),
             declaration: String::new(),
             exports: Vec::new(),
+            required: HashMap::new(),
             installer: Box::new(|_| Ok(())),
         }
     }
@@ -54,10 +59,29 @@ impl HostModule {
         self
     }
 
-    /// 导出名列表。插件运行时（`plux-js-manager`）用它生成转发模块：把
-    /// `globalThis.__<name>` 上的函数重新 `export` 出去。
-    pub fn exports(&self) -> &[String] {
-        &self.exports
+    /// Add an exported name guarded by a permission: 插件清单不声明该权限时，
+    /// 运行时里这个导出是调用即抛错的占位函数。
+    pub fn export_guarded(mut self, name: impl Into<String>, permission: &str) -> Self {
+        let name = name.into();
+        self.required.insert(name.clone(), permission.to_string());
+        self.exports.push(name);
+        self
+    }
+
+    /// 按权限拆导出：返回 `(允许, 拒绝)`。拒绝项带所需权限名，供转发模块
+    /// 生成抛错桩。未登记权限的导出一律放行。
+    pub fn exports_for(&self, permissions: &[String]) -> (Vec<String>, Vec<(String, String)>) {
+        let mut allowed = Vec::new();
+        let mut denied = Vec::new();
+        for export in &self.exports {
+            match self.required.get(export) {
+                Some(permission) if !permissions.contains(permission) => {
+                    denied.push((export.clone(), permission.clone()));
+                }
+                _ => allowed.push(export.clone()),
+            }
+        }
+        (allowed, denied)
     }
 
     /// Installer called inside the QuickJS context to register native
@@ -150,9 +174,10 @@ impl Loader for HostLoader {
     ) -> Result<Module<'js>> {
         // 1. Registered host module → forward to the global namespace.
         //    转发源码由 plux-js-manager 统一生成（转发函数每次调用都现取
-        //    `globalThis.__<name>`，插件与脚本两条链路行为一致）。
+        //    `globalThis.__<name>`，插件与脚本两条链路行为一致）。脚本链路
+        //    是用户自己写的代码，全权：denied 恒为空。
         if let Some(module) = self.registry.modules.get(name) {
-            let source = plux_js_manager::forwarding_module_source(&module.name, &module.exports);
+            let source = plux_js_manager::forwarding_module_source(&module.name, &module.exports, &[]);
             return Module::declare(ctx.clone(), name, source);
         }
 
