@@ -7,7 +7,13 @@
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
+use gpui_kit::{
+    AppContext, InteractiveElement, ParentElement, Styled, StyledImage,
+    AnyWindowHandle, App, Bounds, Context, FocusHandle, Focusable, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, ObjectFit, Pixels, Point, Render, RenderImage,
+    ScrollDelta, ScrollWheelEvent, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    WindowOptions, FontWeight, div, img, point, px, rgb, size,
+};
 
 use image::Rgba;
 use std::sync::Arc;

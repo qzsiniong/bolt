@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::Receiver;
 use gpui_kit::component::dock::{DockArea, DockLayout, DockSkin, panel_handle};
-use gpui_kit::*;
+use gpui_kit::{AppContext, InteractiveElement, ParentElement, Styled,
+    Context, Entity, IntoElement, KeyBinding, Render, Subscription, Window, div, px,
+};
 
 use super::panels::editor::{RunRequested, StopRequested};
 use super::panels::script_list_panel::ScriptSelected;

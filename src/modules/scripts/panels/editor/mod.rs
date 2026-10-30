@@ -16,7 +16,10 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::component::{Disableable, IconName};
-use gpui_kit::*;
+use gpui_kit::{AppContext, InteractiveElement, ParentElement, Styled,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    KeyBinding, Render, Subscription, Task, Window, div, px,
+};
 use parking_lot::Mutex;
 
 use self::actions::{

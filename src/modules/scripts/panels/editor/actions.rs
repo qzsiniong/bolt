@@ -2,7 +2,7 @@
 //! transform and applies it to the editor.
 
 use gpui_kit::component::input::Rope;
-use gpui_kit::*;
+use gpui_kit::{Context, Window};
 
 use super::EditorPanel;
 use crate::ui::editor_ops;

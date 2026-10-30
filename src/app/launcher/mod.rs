@@ -44,7 +44,10 @@ use gpui_kit::prelude::FluentBuilder as _;
 
 use super::shell::AppShell;
 use super::usage;
-use gpui_kit::*;
+use gpui_kit::{
+    App, AppContext, Context, Entity, Focusable, IntoElement, InteractiveElement, KeyBinding,
+    KeyDownEvent, ParentElement, Render, Styled, Task, Window, div, img, px, rems,
+};
 
 use crate::ui::clipboard::{PendingPaste, peek_paste, read_paste_content};
 

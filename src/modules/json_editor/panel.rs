@@ -10,8 +10,10 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
-use gpui_kit::*;
-
+use gpui_kit::{AppContext, ParentElement, Styled,
+    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Subscription, Window,
+    FontWeight, div, px,
+};
 use super::parsers;
 use crate::ui::window_pin::WindowPin;
 

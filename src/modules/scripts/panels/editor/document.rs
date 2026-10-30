@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use gpui_kit::component::WindowExt;
-use gpui_kit::*;
+use gpui_kit::{AsyncApp, Context, WeakEntity, Window};
 
 use super::{EditorPanel, RunRequested};
 use crate::app::shell::AppShell;

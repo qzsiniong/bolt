@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use gpui_kit::*;
+use gpui_kit::{Context, Entity, EventEmitter, Subscription, Task};
 
 use super::interaction::InteractionBridge;
 use super::interaction_window_manager::InteractionWindowManager;

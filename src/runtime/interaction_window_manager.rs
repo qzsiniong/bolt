@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use futures::channel::oneshot;
-use gpui_kit::*;
+use gpui_kit::{AppContext,
+    AnyWindowHandle, App, Entity, PathPromptOptions, TitlebarOptions, WindowBounds,
+    WindowKind, WindowOptions, px, size,
+};
 
 use super::interaction::{ConfirmChoice, InteractionBridge, PickKind, ProgressSlot, UiRequest};
 use super::runner::CancelToken;
@@ -28,9 +31,10 @@ const PROGRESS_WINDOW_DELAY: Duration = Duration::from_millis(300);
 const INTERACTION_WINDOW_SIZE: (f32, f32) = (420., 150.);
 
 /// A `pickPath` call waiting on the native file picker.
+/// `Receiver` 是 gpui `prompt_for_paths` 的返回类型（futures-channel oneshot）。
 type PickPending = (
     Sender<Option<PathBuf>>,
-    oneshot::Receiver<Result<Option<Vec<PathBuf>>>>,
+    oneshot::Receiver<anyhow::Result<Option<Vec<PathBuf>>>>,
 );
 
 /// 交互浮窗管理器：一轮运行一个实例状态（`begin_run` 重置）。

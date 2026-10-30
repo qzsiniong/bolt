@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use global_hotkey::GlobalHotKeyManager;
-use gpui_kit::*;
+use gpui_kit::{AnyWindowHandle, Entity, Global, Task};
 
 use super::launcher::{LauncherAction, Module};
 use crate::console_channel::{ConsoleChannel, ConsoleEntry};

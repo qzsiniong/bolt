@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use gpui_kit::*;
+use gpui_kit::AppContext;
 
 use super::assets::ExtensionAssets;
 use super::shell::{APP_TICK, AppShell};

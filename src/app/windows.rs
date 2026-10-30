@@ -3,7 +3,7 @@
 //! extensions) open themselves — see each module's `window`/`ui_window` file.
 
 use crossbeam_channel::Receiver;
-use gpui_kit::*;
+use gpui_kit::{App, AppContext, Bounds, DisplayId, WindowBounds, WindowKind, WindowOptions, px, size};
 
 use super::launcher::{Launcher, LauncherAction};
 use super::shell::AppShell;

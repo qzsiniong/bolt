@@ -17,7 +17,12 @@ use crossbeam_channel::{Receiver, Sender};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::v_flex;
 use gpui_kit::component::{ActiveTheme, Icon};
-use gpui_kit::*;
+use gpui_kit::{
+    AppContext, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
+    AnyWindowHandle, App, Bounds, Context, DisplayId, IntoElement, MouseButton,
+    Render, Task, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+    FontWeight, div, point, px, rgb, size,
+};
 
 use crate::app::shell::AppShell;
 

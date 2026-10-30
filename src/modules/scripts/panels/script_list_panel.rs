@@ -5,7 +5,11 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
-use gpui_kit::*;
+use gpui_kit::{
+    InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
+    WeakEntity, Window, FontWeight, div, transparent_black,
+};
 
 use super::editor::EditorPanel;
 use crate::app::shell::AppShell;
@@ -300,7 +304,7 @@ impl Render for ScriptListPanel {
                 let row_bg = if is_selected {
                     muted_fg.opacity(0.15)
                 } else {
-                    gpui::transparent_black()
+                    transparent_black()
                 };
 
                 let fn_req = file_name.clone();
