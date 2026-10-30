@@ -202,14 +202,14 @@ async fn run_async(
                     // A cancelled run bails out with the interrupt exception;
                     // the caller reports the abort instead.
                     if !cancel.is_cancelled() {
-                        log_caught(console, &e);
+                        report_outcome(console, &e, file_name);
                     }
                 }
             }
             Err(e) => {
                 if !cancel.is_cancelled() {
                     let caught = rquickjs::CaughtError::from_error(&ctx, e);
-                    log_caught(console, &caught);
+                    report_outcome(console, &caught, file_name);
                 }
             }
         }
@@ -238,6 +238,23 @@ pub(crate) fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) 
             console.error(e.to_string());
         }
     }
+}
+
+/// Report a failed evaluation. `bolt.exit(code)` unwinds by throwing the
+/// sentinel `__bolt_exit_<code>__`; that is a normal termination, not an
+/// error — report a clean finish with the code instead.
+fn report_outcome(console: &ConsoleChannel, err: &rquickjs::CaughtError, file_name: &str) {
+    if let rquickjs::CaughtError::Exception(ex) = err
+        && let Some(msg) = ex.message()
+        && let Some(code) = msg
+            .strip_prefix("__bolt_exit_")
+            .and_then(|rest| rest.strip_suffix("__"))
+            .and_then(|code| code.parse::<i32>().ok())
+    {
+        console.info(format!("✔ Finished {file_name} (exit {code})"));
+        return;
+    }
+    log_caught(console, err);
 }
 
 #[cfg(test)]

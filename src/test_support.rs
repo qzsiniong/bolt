@@ -1,6 +1,13 @@
 //! Shared scaffolding for unit tests. Compiled only under `cargo test`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::console_channel::ConsoleChannel;
+use crate::host::{HostRegistry, modules};
+use crate::model::script::Language;
+use crate::runtime::interaction::InteractionBridge;
+use crate::runtime::runner::{CancelToken, RunEnv, run_script};
 
 /// A temporary directory that is removed when dropped.
 ///
@@ -33,4 +40,33 @@ impl Drop for TempDir {
 /// LSP position constructor.
 pub fn position(line: u32, character: u32) -> lsp_types::Position {
     lsp_types::Position { line, character }
+}
+
+/// Run a JS snippet through the real runner (all built-in host modules
+/// registered) and return the console lines. Host-layer tests use it to
+/// exercise the public `import { … } from 'bolt'` path end-to-end.
+pub fn run_js(code: &str, scripts_dir: &Path) -> Vec<String> {
+    let mut registry = HostRegistry::new();
+    modules::register_all(&mut registry);
+    run_with_registry(code, scripts_dir, Arc::new(registry))
+}
+
+/// Same as [`run_js`] with a custom registry (e.g. to test loader precedence).
+pub fn run_with_registry(
+    code: &str,
+    scripts_dir: &Path,
+    registry: Arc<HostRegistry>,
+) -> Vec<String> {
+    let (channel, rx) = ConsoleChannel::new();
+    let cancel = CancelToken::new();
+    let env = RunEnv {
+        scripts_dir: scripts_dir.to_path_buf(),
+        registry,
+        console: channel,
+        cancel: cancel.clone(),
+        interaction: InteractionBridge::new(cancel).0,
+        plugins: None,
+    };
+    run_script(code, Language::JavaScript, "test.js", env);
+    rx.try_iter().map(|e| e.text).collect()
 }

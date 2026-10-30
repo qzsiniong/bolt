@@ -23,9 +23,15 @@ use crate::runtime::run_service::RunService;
 
 pub(crate) fn run() {
     // Console channel 先于一切创建：启动期错误（目录准备、播种、项目文件）
-    // 也进 Console 面板——打包成 .app 后 stderr 用户根本看不到。channel 是
-    // unbounded 的，面板打开前产生的条目会缓存，打开后一并显示。
-    let (console_channel, console_rx) = ConsoleChannel::new();
+    // 也进 Console 面板——打包成 .app 后 stderr 用户根本看不到。channel 有界
+    // （丢最旧），面板打开前产生的条目会缓存，打开后一并显示。Error 级条目
+    // 同时落盘 bolt.log：Console 面板只在脚本管理器窗口里，用户若从不打开
+    // 它，落盘文件就是启动失败唯一的出路。
+    let log_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("bolt")
+        .join("bolt.log");
+    let (console_channel, console_rx) = ConsoleChannel::new_with_error_log(log_path);
 
     let scripts_dir = script_store::scripts_dir();
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {

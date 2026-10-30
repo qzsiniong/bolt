@@ -344,7 +344,7 @@ scripts/
 
 应用启动时会依次完成：**先建 Console 通道**（第一时间创建，启动期任何失败都进 Console 面板而不是 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
 
-`eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（unbounded，面板打开前的条目会缓存下来，等用户打开管理器再补上）。
+`eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（有界，容量 1000、溢出丢最旧；面板打开前的条目会缓存下来，等用户打开管理器再补上）。`Error` 级条目还会同步落盘到数据目录的 `bolt.log`（滚动保留最近 500 行）——Console 面板只在脚本管理器窗口里，用户若从不打开它，日志文件就是启动失败唯一的出路。
 
 > **首次构建**：UI 命令的运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
 >
@@ -371,7 +371,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，插件直接放在它下面：`<id>-v<version>.js/`（见「Launcher 与扩展」），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，插件直接放在它下面：`<id>-v<version>.js/`（见「Launcher 与扩展」），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）、`bolt.log`（`Error` 级 Console 条目的落盘文件，滚动保留最近 500 行，排查启动失败用它）。
 
 ## 快捷键
 
@@ -731,8 +731,8 @@ ctx.globals().set("console", console)?;
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
 | [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS）、`store`（跨线程执行入口）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
-| [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
-| [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |
+| [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道：有界（1000 条，溢出丢最旧），`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；跨层共享的叶子模块 |
+| [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`、`run_js` headless 运行器） |
 
 分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端，`core` 放与领域无关、可单独测试的通用基础设施。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。需要脱离 gpui 单独测试的能力（如插件运行时）放 `crates/` 下的独立 crate。
 

@@ -62,3 +62,45 @@ impl Script {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn language_from_extension() {
+        assert_eq!(
+            Language::from_path(Path::new("a.js")),
+            Some(Language::JavaScript)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("a.ts")),
+            Some(Language::TypeScript)
+        );
+        assert_eq!(Language::from_path(Path::new("a.json")), None);
+        assert_eq!(Language::from_path(Path::new("a")), None);
+        assert_eq!(Language::JavaScript.extension(), "js");
+        assert_eq!(Language::TypeScript.as_str(), "typescript");
+    }
+
+    #[test]
+    fn script_read_extracts_name_stem_and_content() {
+        let tmp = crate::test_support::TempDir::new("script-read");
+        let path = tmp.0.join("my.tool.js");
+        std::fs::write(&path, "// hi").unwrap();
+
+        let script = Script::read(&path).unwrap();
+        assert_eq!(script.name, "my.tool"); // file_stem：点号属于名字
+        assert_eq!(script.file_name, "my.tool.js");
+        assert_eq!(script.language, Language::JavaScript);
+        assert_eq!(script.content, "// hi");
+    }
+
+    #[test]
+    fn script_read_rejects_unknown_extension() {
+        let tmp = crate::test_support::TempDir::new("script-read-bad");
+        let path = tmp.0.join("note.md");
+        std::fs::write(&path, "x").unwrap();
+        assert_eq!(Script::read(&path).unwrap_err(), "unknown extension");
+    }
+}

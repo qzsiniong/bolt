@@ -255,11 +255,11 @@ fn env_var(key: String) -> Result<Option<String>> {
     Ok(std::env::var(&key).ok())
 }
 
-/// `exit(code)` — throws a sentinel string the runner detects.
+/// `exit(code)` — throws a sentinel exception the runner detects (see
+/// `runner::report_outcome`); the run finishes cleanly with the exit code.
 fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
     let msg = format!("__bolt_exit_{}__", code);
-    let val = msg.into_js(&ctx)?;
-    Err(ctx.throw(val))
+    Err(throw_error(&ctx, msg))
 }
 
 // ── Interaction functions ──────────────────────────────────────────────────
@@ -438,4 +438,163 @@ async fn exec_cmd<'js>(ctx: Ctx<'js>, cmd: String) -> Result<Value<'js>> {
     obj.set("stdout", String::from_utf8_lossy(&out.stdout).into_owned())?;
     obj.set("stderr", String::from_utf8_lossy(&out.stderr).into_owned())?;
     obj.into_js(&ctx)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_support::{TempDir, run_js};
+
+    /// Assert `code` produced a console line matching `needle`.
+    #[track_caller]
+    fn assert_line(lines: &[String], needle: &str) {
+        assert!(
+            lines.iter().any(|l| l.contains(needle)),
+            "missing `{needle}` in console output: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn file_fns_roundtrip_and_list_dir() {
+        let tmp = TempDir::new("bolt-file-fns");
+        tmp.write("sub/a.txt", "one");
+        tmp.write("sub/b.txt", "two");
+
+        let code = r#"
+            import { writeFile, readFile, listDir } from 'bolt';
+            writeFile('%DIR%/out.txt', 'written by bolt');
+            console.log('content=' + readFile('%DIR%/out.txt'));
+            console.log('entries=' + listDir('%DIR%/sub').sort().join(','));
+        "#
+        .replace("%DIR%", &tmp.0.to_string_lossy());
+        let lines = run_js(&code, &tmp.0);
+        assert_line(&lines, "content=written by bolt");
+        assert_line(&lines, "entries=a.txt,b.txt");
+    }
+
+    #[test]
+    fn reading_a_missing_file_throws_a_catchable_error() {
+        let tmp = TempDir::new("bolt-missing-file");
+        let code = r#"
+            import { readFile } from 'bolt';
+            try { readFile('/no/such/file'); console.log('no throw'); }
+            catch (e) { console.log('caught: ' + String(e).slice(0, 20)); }
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert_line(&lines, "caught:");
+        assert!(!lines.iter().any(|l| l.contains("no throw")));
+    }
+
+    #[test]
+    fn env_returns_undefined_for_missing_keys() {
+        let tmp = TempDir::new("bolt-env");
+        let code = r#"
+            import { env } from 'bolt';
+            console.log('missing=' + (env('BOLT_NO_SUCH_VAR_XYZ') ?? 'unset'));
+            console.log('present=' + (env('HOME') !== undefined));
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert_line(&lines, "missing=unset");
+        assert_line(&lines, "present=true");
+    }
+
+    #[test]
+    fn exec_returns_code_stdout_and_stderr() {
+        let tmp = TempDir::new("bolt-exec");
+        let code = r#"
+            import { exec } from 'bolt';
+            const { code, stdout, stderr } = await exec("echo out; echo err >&2; exit 7");
+            console.log(`code=${code} stdout=${stdout.trim()} stderr=${stderr.trim()}`);
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert_line(&lines, "code=7 stdout=out stderr=err");
+    }
+
+    #[test]
+    fn exit_unwinds_with_a_clean_finish() {
+        let tmp = TempDir::new("bolt-exit");
+        let code = r#"
+            import { exit } from 'bolt';
+            console.log('before');
+            exit(3);
+            console.log('never');
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert_line(&lines, "before");
+        assert!(!lines.iter().any(|l| l.contains("never")));
+        assert_line(&lines, "(exit 3)");
+        // 正常收尾，不能报 error。
+        assert!(
+            !lines.iter().any(|l| l.contains("__bolt_exit_")),
+            "sentinel must not leak into the console: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn negative_timer_delay_fires_immediately() {
+        let tmp = TempDir::new("bolt-negative-timer");
+        let code = r#"
+            setTimeout(() => console.log('fired'), -5);
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert_line(&lines, "fired");
+    }
+
+    #[test]
+    fn cleared_timer_never_fires() {
+        let tmp = TempDir::new("bolt-clear-timer");
+        let code = r#"
+            const id = setTimeout(() => console.log('fired'), 50);
+            clearTimeout(id);
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert!(
+            !lines.iter().any(|l| l.contains("fired")),
+            "cleared timer must not run: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn throwing_interval_stops_after_the_error() {
+        let tmp = TempDir::new("bolt-throwing-interval");
+        let code = r#"
+            let n = 0;
+            setInterval(() => {
+                n += 1;
+                console.log('tick ' + n);
+                throw new Error('boom');
+            }, 10);
+        "#;
+        let lines = run_js(code, &tmp.0);
+        // 回调抛错后 interval 停止：只有一次 tick + 一条错误。
+        assert_line(&lines, "tick 1");
+        assert!(
+            !lines.iter().any(|l| l.contains("tick 2")),
+            "interval must stop after a throwing callback: {lines:?}"
+        );
+        assert_line(&lines, "boom");
+    }
+
+    #[test]
+    fn pick_path_rejects_unknown_kinds_without_touching_the_ui() {
+        let tmp = TempDir::new("bolt-pick-kind");
+        let code = r#"
+            import { pickPath } from 'bolt';
+            try { await pickPath('p', 'nope'); console.log('no throw'); }
+            catch (e) { console.log('caught: ' + String(e).slice(0, 24)); }
+        "#;
+        let lines = run_js(code, &tmp.0);
+        assert_line(&lines, "kind 只支持");
+        assert!(!lines.iter().any(|l| l.contains("no throw")));
+    }
+
+    #[test]
+    fn console_renders_multiple_argument_shapes() {
+        let tmp = TempDir::new("bolt-console-shapes");
+        let code = r#"
+            console.log('a', 1, true, null, undefined, [1, 2], { k: 'v' });
+        "#;
+        let lines = run_js(code, &tmp.0);
+        // 混合参数不 panic、按空格拼接即可（对象走 String() 强转）。
+        assert_line(&lines, "a 1 true null undefined");
+    }
 }

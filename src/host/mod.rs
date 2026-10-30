@@ -186,3 +186,102 @@ impl Resolver for HostResolver {
         Ok(name.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{TempDir, run_js, run_with_registry};
+
+    #[test]
+    fn type_declarations_cover_every_registered_module() {
+        let mut registry = HostRegistry::new();
+        modules::register_all(&mut registry);
+        let names: Vec<&String> = registry.modules.keys().collect();
+        assert!(
+            names.iter().any(|n| n.as_str() == "bolt"),
+            "built-in bolt module must be registered: {names:?}"
+        );
+
+        let tmp = TempDir::new("host-decls");
+        registry.write_type_declarations(&tmp.0).unwrap();
+        let bolt = std::fs::read_to_string(tmp.0.join("bolt.d.ts")).unwrap();
+        assert!(bolt.starts_with("declare module \"bolt\" {"), "{bolt}");
+        assert!(bolt.contains("export function readFile"), "{bolt}");
+    }
+
+    #[test]
+    fn host_module_import_reaches_the_bolt_globals() {
+        let tmp = TempDir::new("host-import");
+        let lines = run_js(
+            "import { listDir } from 'bolt'; console.log(typeof listDir);",
+            &tmp.0,
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("function")),
+            "host module export missing: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn file_module_import_resolves_relative_paths() {
+        let tmp = TempDir::new("host-file-import");
+        tmp.write(
+            "helper.js",
+            "export function hi() { return 'from helper'; }",
+        );
+        let lines = run_js(
+            "import { hi } from './helper.js'; console.log(hi());",
+            &tmp.0,
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("from helper")),
+            "file module import failed: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn ts_module_import_is_type_stripped() {
+        let tmp = TempDir::new("host-ts-import");
+        tmp.write(
+            "greeter.ts",
+            "export const greet = (name: string): string => `hi ${name}`;",
+        );
+        // 裸说明符（无扩展名）也要能解析到 .ts。
+        let lines = run_js(
+            "import { greet } from 'greeter'; console.log(greet('ts'));",
+            &tmp.0,
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("hi ts")),
+            "ts module import failed: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn missing_module_is_reported_not_fatal_to_the_engine() {
+        let tmp = TempDir::new("host-missing-import");
+        let lines = run_js("import './nope.js';", &tmp.0);
+        assert!(
+            lines.iter().any(|l| l.contains("module not found")),
+            "missing module must surface in console: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn loader_prefers_host_modules_over_files() {
+        let tmp = TempDir::new("host-precedence");
+        // 磁盘上有一个与宿主模块同名的文件：宿主模块必须赢。
+        tmp.write("bolt.js", "export const hijacked = true;");
+        let mut registry = HostRegistry::new();
+        modules::register_all(&mut registry);
+        let lines = run_with_registry(
+            "import * as bolt from 'bolt'; console.log(typeof bolt.readFile);",
+            &tmp.0,
+            std::sync::Arc::new(registry),
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("function")),
+            "host module must win over a same-named file: {lines:?}"
+        );
+    }
+}
