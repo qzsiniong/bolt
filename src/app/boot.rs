@@ -13,6 +13,8 @@ use super::{hotkey, tray, usage, windows};
 use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
 use crate::model::{project_gen, script_store};
+use crate::modules::extensions::host::ExtensionsHost;
+use crate::modules::extensions::js_env::BoltJsEnv;
 use crate::modules::extensions::manifest as extension;
 use crate::modules::extensions::state::ExtensionsState;
 use crate::modules::json_editor::state::JsonEditorState;
@@ -24,24 +26,25 @@ pub(crate) fn run() {
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {
         eprintln!("ensure scripts dir: {e}");
     }
-    // 扩展目录：debug 构建直接使用仓库里的 `extensions/`，改完重启即生效；
-    // release 构建用数据目录，并把仓库扩展播种进去（只补缺失，不覆盖用户改动）。
+    // 插件根：`<extensions>/plugins/`。debug 构建直接用仓库目录，改完重启即生效；
+    // release 构建用数据目录，并把仓库插件播种进去（只补缺失，不覆盖用户改动）。
     let extensions_dir = extension::active_extensions_dir();
-    if let Err(e) = extension::ensure_dir(&extensions_dir) {
-        eprintln!("ensure extensions dir: {e}");
+    let plugins_dir = extension::plugins_dir(&extensions_dir);
+    if let Err(e) = extension::ensure_dir(&plugins_dir) {
+        eprintln!("ensure plugins dir: {e}");
     }
     if extension::uses_bundled_extensions() {
         // 仓库目录就是工作树：不往里写示例，也没有「同步」这回事。
-        eprintln!("extensions dir: {}", extensions_dir.display());
+        eprintln!("plugins dir: {}", plugins_dir.display());
     } else {
-        // 首次启动给一个能直接跑的 UI 扩展示例（已存在则不动）。
-        if let Err(e) = extension::ensure_demo_ui_extension(&extensions_dir) {
-            eprintln!("ensure demo ui extension: {e}");
+        // 首次启动给一个能直接跑的示例插件（已存在则不动）。
+        if let Err(e) = extension::ensure_demo_plugin(&plugins_dir) {
+            eprintln!("ensure demo plugin: {e}");
         }
-        match extension::ensure_bundled_extensions(&extensions_dir) {
-            Ok(n) if n > 0 => eprintln!("synced {n} bundled extension(s)"),
+        match extension::ensure_bundled_extensions(&plugins_dir) {
+            Ok(n) if n > 0 => eprintln!("synced {n} bundled plugin(s)"),
             Ok(_) => {}
-            Err(e) => eprintln!("ensure bundled extensions: {e}"),
+            Err(e) => eprintln!("ensure bundled plugins: {e}"),
         }
     }
 
@@ -89,7 +92,7 @@ pub(crate) fn run() {
             // buffered and shows up when one opens.
             let (console_channel, console_rx) = ConsoleChannel::new();
 
-            // UI 扩展（gpui-shell）的诊断全部走 tracing：脚本的 console 输出、
+            // UI 命令（gpui-shell）的诊断全部走 tracing：脚本的 console 输出、
             // 加载失败、热重载结果。没有 subscriber 这些事件会被静默丢弃，
             // 所以必须在任何 shell 代码之前安装。
             shell_log::install(console_channel.clone());
@@ -104,8 +107,23 @@ pub(crate) fn run() {
                 }
             }
 
+            // plux 插件宿主：Loader 管生命周期与元数据，PluginStore 管执行。
+            // 必须在 RunService 之前就位——命令要在工作线程里跑，RunService 需要
+            // 拿到 store 才能投递。
+            let js_env = Arc::new(BoltJsEnv {
+                registry: registry.clone(),
+                console: console_channel.clone(),
+            });
+            let extensions_host = ExtensionsHost::new(&extensions_dir, js_env);
+            let plugin_store = extensions_host.store();
+
             let run_service = cx.new(|_cx| {
-                RunService::new(scripts_dir.clone(), registry.clone(), console_channel.clone())
+                RunService::new(
+                    scripts_dir.clone(),
+                    registry.clone(),
+                    console_channel.clone(),
+                    plugin_store.clone(),
+                )
             });
 
             // Raycast-style global hotkey toggles the launcher; Cmd+Shift+T pins
@@ -190,6 +208,7 @@ pub(crate) fn run() {
                 ui_windows: Default::default(),
                 assets: extension_assets,
                 shell_runtime,
+                host: std::cell::RefCell::new(extensions_host),
             });
 
             let modules = crate::modules::default_modules(cx);

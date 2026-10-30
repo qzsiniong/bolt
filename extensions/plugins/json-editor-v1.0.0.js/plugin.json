@@ -1,0 +1,20 @@
+{
+  "id": "json-editor",
+  "name": "JSON 编辑器",
+  "description": "类 JSON 文本的查看 / 格式化 / 压缩 / 过滤",
+  "version": "1.0.0",
+  "commands": [
+    {
+      "id": "open",
+      "title": "JSON 编辑器",
+      "description": "在原生窗口里查看 / 格式化 / 压缩 / 过滤类 JSON 文本",
+      "ui": {
+        "title": "JSON 编辑器",
+        "width": 880,
+        "height": 720,
+        "always_on_top": true,
+        "capabilities": { "clipboard": true }
+      }
+    }
+  ]
+}

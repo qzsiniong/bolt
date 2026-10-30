@@ -6,10 +6,10 @@
 
 ## 特性
 
-- **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
+- **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、插件命令或打开管理器。
 - **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
-- **外部扩展机制**：`extensions/<id>/` 目录（单一 `extension.json` 清单 + 入口）即为一个扩展，按 `kind` 分为脚本式与 UI 两类。
-- **UI 扩展（gpui-shell）**：清单里 `kind: "ui"`、入口固定为 `main.js`，脚本用 `export default class extends View` 描述界面，宿主在 GPUI 主线程渲染成独立原生窗口（无 WebView），支持热重载与清单声明置顶。
+- **插件化扩展（plux-rs）**：`extensions/plugins/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `plugin.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
+- **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在插件自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
@@ -30,7 +30,7 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展命令**（脚本式扩展给出它声明的命令；UI 扩展给出一条「打开窗口」的命令）。
+Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条插件命令一条：带 `ui` 的开窗口，其余的在插件运行时里执行）。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
@@ -66,82 +66,163 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 **使用统计**：排序不是简单的「用得多就靠前」，而是对每次确认记一个时间点、按 `Σ exp(-λ·距今天数)` 打分（默认只在最近 30 天内计分、90 天后丢弃），所以**最近用过**的会压过**很早以前用过很多次**的，长期不用则自然滑落。记录持久化在 `~/Library/Application Support/bolt/item-usage.json`（`item id → [使用时间点…]`），图标缓存放在 `app-icons/` 子目录。打分与裁剪实现在 [src/core/smart_rank.rs](src/core/smart_rank.rs)。
 
-### 外部扩展
+### 插件（plux-rs）
 
-扩展存放在与 `scripts` 同级的目录：
+插件存放在与 `scripts` 同级的目录，插件根是 `extensions/plugins/`：
 
 ```text
 ~/Library/Application Support/bolt/extensions/
-└── demo/
-    ├── extension.json    # 清单（必填）
-    └── index.js          # 入口（默认 index.js，也支持 .ts）
+├── plugins/
+│   ├── demo-v1.0.0.js/              # 目录名 = <id>-v<version>.js
+│   │   ├── plugin.json              # 清单（必填）
+│   │   ├── index.js                 # 脚本命令入口（默认 index.js，也支持 .ts）
+│   │   └── main.js                  # UI 命令入口（有 ui 命令时才需要）
+│   └── json-editor-v1.0.0.js/
+└── extensions-data/demo/store.json  # 插件私有数据（localStorage 落这里）
 ```
 
-`extension.json` 是**所有扩展共用的唯一清单**，一个字段区分两种形态：
+**目录名就是 bundle 标识**。plux-rs 的 `Bundle` 完全从目录名解析出 `id` / `version` / `format`，所以：
+
+- 目录名必须是 `<id>-v<version>.js`（`v` 前缀、语义化版本、`.js` 后缀，缺一不可，如 `demo-v1.0.0.js`）；
+- 清单里的 `id` 与 `version` 必须与目录名**逐字一致**——改名即改版本，两边漂移的插件会被拒绝加载并在 Console 报错；
+- `format` 后缀目前只认 `.js`，它是宿主挑 manager 的依据，与入口文件的扩展名不是一回事。
+
+#### `plugin.json`
 
 ```json
 {
   "id": "demo",
-  "name": "演示扩展",
-  "description": "一句话说明",
-  "kind": "script",
+  "name": "演示插件",
+  "description": "同时演示脚本命令与 UI 命令",
+  "version": "1.0.0",
   "entry": "index.js",
   "commands": [
-    { "id": "hello", "title": "打招呼", "subtitle": "运行 index.js" }
+    { "id": "hello", "title": "打招呼", "description": "在 Console 里打印一行问候" },
+    {
+      "id": "panel",
+      "title": "打开面板",
+      "description": "在原生窗口里渲染一个计数器",
+      "ui": { "title": "演示面板", "width": 480, "height": 320 }
+    }
   ]
 }
 ```
 
-- `id` 必填，且必须与目录名一致；只允许 `a-z 0-9 . - _`，且首尾必须是字母或数字。
-- `kind` 可省略，默认 `"script"`；`"ui"` 表示 UI 扩展（见下一节）。
-- `entry` 可省略，脚本式默认 `index.js`（只支持 `.js` / `.ts`）；UI 扩展固定为 `main.js`。
-- `commands` 可省略，省略时自动生成一条以扩展名命名的默认命令。
-- 每条命令在 Launcher 中以扩展名作为分组标题出现，选中即运行入口脚本。
-- 清单解析失败的目录会被跳过并在 Console 记录，不影响其他扩展。
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `id` | ✅ | 插件标识，必须与目录名里的 id 一致 |
+| `version` | ✅ | 语义化版本，必须与目录名里的版本一致 |
+| `name` | | 展示名，省略时退回 `id` |
+| `description` | | 插件说明 |
+| `entry` | | 脚本命令入口，默认 `index.js`，只接受 `.js` / `.ts`。**纯 UI 插件不需要**：没有脚本命令时这个字段根本不读，也不用在目录里放 `index.js` |
+| `depends` / `optional_depends` | | `["base@^1.0"]` 形式的依赖声明，映射到 plux 的 `Depend`（不带 `@` 表示任意版本） |
+| `commands` | | 命令数组；**省略时会自动补一条 id 为 `run`、标题为插件展示名的命令** |
 
-扩展入口脚本与普通脚本拥有完全相同的能力：`console`、定时器、`bolt` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `confirm` / `pickPath` / `scanQr` 等）。
+`commands[*]` 的字段：
 
-### 仓库自带扩展
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `id` | ✅ | 命令标识，插件内唯一；脚本命令里它就是入口模块要导出的函数名 |
+| `title` | ✅ | Launcher 里显示的标题 |
+| `description` | | 副标题；省略时显示「插件名 v版本」 |
+| `ui` | | 给了就是 **UI 命令**（见下一节），省略就是 **脚本命令** |
 
-仓库的 `extensions/` 目录里放着随源码维护的扩展（目前是 `json-editor`）。用哪一份由构建类型决定：
+`ui` 块（全部可省）：
 
-- **debug 构建**：直接把仓库 `extensions/` 当作扩展目录，不做复制。改完仓库里的扩展文件重启即生效（UI 扩展在 debug 下还会热重载）；示例 `ui-demo` 只写在数据目录，不会污染工作树。
-- **release 构建**：用用户数据目录，并把仓库扩展播种进去——只复制尚不存在的目录，不覆盖用户改动。
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `title` | 同命令标题 | 窗口标题、宿主自绘标题栏上显示的名字 |
+| `width` / `height` | `880` / `720` | 初始窗口尺寸，必须为正；小于宿主最小尺寸时以最小尺寸为准 |
+| `always_on_top` | `false` | 开窗即上浮到 floating 层级（标题栏上的图钉仍可随时切换） |
+| `capabilities.clipboard` | `false` | UI 命令能否读写剪贴板 |
 
-### UI 扩展（gpui-shell）
+清单里出现 `ui` 命令时，插件目录必须提供 `main.js`——gpui-shell 对没有 `gpui-shell.json` 的目录固定加载它，不可改名。
 
-清单里 `kind` 为 `"ui"` 的目录是 **UI 扩展**：入口脚本只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
+#### 脚本命令怎么执行
 
-```text
-~/Library/Application Support/bolt/extensions/
-└── ui-demo/
-    ├── extension.json    # 清单（必填，kind 为 ui）
-    └── main.js           # 入口：export default class extends View
-```
+Launcher 里每条命令一条 item（id 是 `ext.<插件id>.<命令id>`，分组「扩展」）。选中脚本命令后，宿主在入口模块里按三档顺序找处理函数：
 
-UI 扩展的清单沿用同一个 `extension.json`，只是把 `kind` 写成 `ui`：
+1. **具名导出**：`export function hello(ctx) { … }`（推荐）
+2. **`export default` 对象**：`export default { hello(ctx) { … } }`
+3. **全局挂载**：`globalThis.plux.commands.hello = (ctx) => …`
 
-```json
-{
-  "id": "ui-demo",
-  "name": "UI 示例",
-  "kind": "ui",
-  "entry": "main.js",
-  "capabilities": { "clipboard": true },
-  "window": { "always_on_top": false, "width": 880, "height": 720 }
+处理函数收到一个对象，返回的字符串会输出到 Console：
+
+```js
+export async function hello({ command, plugin, root, argv }) {
+  // command: "hello"       plugin: { id: "demo", version: "1.0.0" }
+  // root: 插件目录绝对路径   argv: 调用时传入的参数数组
+  return `你好，这是 ${plugin.id} v${plugin.version} 的 ${command} 命令`;
 }
 ```
 
-- **入口固定为 `main.js`**。UI 扩展的入口契约由宿主写死，因此 `entry` 只能写 `main.js`（写别的值会被报错并跳过），目录里也必须有 `main.js`。
-- **清单由宿主校验**：`id` 必填且与目录名一致；`kind` 为 `ui`；`window.width/height` 必须为正数。
-- **置顶（窗口层级）**：窗口一律以普通形态打开（`WindowKind::Normal`）；清单 `window.always_on_top`（默认 `false`）决定**开窗时**是否上浮。窗口右上角有宿主自绘标题栏，其中的图钉可随时切换置顶——Rust 侧直接改 NSWindow 层级（`NSFloatingWindowLevel` / `NSNormalWindowLevel`），不关窗、不重建脚本视图。
-- `window.width` / `window.height` 默认 `880 × 720`，小于最小尺寸时以最小尺寸为准。
+- **每个插件一个常驻运行时**：第一条命令执行时才加载（插件顶层的副作用不会在启动时跑），之后一直活着，因此模块级状态跨命令保留——计数器、缓存、已经建好的连接都算。
+- **每插件一条专用线程**：plux 的 `Manager` / 函数调用是同步的，而宿主 API（定时器、`fetch`、`Async(...)`）依赖 tokio 反应堆，所以插件线程自带一个 current-thread 运行时，两者在同一线程里待着。GPUI 主线程只做「懒加载 + 投递命令」，命令执行从不占主线程。
+- **单条命令超时 60 秒**。超时或用户点交互窗的「中止」都靠 QuickJS 的 interrupt handler 抛不可捕获异常，插件线程随后回到消息循环——`while (true) {}` 卡死不会拖垮应用，下一条命令照常能跑。
+- **资源上限**：栈 8 MiB、堆 64 MiB；入口模块加载超时 30 秒。
+- 命令返回后宿主给残留的定时器 / 未决 Promise 200 ms 预算跑完，不会因为一个没清掉的 `setInterval` 卡住下一次调用。
+
+插件脚本与普通脚本拥有相同的能力：`console`、定时器、`bolt` 内置模块（`readFile` / `fetch` / `exec` 等）以及全部宿主交互 API（`typeStr` / `requestFocus` / `confirm` / `pickPath` / `scanQr`）。交互 API 挂在常驻上下文上，每轮执行前用当轮的交互桥覆盖一次，所以进度窗、确认框、中止按钮都跟着当次命令走。
+
+#### 错误隔离与生效时机
+
+- 清单解析失败、目录名不合约定、入口缺失、`id`/`version` 与目录名不一致 —— 该插件被跳过，原因写进 Console（`warn` 等级），其他插件不受影响。
+- 每次唤出 Launcher 都重新扫描磁盘：**新增的插件目录下次唤出即可用**，不必重启应用；已注册的插件不会重复注册，也不会被卸载（运行时要跨命令保留状态）。改动**已有**插件的清单或入口则需要重启应用。
+- 三种目录会被跳过：没有任何清单的目录（作者草稿）静默忽略；只有 `extension.json` 的旧布局报「旧布局已废弃」；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `plugin.json` 安装的能力冲突。
+
+#### 从旧布局迁移
+
+旧的 `extensions/<id>/extension.json` 目录**不再被读取**。迁移到 plux 只有两步：
+
+1. 目录改名为 `<id>-v<version>.js`（`json-editor` → `json-editor-v1.0.0.js`），并挪进 `extensions/plugins/`；
+2. `extension.json` 改写为 `plugin.json`：顶层补 `version`，去掉 `kind` / `window` / `capabilities`——「脚本式还是 UI 式」下沉成「命令有没有 `ui` 块」，窗口尺寸与剪贴板授权也搬进命令的 `ui` 块。
+
+### 仓库自带插件
+
+仓库的 `extensions/plugins/` 目录里放着随源码维护的插件（目前是 `json-editor`）。用哪一份由构建类型决定：
+
+- **debug 构建**：直接把仓库 `extensions/` 当作扩展目录，不做复制，也不生成 `demo` 示例（不往工作树里写文件）。改完仓库里的插件文件重启即生效，UI 命令的 `main.js` 还会热重载。
+- **release 构建**：用用户数据目录，把仓库插件播种进去（只复制尚不存在的目录，不覆盖用户改动），并首次生成 `demo` 示例。
+
+### UI 命令（gpui-shell）
+
+命令带 `ui` 块就是 **UI 命令**：`main.js` 只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
+
+```text
+extensions/plugins/demo-v1.0.0.js/
+├── plugin.json    # 清单
+├── index.js       # 脚本命令入口
+└── main.js        # UI 命令入口：export default class extends View
+```
+
+同一个插件里可以既有脚本命令又有 UI 命令——区分只发生在命令一级：
+
+```json
+{
+  "id": "demo",
+  "version": "1.0.0",
+  "commands": [
+    { "id": "hello", "title": "打招呼" },
+    {
+      "id": "panel",
+      "title": "打开面板",
+      "ui": { "title": "演示面板", "width": 880, "height": 720, "always_on_top": true,
+              "capabilities": { "clipboard": true } }
+    }
+  ]
+}
+```
+
+- **入口固定为 `main.js`**：UI 入口由 gpui-shell 写死（对没有 `gpui-shell.json` 的目录只加载它），`entry` 字段管的是脚本命令的入口，与 UI 无关。
+- **宿主校验**：有 `ui` 命令就必须有 `main.js`；`ui.width` / `ui.height` 必须为正数；同一插件里命令 id 不能重复。
+- **置顶（窗口层级）**：窗口一律以普通形态打开（`WindowKind::Normal`）；`ui.always_on_top`（默认 `false`）决定**开窗时**是否上浮。标题栏右上角的图钉可随时切换置顶——Rust 侧直接改 NSWindow 层级（`NSFloatingWindowLevel` / `NSNormalWindowLevel`），不关窗、不重建脚本视图。
+- `ui.width` / `ui.height` 默认 `880 × 720`，小于最小尺寸时以最小尺寸为准。
 
 ```js
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex, Button, Input, InputState } from "gpui-base";
 
-export default class UiDemo extends View {
+export default class DemoPanel extends View {
   init() {
     this.count = 0;
     this.draft = InputState.new({ placeholder: "输入点什么…" });
@@ -164,20 +245,20 @@ export default class UiDemo extends View {
 - 状态就是视图字段，改完调用 `cx.notify()` 触发重绘。
 - 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
 - 数据目录：`~/Library/Application Support/bolt/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
-- **权限由宿主按清单构建**：宿主始终授予「读扩展目录 + 读/写自己的数据目录 + `storage` + `exit`」；清单 `capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。扩展目录被当作你自己写的代码，不做审批弹窗。
-- **宿主自绘标题栏**：每个扩展窗口顶部由宿主提供一条标题栏（扩展名 + 右上角置顶图钉），下方才是扩展自己的界面。扩展脚本无需也无法自绘这一区域。
-- 首次加载会在扩展目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
-- **debug 构建**下保存入口文件即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
-- `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
-- **旧布局会被报错并跳过**：一个 UI 扩展目录若只有 `gpui-shell.json` 而没有 `extension.json`，或两者同时存在（歧义），都会被跳过并在 Console 报错。
-- 首次启动会生成 `ui-demo` 示例（目录已存在则不动），可直接在 Launcher 里跑通全链路。
-- **尚未桥接**：UI 扩展目前不能调用普通脚本的宿主 API（`bolt` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
+- **权限由宿主按 `ui` 块构建**：宿主始终授予「读插件目录 + 读/写自己的数据目录 + `storage` + `exit`」；`ui.capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。插件目录被当作你自己写的代码，不做审批弹窗。
+- **宿主自绘标题栏**：每个 UI 命令的窗口顶部由宿主提供一条标题栏（插件名 + 右上角置顶图钉），下方才是插件自己的界面。插件脚本无需也无法自绘这一区域。
+- 首次加载会在插件目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
+- **debug 构建**下保存 `main.js` 即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
+- `svg("icons/x.svg")` 相对**插件目录**解析（不是相对当前文件），插件目录里的同名文件会遮蔽内置 Lucide 图标。
+- 一个插件只保留一个 UI 窗口：再次执行同一条 UI 命令只是激活已有窗口。
+- 首次启动（用数据目录的形态，即 release 构建）会生成 `demo-v1.0.0.js` 示例：脚本命令 + UI 命令各一条，目录已存在则不动，可直接在 Launcher 里跑通全链路。
+- **尚未桥接**：UI 命令目前不能调用普通脚本的宿主 API（`bolt` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
 
 ### 内置 JSON 编辑器
 
-仓库自带一个用扩展机制实现的 JSON 编辑器，位于 [`extensions/json-editor`](extensions/json-editor)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」分组出现。它演示了 UI 扩展的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
+仓库自带一个用插件机制实现的 JSON 编辑器，位于 [`extensions/plugins/json-editor-v1.0.0.js`](extensions/plugins/json-editor-v1.0.0.js)，启动时同步到用户插件目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
 
-- **置顶可运行时切换**：清单默认 `window.always_on_top: true`；点宿主标题栏右上角的图钉即可切换，窗口不关闭、内容不丢失。
+- **置顶可运行时切换**：清单默认 `ui.always_on_top: true`；点宿主标题栏右上角的图钉即可切换，窗口不关闭、内容不丢失。
 - **粘贴自动格式化**：向编辑器粘贴一段 ≥8 字符的文本时自动解析并格式化（行号 / 语法高亮由只读结果面板的 Markdown 承担）。
 - **容错解析**：不止标准 JSON，还能识别 JSONC / JSON5 / JS 字面量、URL 查询串、XML、YAML 子集，以及被转义的 JSON 字符串；解析失败时给出定位提示。
 - **JS 过滤**：左下角输入框写受限表达式（`.key.subkey`、`[0][1]`、`.map(x => x.val)` 等，支持 `map` / `filter` / `find` / `slice` / `keys` / `values` / `sort` / `reverse` / `join` / `flat` 与比较运算），结果渲染在只读结果面板。求值器自研（沙箱里 `eval` / `Function` 被禁用），不是完整 JavaScript。
@@ -198,13 +279,16 @@ npm i -g typescript-language-server typescript
 ## 构建与运行
 
 ```bash
-cargo run        # 调试运行
-cargo build      # 仅构建
-cargo test --bin bolt   # 运行测试
+cargo run                        # 调试运行
+cargo build                      # 仅构建
+cargo test --workspace           # 运行全部测试（bolt + crates/plux-js-manager）
+cargo test -p plux-js-manager    # 只跑插件运行时那部分
 ./scripts/build-macos-app.sh          # 打包成 target/release/Bolt.app
 ./scripts/build-macos-app.sh --sign   # 打包 + ad-hoc 签名（绕过 Gatekeeper）
 ./scripts/build-macos-app.sh --clean  # 先 cargo clean 再完整打包
 ```
+
+工程是 cargo workspace：根包 `bolt` 是应用本体，[crates/plux-js-manager](crates/plux-js-manager) 是不依赖 gpui 的 JS 插件 manager（可在没有图形环境下单独测试）。`[patch]` / `[profile]` 只在 workspace 根生效。
 
 ### 依赖说明（无本地补丁）
 
@@ -265,11 +349,11 @@ scripts/
 
 **QuickJS-JIT 签名要求**：`entitlements.plist` 里声明了 `com.apple.security.cs.allow-unsigned-executable-memory`，因为 QuickJS-JIT 在进程内动态生成机器码。没有这个 entitlement，签名后的 App 一跑脚本就会 `SIGKILL`。
 
-应用启动时会依次完成：创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库扩展与示例 UI 扩展）→ 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
 
-> **首次构建**：UI 扩展运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
+> **首次构建**：UI 命令的运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
 >
-> 脚本引擎与扩展运行时**共用同一个 QuickJS**：`[patch.crates-io] rquickjs` 把 crates.io 的 `rquickjs` 改道到 gpui-kit 仓库里的兼容 facade（`pub use quickjs_jit::*`），因此二进制里不会链接两份 QuickJS 静态库。
+> 普通脚本、插件运行时与 UI 命令**共用同一个 QuickJS**：`[patch.crates-io] rquickjs` 把 crates.io 的 `rquickjs` 改道到 gpui-kit 仓库里的兼容 facade（`pub use quickjs_jit::*`），因此二进制里不会链接两份 QuickJS 静态库。
 
 ## 脚本目录
 
@@ -292,7 +376,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，用于存放外部扩展（见「Launcher 与扩展」）；UI 扩展的私有数据目录是再下一级的 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建：插件放 `plugins/<id>-v<version>.js/`（见「Launcher 与扩展」），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）。
 
 ## 快捷键
 
@@ -644,22 +728,24 @@ ctx.globals().set("console", console)?;
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
 | [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；搜索框是宿主外部 `Input`——`Command::searchable(false)` 关掉内置搜索，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 负责剪贴板内容识别——Cmd+V 识别链与类型过滤的数据源）、`extensions/`（`manifest` 清单扫描 + `ui_window` UI 扩展窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 负责剪贴板内容识别——Cmd+V 识别链与类型过滤的数据源）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
 | [src/ui/](src/ui) | 跨模块共享 UI：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
-| [src/runtime/](src/runtime) | 脚本执行链路：`runner`（QuickJS 运行）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务）、`ts_transform`（swc 类型擦除） |
+| [src/runtime/](src/runtime) | 执行链路：`runner`（普通脚本的 QuickJS 运行 + 插件命令的 `run_plugin`）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务，`RunTask` 分脚本与插件两种）、`ts_transform`（swc 类型擦除） |
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
+| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`plugin.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS）、`store`（跨线程执行入口）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |
 
-分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放脚本执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端，`core` 放与领域无关、可单独测试的通用基础设施。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。
+分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端，`core` 放与领域无关、可单独测试的通用基础设施。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。需要脱离 gpui 单独测试的能力（如插件运行时）放 `crates/` 下的独立 crate。
 
 ## 架构要点
 
-- **线程模型**：GPUI 主线程只负责渲染；脚本在独立工作线程执行，输出经 `ConsoleChannel` 回传面板。
-- **两套运行时，一个引擎**：普通脚本在 worker 线程上跑 rquickjs（可中断、可取消、可并发 await）；UI 扩展在 GPUI 主线程上由 gpui-shell 执行并原生渲染。两者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 扩展的 `console` 与错误经 `tracing` 转到同一个 Console 面板。
+- **线程模型**：GPUI 主线程只负责渲染；脚本与插件命令都在独立工作线程执行，输出经 `ConsoleChannel` 回传面板。
+- **三套运行时，一个引擎**：普通脚本在 worker 线程上跑一次性 rquickjs（可中断、可取消、可并发 await）；插件脚本命令在**每插件一条**的常驻线程上跑（`PluginStore::invoke` 同步调用，超时/取消靠 interrupt handler）；UI 命令在 GPUI 主线程上由 gpui-shell 执行并原生渲染。三者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 命令的 `console` 与错误经 `tracing` 转到同一个 Console 面板。
+- **插件生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 懒加载 / 读元数据」；真正的命令执行交给 `PluginStore`（`Arc` 可跨线程），因此打开 Launcher 扫描插件不会卡住 UI，命令也不会阻塞主线程。
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
-- **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）。
+- **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。
 - **补全修正**：`typescript-language-server` 返回的候选带全量列表且无 `text_edit`，provider 侧按光标前缀过滤，并补齐 `text_edit` 范围，避免成员访问时点号被替换吞掉。

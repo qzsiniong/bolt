@@ -34,5 +34,7 @@ pub(crate) fn run_path(cx: &mut App, path: &Path) {
         }
     };
     let run_service = cx.global::<AppShell>().run_service.clone();
-    run_service.update(cx, |svc, cx| svc.start(content, language, file_name, cx));
+    run_service.update(cx, |svc, cx| {
+        svc.start_script(content, language, file_name, cx)
+    });
 }

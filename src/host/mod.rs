@@ -54,6 +54,12 @@ impl HostModule {
         self
     }
 
+    /// 导出名列表。插件运行时（`plux-js-manager`）用它生成转发模块：把
+    /// `globalThis.__<name>` 上的函数重新 `export` 出去。
+    pub fn exports(&self) -> &[String] {
+        &self.exports
+    }
+
     /// Installer called inside the QuickJS context to register native
     /// functions on a global object named `__<module_name>`.
     pub fn installer<F>(mut self, f: F) -> Self

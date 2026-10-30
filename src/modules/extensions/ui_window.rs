@@ -1,22 +1,18 @@
-//! UI 扩展（gpui-shell）窗口。
+//! UI 命令（gpui-shell）窗口。
 //!
-//! 一个 UI 扩展 = 一个原生窗口：入口脚本 `export default class extends View`，
-//! 宿主在同进程 GPUI 主线程把它渲染成真实元素（没有 WebView）。
+//! 一条带 `ui` 块的命令 = 一个原生窗口：插件目录下的 `main.js`
+//! `export default class extends View`，宿主在同进程 GPUI 主线程把它渲染成真实
+//! 元素（没有 WebView）。
 //!
 //! **窗口的根视图必须是 gpui-shell 的 `ShellRoot`**：脚本侧的 tooltip、toast、
 //! dialog、sheet 全靠 `Window::root::<ShellRoot>()` 去找宿主层（root.rs 的
-//! `update` / `tooltip_overlay`），根视图不是 `ShellRoot` 时它们**静默失效**
-//! （`update` 返回 `None`，tooltip 触发器直接 return）。因此宿主自绘标题栏
-//! （[`ExtensionChrome`]，右上角置顶图钉）只能作为 `ShellRoot` 的 **content**
-//! 出现，不能反过来把 `ShellRoot` 包在外面——那样 tooltip/toast/dialog 全废。
+//! `update` / `tooltip_overlay`），根视图不是 `ShellRoot` 时它们**静默失效**。
+//! 因此宿主自绘标题栏（[`ExtensionChrome`]，右上角置顶图钉）只能作为 `ShellRoot`
+//! 的 **content** 出现，不能反过来把 `ShellRoot` 包在外面。
 //!
 //! 需要保留 `try_load` 出来的那个 `ShellRoot`：热重载的 `runtime.watch` 要从
-//! 它的 `application()` 元数据里取目录与入口（watch.rs L416-L430），而脚本视图
-//! 由它持有。所以 [`ExtensionChrome`] 留着它，只把它的 `content()` 渲染出来。
-//!
-//! 置顶切换直接改 NSWindow 层级（见 [`crate::ui::window_pin::set_window_level`]），
-//! 不关窗、不重建脚本视图；标题栏右上角的图钉也复用同一个公共控件
-//! （[`crate::ui::window_pin::WindowPin`]）。
+//! 它的 `application()` 元数据里取目录与入口，而脚本视图由它持有。所以
+//! [`ExtensionChrome`] 留着它，只把它的 `content()` 渲染出来。
 //!
 //! 每次 `try_load` 之前都要重新设置 storage 与 capabilities：gpui-shell 的
 //! 「默认策略」是进程级的，而 `try_load` 在载入那一刻把它快照进该窗口的
@@ -27,7 +23,8 @@ use std::rc::Rc;
 
 // 显式导入：`gpui_kit::*` 会把 gpui 的 `#[gpui::test]` 宏带进作用域，令下面
 // `mod tests` 里的 `#[test]` 变成递归展开。
-use super::manifest::{UiExtension, ensure_extension_data_dir, extension_data_dir};
+use super::host::CommandTarget;
+use super::manifest::{ensure_extension_data_dir, extension_data_dir};
 use super::state::ExtensionsState;
 use crate::app::shell::AppShell;
 use crate::ui::window_pin::{WindowPin, set_window_level};
@@ -38,15 +35,10 @@ use gpui_kit::{
     WindowOptions, div, px, size,
 };
 
-/// UI 扩展窗口的最小尺寸；不会超过清单声明的尺寸。
+/// UI 命令窗口的最小尺寸；不会超过清单声明的尺寸。
 const EXTENSION_WINDOW_MIN_SIZE: (f32, f32) = (560., 420.);
 
-/// 扩展窗口的宿主外壳：宿主自绘标题栏（扩展名 + 置顶图钉）+ 脚本视图。
-///
-/// `shell_root` 是 `try_load` 出来的脚本应用根：它带着 application 元数据
-/// （热重载 `watch` 要读它）并持有当前脚本视图，本视图只渲染它的 `content()`，
-/// 不把 `ShellRoot` 元素本身放进元素树（窗口根是外层那一个）。
-/// 置顶状态由公共控件 [`WindowPin`] 自己持有——窗口不重建，切换只改本地值。
+/// 扩展窗口的宿主外壳：宿主自绘标题栏（插件名 + 置顶图钉）+ 脚本视图。
 struct ExtensionChrome {
     shell_root: Entity<gpui_shell::ShellRoot>,
     name: SharedString,
@@ -73,10 +65,9 @@ impl Render for ExtensionChrome {
                     // 右上角置顶图钉：公共控件自带按钮、状态与层级同步。
                     .child(self.pin.clone()),
             )
-            // flex_1：标题栏以下整块都是扩展脚本的渲染区。
-            // 渲染 `content()` 而不是 `shell_root` 本身：窗口根已经是外层
-            // `ShellRoot`，脚本视图直接当它的 content 少一层；且每帧重新读取，
-            // 热重载替换 content 后立刻生效。
+            // flex_1：标题栏以下整块都是插件的渲染区。渲染 `content()` 而不是
+            // `shell_root` 本身：窗口根已经是外层 `ShellRoot`，脚本视图直接当它的
+            // content 少一层；且每帧重新读取，热重载替换 content 后立刻生效。
             .child(
                 div()
                     .flex_1()
@@ -86,17 +77,29 @@ impl Render for ExtensionChrome {
     }
 }
 
-/// 打开（或聚焦）一个 UI 扩展窗口。
-pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
+/// 打开（或聚焦）一条 UI 命令的窗口。
+pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     let console = cx.global::<AppShell>().console_channel.clone();
 
-    let Some(runtime) = cx.global::<ExtensionsState>().shell_runtime.clone() else {
-        console.error("UI 扩展运行时不可用（gpui-shell 初始化失败），无法打开扩展窗口");
+    let Some(ui) = target.ui.clone() else {
+        console.error(format!(
+            "命令 {}.{} 没有 ui 声明",
+            target.plugin_id, target.command_id
+        ));
         return;
     };
 
-    // 单例：同一扩展只保留一个窗口；句柄失效说明窗口已经关了，重新开一个。
-    let existing = cx.global::<ExtensionsState>().ui_windows.get(&ext.root);
+    let Some(runtime) = cx.global::<ExtensionsState>().shell_runtime.clone() else {
+        console.error("UI 运行时不可用（gpui-shell 初始化失败），无法打开插件窗口");
+        return;
+    };
+
+    // 单例：同一插件只保留一个窗口；句柄失效说明窗口已经关了，重新开一个。
+    let existing = cx
+        .global::<ExtensionsState>()
+        .ui_windows
+        .get(&target.root)
+        .cloned();
     if let Some(handle) = existing {
         if handle
             .update(cx, |_, window, _| window.activate_window())
@@ -107,28 +110,28 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
         }
         cx.global_mut::<ExtensionsState>()
             .ui_windows
-            .remove(&ext.root);
+            .remove(&target.root);
     }
 
-    let id = ext.id().to_string();
-    let pinned = ext.manifest.window.always_on_top;
+    let plugin_id = target.plugin_id.clone();
+    let pinned = ui.always_on_top;
     // 数据目录与授权必须在 load 之前设置：参见模块头部说明。
-    let data_dir = match ensure_extension_data_dir(&id) {
+    let data_dir = match ensure_extension_data_dir(&plugin_id) {
         Ok(dir) => dir,
         Err(e) => {
-            console.warn(format!("UI 扩展 {id} 的数据目录不可用：{e}"));
-            extension_data_dir(&id)
+            console.warn(format!("插件 {plugin_id} 的数据目录不可用：{e}"));
+            extension_data_dir(&plugin_id)
         }
     };
-    if let Err(e) = gpui_shell::set_bundle_id(&format!("bolt.{id}")) {
-        console.warn(format!("UI 扩展 {id} 的应用标识不可用：{e}"));
+    if let Err(e) = gpui_shell::set_bundle_id(&format!("bolt.{plugin_id}")) {
+        console.warn(format!("插件 {plugin_id} 的应用标识不可用：{e}"));
     }
     // 目录里没有 gpui-shell.json：能力完全由宿主安装，清单里的开关决定剪贴板。
-    let clipboard = ext.manifest.capabilities.clipboard;
+    let clipboard = ui.capabilities.clipboard;
     gpui_shell::set_storage_path(data_dir.join("store.json"));
     gpui_shell::set_capabilities(
         gpui_shell::Capabilities::new()
-            .read_roots([ext.root.clone(), data_dir.clone()])
+            .read_roots([target.root.clone(), data_dir.clone()])
             .write_roots([data_dir])
             .storage(true)
             .clipboard_read(clipboard)
@@ -136,16 +139,16 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
             .exit(true),
     );
 
-    // 扩展自己的 `svg("icons/x.svg")` 相对扩展根解析，需要先登记。
+    // 插件自己的 `svg("icons/x.svg")` 相对插件根解析，需要先登记。
     cx.global::<ExtensionsState>()
         .assets
-        .register_root(ext.root.clone());
+        .register_root(target.root.clone());
 
-    let root = ext.root.clone();
-    let name = ext.name().to_string();
+    let root = target.root.clone();
+    let name = target.plugin_name.clone();
     let title = format!("{name} — Bolt");
     let load_console = console.clone();
-    let window_size = (ext.manifest.window.width, ext.manifest.window.height);
+    let window_size = (ui.width, ui.height);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
             None,
@@ -170,14 +173,12 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
         ..TitleBar::window_options()
     };
 
-    // 非激活态开出的普通窗口会被压在别的应用后面，显式激活一次
-    // （与 open_manager 同样的处理）。
+    // 非激活态开出的普通窗口会被压在别的应用后面，显式激活一次。
     cx.activate(true);
-    let chrome_pinned = pinned;
     let chrome_name: SharedString = name.clone().into();
     let opened = cx.open_window(options, move |window, cx| {
         let shell_root = load_shell_root(&runtime, &root, &load_console, window, cx);
-        let pin = cx.new(|_| WindowPin::new(chrome_pinned));
+        let pin = cx.new(|_| WindowPin::new(pinned));
         let chrome = cx.new(|_| ExtensionChrome {
             shell_root,
             name: chrome_name,
@@ -189,7 +190,7 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
     let handle = match opened {
         Ok(handle) => handle,
         Err(e) => {
-            console.error(format!("无法打开 UI 扩展窗口 {name}：{e}"));
+            console.error(format!("无法打开插件窗口 {name}：{e}"));
             return;
         }
     };
@@ -201,15 +202,15 @@ pub(crate) fn open_extension_ui(cx: &mut App, ext: UiExtension) {
 
     cx.global_mut::<ExtensionsState>()
         .ui_windows
-        .insert(ext.root.clone(), handle.into());
+        .insert(target.root.clone(), handle.into());
     console.info(format!(
-        "已打开 UI 扩展 {name}（{id} · {}{}）",
-        ext.entry(),
+        "已打开插件窗口 {name}（{plugin_id} · {}{}）",
+        target.command_id,
         if pinned { " · 置顶" } else { "" }
     ));
 }
 
-/// 载入扩展并返回窗口根里的脚本视图；加载失败时退回一个可选中复制的错误面，
+/// 载入插件并返回窗口根里的脚本视图；加载失败时退回一个可选中复制的错误面，
 /// 而不是让宿主 panic。
 fn load_shell_root(
     runtime: &Rc<gpui_shell::ShellRuntime>,
@@ -224,14 +225,14 @@ fn load_shell_root(
             #[cfg(debug_assertions)]
             match runtime.watch(&shell_root, window, cx) {
                 Ok(watcher) => watcher.forget(),
-                Err(e) => console.warn(format!("UI 扩展热重载不可用：{e:#}")),
+                Err(e) => console.warn(format!("插件热重载不可用：{e:#}")),
             }
             shell_root
         }
         Err(e) => {
             let message = format!("{e:#}");
             console.error(format!(
-                "UI 扩展加载失败 {}：{}",
+                "插件加载失败 {}：{}",
                 root.display(),
                 first_lines(&message, 12)
             ));
@@ -247,7 +248,7 @@ struct LoadFailure(String);
 impl Render for LoadFailure {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         gpui_shell::failure_surface(
-            "扩展加载失败",
+            "插件加载失败",
             &self.0,
             "修正入口脚本后重新打开该命令",
             window,
@@ -279,7 +280,7 @@ mod tests {
         assert_eq!(first_lines("a\nb\nc", 2), "a\nb\n…");
     }
 
-    /// 在 headless 窗口里真实加载一个扩展目录的入口脚本，构建并物化一次元素。
+    /// 在 headless 窗口里真实加载一个插件目录的入口脚本，构建并物化一次元素。
     fn check_loads(dir: &std::path::Path, cx: &mut gpui_kit::TestAppContext) {
         cx.update(gpui_shell::init);
         let runtime = gpui_shell::ShellRuntime::new_isolated().expect("start shell runtime");
@@ -295,25 +296,25 @@ mod tests {
     }
 
     /// JS 没有编译期检查：这里用 gpui-shell 自带的 `check` 在 headless 窗口里
-    /// 真实加载 `ui-demo` 的入口脚本，构建并物化一次元素描述。入口脚本写错、
-    /// 用了不存在的模块/组件/样式方法都会让这个测试失败。
+    /// 真实加载内置示例插件的 `main.js`，构建并物化一次元素描述。
     #[gpui_kit::test]
-    fn demo_ui_extension_loads(cx: &mut gpui_kit::TestAppContext) {
+    fn demo_plugin_ui_loads(cx: &mut gpui_kit::TestAppContext) {
         use super::super::manifest;
 
-        let tmp = crate::test_support::TempDir::new("ui-demo-check");
-        let extensions = tmp.0.join("extensions");
-        std::fs::create_dir_all(&extensions).expect("create extensions dir");
-        manifest::ensure_demo_ui_extension(&extensions).expect("write demo extension");
-        check_loads(&extensions.join(manifest::DEMO_UI_ID), cx);
+        let tmp = crate::test_support::TempDir::new("demo-ui-check");
+        let plugins = tmp.0.join("plugins");
+        std::fs::create_dir_all(&plugins).expect("create plugins dir");
+        manifest::ensure_demo_plugin(&plugins).expect("write demo plugin");
+        check_loads(&plugins.join(manifest::DEMO_DIR), cx);
     }
 
     /// 仓库内 `json-editor` 同样真实加载一次：入口脚本写错、引用了不存在的
     /// 模块/组件/样式方法都会让它失败。
     #[gpui_kit::test]
-    fn json_editor_extension_loads(cx: &mut gpui_kit::TestAppContext) {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/json-editor");
-        assert!(dir.is_dir(), "缺少仓库扩展目录 {}", dir.display());
+    fn json_editor_plugin_ui_loads(cx: &mut gpui_kit::TestAppContext) {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("extensions/plugins/json-editor-v1.0.0.js");
+        assert!(dir.is_dir(), "缺少仓库插件目录 {}", dir.display());
         check_loads(&dir, cx);
     }
 

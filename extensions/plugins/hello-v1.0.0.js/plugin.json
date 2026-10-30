@@ -1,0 +1,23 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "1.0.0",
+  "commands": [
+    {
+      "id": "ui",
+      "title": "UI",
+      "ui": {
+        "title": "UI窗口",
+        "width": 180,
+        "height": 120,
+        "always_on_top": true,
+        "capabilities": { "clipboard": true }
+      }
+    },
+    {
+      "id": "sayHello",
+      "title": "say hello",
+      "description": "说hello"
+    }
+  ]
+}

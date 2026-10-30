@@ -19,6 +19,8 @@ use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
 use crate::model::script::Language;
 use crate::ui::interaction_window::{InteractionEvent, InteractionState, InteractionWindow};
+use plux_js_manager::PluginStore;
+use plux_rs::Bundle;
 
 /// How often the interaction drain runs while a script is executing.
 const INTERACTION_TICK: Duration = Duration::from_millis(50);
@@ -47,9 +49,40 @@ struct RunState {
 /// editor toolbar can follow the service without owning it.
 pub struct RunStateChanged(pub bool);
 
+/// 本轮要执行的东西：一个脚本文件，或一条插件命令。
+///
+/// 两者共用同一条链路（工作线程 / 取消 / 交互窗口 / Console），区别只在工作
+/// 线程里调谁：普通脚本走一次性 rquickjs 运行时，插件命令走插件自己的常驻
+/// 运行时（`PluginStore`）。
+pub enum RunTask {
+    Script {
+        content: String,
+        language: Language,
+        file_name: String,
+    },
+    Plugin {
+        bundle: Bundle,
+        command: String,
+        /// Console 里显示的名字（`插件名 · 命令标题`）。
+        label: String,
+    },
+}
+
+impl RunTask {
+    fn label(&self) -> &str {
+        match self {
+            Self::Script { file_name, .. } => file_name,
+            Self::Plugin { label, .. } => label,
+        }
+    }
+}
+
 pub struct RunService {
     scripts_dir: PathBuf,
     registry: Arc<HostRegistry>,
+    /// 插件命令的执行入口。脚本运行用不到，但两者共用同一条取消/交互链路，
+    /// 所以放在同一个服务里。
+    plugins: Arc<PluginStore>,
     /// Cloneable handle so the runner can push output to the Console panel
     /// from a worker thread.
     console_channel: ConsoleChannel,
@@ -89,6 +122,7 @@ impl RunService {
         scripts_dir: PathBuf,
         registry: Arc<HostRegistry>,
         console_channel: ConsoleChannel,
+        plugins: Arc<PluginStore>,
     ) -> Self {
         // Idle placeholders, replaced by the first run's own bridge.
         let (interaction_bridge, interaction_rx) = InteractionBridge::new(CancelToken::new());
@@ -96,6 +130,7 @@ impl RunService {
         Self {
             scripts_dir,
             registry,
+            plugins,
             console_channel,
             running: None,
             interaction_bridge,
@@ -117,18 +152,49 @@ impl RunService {
         self.running.is_some()
     }
 
-    /// Execute a script via rquickjs on a worker thread. One run at a time: a
-    /// second request while busy is refused with a Console warning.
-    pub fn start(
+    /// 执行一个脚本文件。
+    pub fn start_script(
         &mut self,
         content: String,
         language: Language,
         file_name: String,
         cx: &mut Context<Self>,
     ) {
+        self.start(
+            RunTask::Script {
+                content,
+                language,
+                file_name,
+            },
+            cx,
+        );
+    }
+
+    /// 执行一条插件命令（插件必须已加载）。
+    pub fn start_plugin(
+        &mut self,
+        bundle: Bundle,
+        command: String,
+        label: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.start(
+            RunTask::Plugin {
+                bundle,
+                command,
+                label,
+            },
+            cx,
+        );
+    }
+
+    /// One run at a time: a second request while busy is refused with a Console
+    /// warning rather than queued (a queued run would fire long after the user
+    /// asked for it).
+    fn start(&mut self, task: RunTask, cx: &mut Context<Self>) {
         if self.running.is_some() {
             self.console_channel
-                .warn(format!("已有脚本在运行中，忽略本次执行：{file_name}"));
+                .warn(format!("已有脚本在运行中，忽略本次执行：{}", task.label()));
             return;
         }
         let cancel = CancelToken::new();
@@ -140,7 +206,8 @@ impl RunService {
         cx.emit(RunStateChanged(true));
 
         // Fresh interaction bridge per run: the script side talks to the UI
-        // through it (progress, confirm, pickPath, requestFocus).
+        // through it (progress, confirm, pickPath, requestFocus). 插件命令也用它
+        // ——每轮覆盖到插件常驻上下文上。
         let (interaction, interaction_rx) = InteractionBridge::new(cancel.clone());
         self.progress = interaction.progress_slot();
         self.interaction_rx = interaction_rx;
@@ -153,6 +220,7 @@ impl RunService {
         let console = self.console_channel.clone();
         let scripts_dir = self.scripts_dir.clone();
         let registry = self.registry.clone();
+        let plugins = self.plugins.clone();
         self.interaction_bridge = interaction.clone();
         let env = RunEnv {
             scripts_dir,
@@ -160,9 +228,21 @@ impl RunService {
             console,
             cancel,
             interaction,
+            plugins: Some(plugins),
         };
         std::thread::spawn(move || {
-            super::runner::run_script(&content, language, &file_name, env);
+            match task {
+                RunTask::Script {
+                    content,
+                    language,
+                    file_name,
+                } => super::runner::run_script(&content, language, &file_name, env),
+                RunTask::Plugin {
+                    bundle,
+                    command,
+                    label,
+                } => super::runner::run_plugin(bundle, &command, &label, env),
+            }
             done.store(true, Ordering::SeqCst);
         });
 

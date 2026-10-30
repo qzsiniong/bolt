@@ -1,0 +1,22 @@
+[package]
+name = "plux-js-manager"
+version = "0.1.0"
+edition = "2024"
+description = "QuickJS/JavaScript plugin manager adapter for plux-rs"
+
+[dependencies]
+# 只要核心：derive(codegen) 与 archive(zip/walkdir) 在本项目用不到。
+plux-rs = { version = "1.1", default-features = false }
+# 引擎由根 manifest 的 [patch.crates-io] 改道到 gpui-kit 的 quickjs-jit 兼容
+# facade，与 gpui-shell 共用同一份 QuickJS，避免两套 C 静态库的重复符号冲突。
+rquickjs = { version = "0.12", features = ["loader", "macro", "futures"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+semver = "1"
+thiserror = "2"
+tracing = "0.1"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+# 宿主模块的定时器 / 异步宿主函数依赖 tokio 反应堆：每个插件工人线程自带一个
+# current-thread 运行时并把引擎跑在里面。
+tokio = { version = "1", features = ["rt", "time", "process", "macros"] }

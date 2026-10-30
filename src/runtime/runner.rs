@@ -7,8 +7,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module};
 
@@ -18,41 +16,15 @@ use crate::console_channel::ConsoleChannel;
 use crate::host::modules::bolt;
 use crate::host::{HostLoader, HostRegistry, HostResolver};
 use crate::model::script::Language;
+use crate::modules::extensions::js_env::PluginRunScope;
+use plux_js_manager::{InvokeRequest, JsError, PluginStore};
+use plux_rs::Bundle;
 
-/// Cooperative cancellation token shared between the UI and a running script.
-///
-/// Two independent mechanisms watch it: QuickJS's interrupt handler preempts
-/// long-running JS, and an async wait breaks the run out of host functions
-/// (`sleep`/`exec`) and `AsyncRuntime::idle`, where no JS executes.
-#[derive(Clone, Default)]
-pub struct CancelToken {
-    flag: Arc<AtomicBool>,
-}
+/// 取消令牌由插件运行时 crate 提供：命令执行与脚本执行共用同一个语义。
+pub use plux_js_manager::CancelToken;
 
-impl CancelToken {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Request an abort. Idempotent and callable from any thread.
-    pub fn cancel(&self) {
-        self.flag.store(true, Ordering::SeqCst);
-    }
-
-    pub fn is_cancelled(&self) -> bool {
-        self.flag.load(Ordering::SeqCst)
-    }
-
-    /// Resolve once an abort has been requested (50ms polling).
-    pub async fn wait(&self) {
-        while !self.is_cancelled() {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-}
-
-/// Host-side environment for one script execution, grouped so the run entry
-/// point does not take a long positional argument list.
+/// Host-side environment for one script or plugin-command execution, grouped so
+/// the run entry point does not take a long positional argument list.
 pub(crate) struct RunEnv {
     /// Base directory used to resolve relative module imports.
     pub(crate) scripts_dir: PathBuf,
@@ -60,6 +32,8 @@ pub(crate) struct RunEnv {
     pub(crate) console: ConsoleChannel,
     pub(crate) cancel: CancelToken,
     pub(crate) interaction: InteractionBridge,
+    /// 插件运行时。普通脚本用不到；插件命令缺了它就无法执行。
+    pub(crate) plugins: Option<Arc<PluginStore>>,
 }
 
 /// Run a script to completion. Call from a worker thread — never on the GPUI
@@ -71,6 +45,7 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
         console,
         cancel,
         interaction,
+        plugins: _,
     } = env;
     console.info(format!("▶ Running {}…", file_name));
 
@@ -130,6 +105,47 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
             }
         }
     });
+}
+
+/// 执行一条插件命令。日志格式与脚本一致（▶ / ✔ / ⏹）；超时与取消共用同一个
+/// `CancelToken`：用户中止后命令里的 `while(true)` 会被 QuickJS 中断。
+pub fn run_plugin(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
+    let RunEnv {
+        console,
+        cancel,
+        interaction,
+        plugins,
+        ..
+    } = env;
+    console.info(format!("▶ Running {label}…"));
+
+    let Some(plugins) = plugins else {
+        console.error("插件运行时不可用，无法执行插件命令");
+        return;
+    };
+
+    // 交互 API（confirm / pickPath / progress）挂在插件常驻上下文上，
+    // 每轮用本轮新建的 bridge 覆盖一次。
+    let scope = Arc::new(PluginRunScope {
+        bridge: interaction,
+    });
+    let request = InvokeRequest::new(command, cancel.clone()).with_scope(scope);
+
+    match plugins.invoke(&bundle.id, &bundle.version.to_string(), request) {
+        Ok(Some(output)) => {
+            if !output.trim().is_empty() {
+                console.info(output);
+            }
+            console.info(format!("✔ Finished {label}"));
+        }
+        Ok(None) => console.info(format!("✔ Finished {label}")),
+        Err(JsError::Cancelled) => console.warn(format!("⏹ Aborted {label}")),
+        Err(JsError::Timeout(timeout)) => console.error(format!(
+            "命令超时（{} ms），已中断：{label}",
+            timeout.as_millis()
+        )),
+        Err(error) => console.error(error.to_string()),
+    }
 }
 
 async fn run_async(
@@ -228,6 +244,7 @@ pub(crate) fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) 
 mod tests {
     use super::*;
     use crate::host::modules;
+    use std::time::Duration;
 
     fn drain(
         rx: &crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>,
@@ -264,6 +281,7 @@ mod tests {
             console: channel,
             cancel: cancel.clone(),
             interaction: no_ui(cancel),
+            plugins: None,
         }
     }
 

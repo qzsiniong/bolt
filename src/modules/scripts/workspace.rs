@@ -64,7 +64,7 @@ impl Workspace {
         // Run request -> hand the script to the app-level run service.
         let sub_run = cx.subscribe(&editor, move |this, _ed, event: &RunRequested, cx| {
             this.run_service.update(cx, |svc, cx| {
-                svc.start(
+                svc.start_script(
                     event.content.clone(),
                     event.language,
                     event.file_name.clone(),
