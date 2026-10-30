@@ -80,7 +80,6 @@ impl ExtensionsHost {
 
         let (dirs, mut errors) = manifest::scan(&self.extensions_dir);
         for dir in dirs {
-            println!("dir: {:?}", dir);
             let Some(path) = dir.to_str() else {
                 errors.push(format!("插件路径不是合法 UTF-8：{}", dir.display()));
                 continue;
@@ -104,7 +103,6 @@ impl ExtensionsHost {
         for plugin in self.loader.get_plugins() {
             let info = plugin.info();
             let meta = &info.info;
-            println!("plugin id: {}", meta.id());
             for command in meta.commands() {
                 // UI 标题在清单里可省；省了就用命令标题，免得下游到处判断空串。
                 let ui = command.ui.clone().map(|mut ui| {
@@ -113,7 +111,6 @@ impl ExtensionsHost {
                     }
                     ui
                 });
-                println!("command id: {}", command.id);
                 targets.push(CommandTarget {
                     bundle: info.bundle.clone(),
                     plugin_id: meta.id().to_string(),

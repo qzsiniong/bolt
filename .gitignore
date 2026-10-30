@@ -1,1 +1,4 @@
 /target
+.DS_Store
+.workbuddy/
+extensions/*/gpui-kit.d.ts
