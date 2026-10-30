@@ -26,22 +26,21 @@ pub(crate) fn run() {
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {
         eprintln!("ensure scripts dir: {e}");
     }
-    // 插件根：`<extensions>/plugins/`。debug 构建直接用仓库目录，改完重启即生效；
+    // 插件根：`extensions/`。debug 构建直接用仓库目录，改完重启即生效；
     // release 构建用数据目录，并把仓库插件播种进去（只补缺失，不覆盖用户改动）。
     let extensions_dir = extension::active_extensions_dir();
-    let plugins_dir = extension::plugins_dir(&extensions_dir);
-    if let Err(e) = extension::ensure_dir(&plugins_dir) {
-        eprintln!("ensure plugins dir: {e}");
+    if let Err(e) = extension::ensure_dir(&extensions_dir) {
+        eprintln!("ensure extensions dir: {e}");
     }
     if extension::uses_bundled_extensions() {
         // 仓库目录就是工作树：不往里写示例，也没有「同步」这回事。
-        eprintln!("plugins dir: {}", plugins_dir.display());
+        eprintln!("extensions dir: {}", extensions_dir.display());
     } else {
         // 首次启动给一个能直接跑的示例插件（已存在则不动）。
-        if let Err(e) = extension::ensure_demo_plugin(&plugins_dir) {
+        if let Err(e) = extension::ensure_demo_plugin(&extensions_dir) {
             eprintln!("ensure demo plugin: {e}");
         }
-        match extension::ensure_bundled_extensions(&plugins_dir) {
+        match extension::ensure_bundled_extensions(&extensions_dir) {
             Ok(n) if n > 0 => eprintln!("synced {n} bundled plugin(s)"),
             Ok(_) => {}
             Err(e) => eprintln!("ensure bundled plugins: {e}"),

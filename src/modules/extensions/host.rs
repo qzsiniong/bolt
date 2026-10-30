@@ -47,7 +47,6 @@ pub(crate) struct ExtensionsHost {
     /// 见模块头部：必须钉在 Box 里。
     loader: Box<ExtensionsLoader>,
     store: Arc<PluginStore>,
-    plugins_dir: PathBuf,
     extensions_dir: PathBuf,
     /// 注册 manager 失败的原因。此时宿主仍然可构造，但所有命令都不可用，
     /// 由 `refresh` 把这条错误报给 Console。
@@ -68,7 +67,6 @@ impl ExtensionsHost {
         Self {
             loader,
             store,
-            plugins_dir: manifest::plugins_dir(extensions_dir),
             extensions_dir: extensions_dir.to_path_buf(),
             init_error,
         }
@@ -80,8 +78,9 @@ impl ExtensionsHost {
             return vec![error.clone()];
         }
 
-        let (dirs, mut errors) = manifest::scan(&self.plugins_dir, &self.extensions_dir);
+        let (dirs, mut errors) = manifest::scan(&self.extensions_dir);
         for dir in dirs {
+            println!("dir: {:?}", dir);
             let Some(path) = dir.to_str() else {
                 errors.push(format!("插件路径不是合法 UTF-8：{}", dir.display()));
                 continue;
@@ -105,6 +104,7 @@ impl ExtensionsHost {
         for plugin in self.loader.get_plugins() {
             let info = plugin.info();
             let meta = &info.info;
+            println!("plugin id: {}", meta.id());
             for command in meta.commands() {
                 // UI 标题在清单里可省；省了就用命令标题，免得下游到处判断空串。
                 let ui = command.ui.clone().map(|mut ui| {
@@ -113,6 +113,7 @@ impl ExtensionsHost {
                     }
                     ui
                 });
+                println!("command id: {}", command.id);
                 targets.push(CommandTarget {
                     bundle: info.bundle.clone(),
                     plugin_id: meta.id().to_string(),
@@ -186,7 +187,7 @@ mod tests {
     }
 
     fn write_plugin(tmp: &TempDir, dir: &str, manifest: &str, entry: &str) {
-        let root = manifest::plugins_dir(&tmp.0).join(dir);
+        let root = tmp.0.join(dir);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join(MANIFEST_FILE), manifest).unwrap();
         std::fs::write(root.join("index.js"), entry).unwrap();
@@ -195,9 +196,7 @@ mod tests {
     #[test]
     fn demo_plugin_contributes_script_and_ui_commands() {
         let tmp = TempDir::new("host-demo");
-        let plugins = manifest::plugins_dir(&tmp.0);
-        std::fs::create_dir_all(&plugins).unwrap();
-        manifest::ensure_demo_plugin(&plugins).expect("write demo plugin");
+        manifest::ensure_demo_plugin(&tmp.0).expect("write demo plugin");
 
         let mut host = host(&tmp);
         let errors = host.refresh();

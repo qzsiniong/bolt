@@ -313,7 +313,7 @@ mod tests {
     #[gpui_kit::test]
     fn json_editor_plugin_ui_loads(cx: &mut gpui_kit::TestAppContext) {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("extensions/plugins/json-editor-v1.0.0.js");
+            .join("extensions/json-editor-v1.0.0.js");
         assert!(dir.is_dir(), "缺少仓库插件目录 {}", dir.display());
         check_loads(&dir, cx);
     }

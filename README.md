@@ -8,7 +8,7 @@
 
 - **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、插件命令或打开管理器。
 - **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
-- **插件化扩展（plux-rs）**：`extensions/plugins/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `plugin.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
+- **插件化扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `plugin.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
 - **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在插件自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
@@ -68,11 +68,11 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 ### 插件（plux-rs）
 
-插件存放在与 `scripts` 同级的目录，插件根是 `extensions/plugins/`：
+插件存放在与 `scripts` 同级的目录，插件根就是 `extensions/` 本身：
 
 ```text
-~/Library/Application Support/bolt/extensions/
-├── plugins/
+~/Library/Application Support/bolt/
+├── extensions/
 │   ├── demo-v1.0.0.js/              # 目录名 = <id>-v<version>.js
 │   │   ├── plugin.json              # 清单（必填）
 │   │   ├── index.js                 # 脚本命令入口（默认 index.js，也支持 .ts）
@@ -168,18 +168,11 @@ export async function hello({ command, plugin, root, argv }) {
 
 - 清单解析失败、目录名不合约定、入口缺失、`id`/`version` 与目录名不一致 —— 该插件被跳过，原因写进 Console（`warn` 等级），其他插件不受影响。
 - 每次唤出 Launcher 都重新扫描磁盘：**新增的插件目录下次唤出即可用**，不必重启应用；已注册的插件不会重复注册，也不会被卸载（运行时要跨命令保留状态）。改动**已有**插件的清单或入口则需要重启应用。
-- 三种目录会被跳过：没有任何清单的目录（作者草稿）静默忽略；只有 `extension.json` 的旧布局报「旧布局已废弃」；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `plugin.json` 安装的能力冲突。
-
-#### 从旧布局迁移
-
-旧的 `extensions/<id>/extension.json` 目录**不再被读取**。迁移到 plux 只有两步：
-
-1. 目录改名为 `<id>-v<version>.js`（`json-editor` → `json-editor-v1.0.0.js`），并挪进 `extensions/plugins/`；
-2. `extension.json` 改写为 `plugin.json`：顶层补 `version`，去掉 `kind` / `window` / `capabilities`——「脚本式还是 UI 式」下沉成「命令有没有 `ui` 块」，窗口尺寸与剪贴板授权也搬进命令的 `ui` 块。
+- 两种目录会被跳过：没有 `plugin.json` 的目录（作者的草稿等）静默忽略；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `plugin.json` 安装的能力冲突。
 
 ### 仓库自带插件
 
-仓库的 `extensions/plugins/` 目录里放着随源码维护的插件（目前是 `json-editor`）。用哪一份由构建类型决定：
+仓库的 `extensions/` 目录里放着随源码维护的插件（目前是 `json-editor`）。用哪一份由构建类型决定：
 
 - **debug 构建**：直接把仓库 `extensions/` 当作扩展目录，不做复制，也不生成 `demo` 示例（不往工作树里写文件）。改完仓库里的插件文件重启即生效，UI 命令的 `main.js` 还会热重载。
 - **release 构建**：用用户数据目录，把仓库插件播种进去（只复制尚不存在的目录，不覆盖用户改动），并首次生成 `demo` 示例。
@@ -189,7 +182,7 @@ export async function hello({ command, plugin, root, argv }) {
 命令带 `ui` 块就是 **UI 命令**：`main.js` 只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
 
 ```text
-extensions/plugins/demo-v1.0.0.js/
+extensions/demo-v1.0.0.js/
 ├── plugin.json    # 清单
 ├── index.js       # 脚本命令入口
 └── main.js        # UI 命令入口：export default class extends View
@@ -256,7 +249,7 @@ export default class DemoPanel extends View {
 
 ### 内置 JSON 编辑器
 
-仓库自带一个用插件机制实现的 JSON 编辑器，位于 [`extensions/plugins/json-editor-v1.0.0.js`](extensions/plugins/json-editor-v1.0.0.js)，启动时同步到用户插件目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
+仓库自带一个用插件机制实现的 JSON 编辑器，位于 [`extensions/json-editor-v1.0.0.js`](extensions/json-editor-v1.0.0.js)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
 
 - **置顶可运行时切换**：清单默认 `ui.always_on_top: true`；点宿主标题栏右上角的图钉即可切换，窗口不关闭、内容不丢失。
 - **粘贴自动格式化**：向编辑器粘贴一段 ≥8 字符的文本时自动解析并格式化（行号 / 语法高亮由只读结果面板的 Markdown 承担）。
@@ -376,7 +369,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建：插件放 `plugins/<id>-v<version>.js/`（见「Launcher 与扩展」），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，插件直接放在它下面：`<id>-v<version>.js/`（见「Launcher 与扩展」），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）。
 
 ## 快捷键
 

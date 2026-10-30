@@ -1,21 +1,16 @@
 //! 插件目录的定位、播种与扫描。
 //!
-//! 目录约定（plux 的 bundle 命名）：`<extensions>/plugins/<id>-v<version>.js/`，
+//! 目录约定（plux 的 bundle 命名）：`<extensions>/<id>-v<version>.js/`，
 //! 目录里放 `plugin.json` 与入口脚本。清单本身的解析与校验在
 //! `plux_js_manager::manifest` 里，本模块只管"文件在哪、怎么播种、哪些目录
 //! 看起来是插件但已经不可用"。
 //!
-//! 旧布局（`<extensions>/<id>/extension.json`）不再被读取：扫描到就报一条
-//! "待迁移"错误，由 Launcher 打到 Console，不静默跳过。
+//! 没有 `plugin.json` 的目录一律忽略——作者的草稿、过时的旧布局都不该刷一屏错误。
 
 use std::path::{Path, PathBuf};
 
 pub use plux_js_manager::{MANIFEST_FILE, UI_ENTRY};
 
-/// 插件目录所在的子层名。
-pub const PLUGINS_DIR: &str = "plugins";
-/// 旧布局的清单文件名。只用于识别，从不读取。
-pub const LEGACY_MANIFEST_FILE: &str = "extension.json";
 /// gpui-shell 自己的清单名。同时存在会让 gpui-shell 走严格清单路径，故禁止。
 pub const SHELL_MANIFEST_FILE: &str = "gpui-shell.json";
 
@@ -28,11 +23,6 @@ pub fn extensions_dir() -> PathBuf {
     path.push("bolt");
     path.push("extensions");
     path
-}
-
-/// 插件根：`<extensions>/plugins/`。
-pub fn plugins_dir(extensions: &Path) -> PathBuf {
-    extensions.join(PLUGINS_DIR)
 }
 
 /// 仓库内随源码维护的扩展目录（开发副本）。
@@ -75,31 +65,17 @@ pub fn ensure_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))
 }
 
-/// 扫描插件根，返回可注册的插件目录与错误消息。
+/// 扫描扩展根，返回可注册的插件目录与错误消息。
 ///
 /// - 有 `plugin.json` → 收集（是否合法交给 plux manager 判断）。
-/// - 只有 `extension.json`（旧布局）→ 报"待迁移"。
-/// - 两者都没有 → 忽略（作者的草稿目录不该刷一屏错误）。
+/// - 没有 → 忽略（作者的草稿目录不该刷一屏错误）。
 /// - 同时有 `gpui-shell.json` → 报错，因为 gpui-shell 会走严格清单路径。
-pub fn scan(plugins: &Path, extensions_root: &Path) -> (Vec<PathBuf>, Vec<String>) {
+pub fn scan(extensions: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let mut found = Vec::new();
     let mut errors = Vec::new();
 
-    for entry in read_dirs(plugins) {
+    for entry in read_dirs(extensions) {
         inspect(&entry, &mut found, &mut errors);
-    }
-
-    // 旧布局在扩展根下，与 plugins/ 同级。
-    for entry in read_dirs(extensions_root) {
-        if entry.file_name().and_then(|name| name.to_str()) == Some(PLUGINS_DIR) {
-            continue;
-        }
-        if entry.join(LEGACY_MANIFEST_FILE).is_file() {
-            errors.push(format!(
-                "扩展加载失败 {}：旧布局已废弃，请迁移到 {PLUGINS_DIR}/<id>-v<version>.js/{MANIFEST_FILE}",
-                entry.display()
-            ));
-        }
     }
 
     found.sort();
@@ -124,15 +100,7 @@ fn read_dirs(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn inspect(dir: &Path, found: &mut Vec<PathBuf>, errors: &mut Vec<String>) {
-    let has_manifest = dir.join(MANIFEST_FILE).is_file();
-    if !has_manifest {
-        if dir.join(LEGACY_MANIFEST_FILE).is_file() {
-            errors.push(format!(
-                "扩展加载失败 {}：目录里的 {} 不能放在 {PLUGINS_DIR}/ 下，且目录名必须是 `<id>-v<version>.js`",
-                dir.display(),
-                LEGACY_MANIFEST_FILE
-            ));
-        }
+    if !dir.join(MANIFEST_FILE).is_file() {
         return;
     }
     if dir.join(SHELL_MANIFEST_FILE).is_file() {
@@ -145,11 +113,11 @@ fn inspect(dir: &Path, found: &mut Vec<PathBuf>, errors: &mut Vec<String>) {
     found.push(dir.to_path_buf());
 }
 
-/// 把仓库 `extensions/plugins/` 下的插件目录播种到数据目录，返回复制个数。
+/// 把仓库 `extensions/` 下的插件目录播种到数据目录，返回复制个数。
 /// 已存在的目录一律不动：数据目录里的内容是用户的，不覆盖。
 pub fn ensure_bundled_extensions(target: &Path) -> Result<usize, String> {
     match bundled_extensions_dir() {
-        Some(source) => sync_plugins(&plugins_dir(&source), target),
+        Some(source) => sync_plugins(&source, target),
         None => Ok(0),
     }
 }
@@ -161,7 +129,8 @@ fn sync_plugins(source: &Path, target: &Path) -> Result<usize, String> {
     let mut count = 0;
     for entry in entries.flatten() {
         let src = entry.path();
-        if !src.is_dir() {
+        // 只播种看起来是插件的目录：有清单才算，草稿与杂项留在仓库里。
+        if !src.is_dir() || !src.join(MANIFEST_FILE).is_file() {
             continue;
         }
         let dst = target.join(entry.file_name());
@@ -316,8 +285,8 @@ export default class DemoPanel extends View {
 
 /// First-run convenience: write the `demo` plugin when its directory is absent.
 /// An existing directory is left untouched (作者的改动不该被覆盖).
-pub fn ensure_demo_plugin(plugins: &Path) -> Result<(), String> {
-    let root = plugins.join(DEMO_DIR);
+pub fn ensure_demo_plugin(extensions: &Path) -> Result<(), String> {
+    let root = extensions.join(DEMO_DIR);
     if root.exists() {
         return Ok(());
     }
@@ -338,7 +307,7 @@ mod tests {
     #[test]
     fn missing_dir_yields_nothing() {
         let tmp = TempDir::new("ext-scan-missing");
-        let (plugins, errors) = scan(&tmp.0.join("nope"), &tmp.0);
+        let (plugins, errors) = scan(&tmp.0.join("nope"));
         assert!(plugins.is_empty());
         assert!(errors.is_empty());
     }
@@ -346,49 +315,22 @@ mod tests {
     #[test]
     fn scans_plugin_dirs_and_skips_drafts() {
         let tmp = TempDir::new("ext-scan-ok");
-        tmp.write(&format!("plugins/demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
-        tmp.write("plugins/scratch/notes.txt", "draft");
+        tmp.write(&format!("demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
+        tmp.write("scratch/notes.txt", "draft");
 
-        let (plugins, errors) = scan(&tmp.0.join("plugins"), &tmp.0);
+        let (plugins, errors) = scan(&tmp.0);
         assert!(errors.is_empty(), "{errors:?}");
         assert_eq!(plugins.len(), 1);
         assert!(plugins[0].ends_with(DEMO_DIR));
     }
 
     #[test]
-    fn legacy_layout_is_reported_from_the_extensions_root() {
-        let tmp = TempDir::new("ext-legacy");
-        tmp.write(&format!("json-editor/{LEGACY_MANIFEST_FILE}"), "{}");
-        tmp.write(&format!("plugins/demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
-
-        let (plugins, errors) = scan(&tmp.0.join("plugins"), &tmp.0);
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("旧布局"), "{errors:?}");
-        assert!(errors[0].contains("json-editor"), "{errors:?}");
-    }
-
-    #[test]
-    fn legacy_manifest_inside_plugins_is_reported() {
-        let tmp = TempDir::new("ext-legacy-inside");
-        tmp.write(&format!("plugins/demo/{LEGACY_MANIFEST_FILE}"), "{}");
-
-        let (plugins, errors) = scan(&tmp.0.join("plugins"), &tmp.0);
-        assert!(plugins.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("目录名必须是"), "{errors:?}");
-    }
-
-    #[test]
     fn gpui_shell_manifest_is_rejected() {
         let tmp = TempDir::new("ext-shell-manifest");
-        tmp.write(&format!("plugins/demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
-        tmp.write(
-            &format!("plugins/demo-v1.0.0.js/{SHELL_MANIFEST_FILE}"),
-            "{}",
-        );
+        tmp.write(&format!("demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
+        tmp.write(&format!("demo-v1.0.0.js/{SHELL_MANIFEST_FILE}"), "{}");
 
-        let (plugins, errors) = scan(&tmp.0.join("plugins"), &tmp.0);
+        let (plugins, errors) = scan(&tmp.0);
         assert!(plugins.is_empty());
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains(SHELL_MANIFEST_FILE), "{errors:?}");
@@ -412,12 +354,12 @@ mod tests {
     #[test]
     fn bundled_plugins_copy_only_missing() {
         let source = TempDir::new("ext-bundled-src");
-        source.write(&format!("plugins/a-v1.0.0.js/{MANIFEST_FILE}"), "{}");
-        source.write("plugins/a-v1.0.0.js/index.js", "export function run() {}");
-        source.write(&format!("plugins/b-v1.0.0.js/{MANIFEST_FILE}"), "{}");
+        source.write(&format!("a-v1.0.0.js/{MANIFEST_FILE}"), "{}");
+        source.write("a-v1.0.0.js/index.js", "export function run() {}");
+        source.write(&format!("b-v1.0.0.js/{MANIFEST_FILE}"), "{}");
 
         let target = TempDir::new("ext-bundled-dst");
-        let copied = sync_plugins(&source.0.join("plugins"), &target.0).expect("first sync");
+        let copied = sync_plugins(&source.0, &target.0).expect("first sync");
         assert_eq!(copied, 2);
         assert!(target.0.join("a-v1.0.0.js/index.js").is_file());
 
@@ -426,7 +368,7 @@ mod tests {
             "export function run() { /* local */ }",
         )
         .unwrap();
-        let copied = sync_plugins(&source.0.join("plugins"), &target.0).expect("second sync");
+        let copied = sync_plugins(&source.0, &target.0).expect("second sync");
         assert_eq!(copied, 0);
         assert!(
             std::fs::read_to_string(target.0.join("a-v1.0.0.js/index.js"))
@@ -452,13 +394,5 @@ mod tests {
                 assert_eq!(active_extensions_dir(), extensions_dir());
             }
         }
-    }
-
-    #[test]
-    fn plugins_dir_appends_the_plugins_layer() {
-        assert_eq!(
-            plugins_dir(Path::new("/tmp/bolt/extensions")),
-            PathBuf::from("/tmp/bolt/extensions/plugins")
-        );
     }
 }

@@ -1,4 +1,4 @@
-//! Extensions 模块：把 `extensions/plugins/` 下的 plux 插件变成 Launcher item。
+//! Extensions 模块：把 `extensions/` 下的 plux 插件变成 Launcher item。
 //!
 //! 一个插件贡献若干命令，一条命令一条 item：
 //!
