@@ -30,26 +30,42 @@ pub(crate) fn strip_token_text(text: &str, spans: &[InlineTokenSpan]) -> String 
     out.trim().to_string()
 }
 
-/// item 是否命中查询：大小写不敏感的 contains 匹配，空查询匹配一切。
-/// 风格对齐 gpui-component 的 `CommandItem::matches`（逐字段 OR），
-/// 参与字段：title、id、subtitle、keywords。
+/// 查询是否命中若干文本字段：**按空白分词，每个词都要命中（AND），词序无关**。
+///
+/// 单个词在任意一个字段里出现即算命中（大小写不敏感）。所以 `"微信 wechat"`
+/// 可以由 title 命中"微信"、由 keywords 命中"wechat"——这是"多个关键字同时
+/// 存在"的意图，不是"某个字段里同时有这两段"。
+///
+/// 空查询或只有空白的分词结果为空 → 匹配一切。全角空格（中文输入法下常见）
+/// 也算分隔符：`split_whitespace` 走 `char::is_whitespace`。
+pub(crate) fn matches_query_terms(query: &str, fields: &[&str]) -> bool {
+    let terms: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    if terms.is_empty() {
+        return true;
+    }
+    let haystacks: Vec<String> = fields.iter().map(|field| field.to_lowercase()).collect();
+    terms.iter().all(|term| {
+        haystacks
+            .iter()
+            .any(|haystack| haystack.contains(term.as_str()))
+    })
+}
+
+/// item 是否命中查询：见 [`matches_query_terms`]，参与字段是
+/// title、id、subtitle、keywords（逐字段 OR，逐词 AND）。
 fn matches_query(item: &LauncherItem, query: &str) -> bool {
-    if query.is_empty() {
+    if query.trim().is_empty() {
         return true;
     }
 
-    let query = query.to_lowercase();
-
-    item.title.to_lowercase().contains(&query)
-        || item.id.to_lowercase().contains(&query)
-        || item
-            .subtitle
-            .as_ref()
-            .is_some_and(|subtitle| subtitle.to_lowercase().contains(&query))
-        || item
-            .keywords
-            .iter()
-            .any(|keyword| keyword.to_lowercase().contains(&query))
+    let mut fields: Vec<&str> = Vec::with_capacity(2 + item.keywords.len());
+    fields.push(item.title.as_str());
+    fields.push(item.id.as_str());
+    if let Some(subtitle) = &item.subtitle {
+        fields.push(subtitle);
+    }
+    fields.extend(item.keywords.iter().map(String::as_str));
+    matches_query_terms(query, &fields)
 }
 
 /// 按「有效查询」（[`matches_query`]）与粘贴类型能力过滤 items，返回可见
@@ -161,6 +177,37 @@ mod tests {
         assert_eq!(visible_indices(&items, "wechat", None), vec![0]);
         assert_eq!(visible_indices(&items, "副标题", None), vec![0]);
         assert!(visible_indices(&items, "nomatch", None).is_empty());
+    }
+
+    #[test]
+    fn space_separated_terms_are_all_required_any_order() {
+        let mut it = item("wecom", "应用");
+        it.title = "企业微信".into();
+        it.keywords = vec!["wechat".into(), "work".into()];
+        let items = vec![it];
+
+        // 两个词都在标题里：命中，且顺序无关。
+        assert_eq!(visible_indices(&items, "企业 微信", None), vec![0]);
+        assert_eq!(visible_indices(&items, "微信 企业", None), vec![0]);
+        // 跨字段也算：一个词命中 title，另一个命中 keywords。
+        assert_eq!(visible_indices(&items, "企业 wechat", None), vec![0]);
+        // 只要有一个词无处可寻就不命中。
+        assert!(visible_indices(&items, "企业 不存在", None).is_empty());
+        assert!(visible_indices(&items, "企业 wechat nope", None).is_empty());
+    }
+
+    #[test]
+    fn term_separators_accept_extra_and_full_width_spaces() {
+        let mut it = item("wecom", "应用");
+        it.title = "企业微信".into();
+        let items = vec![it];
+
+        // 连续空格、首尾空白、全角空格都当分隔符；不产生空词。
+        assert_eq!(visible_indices(&items, "  企业   微信  ", None), vec![0]);
+        assert_eq!(visible_indices(&items, "企业\u{3000}微信", None), vec![0]);
+        // 只有空白 = 没输入：匹配一切，而不是匹配空串。
+        assert_eq!(visible_indices(&items, "   ", None), vec![0]);
+        assert_eq!(visible_indices(&items, "\u{3000}", None), vec![0]);
     }
 
     #[test]

@@ -61,6 +61,8 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 5. 原始 Info.plist 值（`en.lproj` 等其他语言覆盖——企业微信会同时保留"WeCom"这个英文名）
 6. 内置默认别名表（`weixin` → 企业微信等，编译进二进制）
 
+**多关键字**：搜索词按空白切分（连续空格、首尾空白、全角空格都算分隔），**每个词都要命中**才算匹配，词序无关；每个词只要在标题 / id / 副标题 / 关键词任一字段里出现即可——「微信 wechat」能命中同一个 item，只要它有字段含"微信"、有字段含"wechat"（不必是同一字段）。只有空白等于没输入，列表不过滤。Cmd+K 动作面板沿用同一规则（只匹配动作标题）。
+
 **显示名解析**：按系统语言优先级找 `InfoPlist.strings`——先 `zh-Hans-CN` 再 `zh-Hans` 再 `Base` 最后 `en`。企业微信这种特殊布局（`zh-Hans.lproj` 目录存在但没有 `InfoPlist.strings`，`Base.lproj` 才有"企业微信"）也能正确取到中文名。
 
 **自定义搜索词**：所有 item（应用、脚本、Pin 等）统一通过 Launcher 动作面板的「**编辑搜索关键词**」修改，保存到 `~/Library/Application Support/bolt/item-keywords.json`（按 item id 覆盖整个 keywords，多个词用逗号分隔，留空恢复默认）。应用会在此基础上叠加内置默认别名（源码维护在 `src/modules/apps/default-aliases.json`，`include_str!` 编进二进制）；编辑过的 item 以编辑值为准。

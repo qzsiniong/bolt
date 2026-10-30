@@ -1,7 +1,7 @@
 //! Cmd+K 动作面板：自己的 no-search Command + 底部搜索框 + 过滤后的动作列表。
 //!
 //! 面板是 Launcher 主视图上的一个浮层（右下角，Raycast 风格）：列表在上、
-//! 搜索框在底部。查询过滤只看动作 title 的 contains 匹配。
+//! 搜索框在底部。查询过滤只看动作 title，语义与主列表一致（空格分词、逐词 AND）。
 
 use crossbeam_channel::Sender;
 use gpui_kit::base::{h_flex, v_flex};
@@ -19,6 +19,7 @@ use gpui_kit::{
 use gpui_kit::assets::IconName;
 
 use super::actions::open_action_dialog;
+use super::filter::matches_query_terms;
 use super::item::{ItemAction, LauncherAction};
 
 /// Cmd+K 动作面板的状态。
@@ -38,13 +39,13 @@ pub(crate) struct ActionsPanel {
 }
 
 impl ActionsPanel {
-    /// 面板可见动作下标（按 query_filter 的 contains 过滤 title）。
+    /// 面板可见动作下标：与主列表同一套语义（空格分词、逐词 AND），
+    /// 只是参与匹配的字段只有 title。
     pub fn compute_visible(&self) -> Vec<usize> {
-        let query = self.query_filter.to_lowercase();
         self.actions
             .iter()
             .enumerate()
-            .filter(|(_, action)| query.is_empty() || action.title.to_lowercase().contains(&query))
+            .filter(|(_, action)| matches_query_terms(&self.query_filter, &[action.title.as_str()]))
             .map(|(index, _)| index)
             .collect()
     }
