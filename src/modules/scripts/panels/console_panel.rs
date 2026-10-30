@@ -10,9 +10,9 @@ use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AppContext, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
-    App, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, Hsla, IntoElement,
-    Render, Task, WeakEntity, Window, FontWeight, div, px,
+    App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
+    Hsla, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
+    Styled, Task, WeakEntity, Window, div, px,
 };
 
 use crate::console_channel::{ConsoleEntry, ConsoleLevel};

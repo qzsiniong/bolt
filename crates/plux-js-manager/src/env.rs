@@ -61,6 +61,14 @@ pub trait JsEnv: Send + Sync + 'static {
     /// 源码预处理：`.ts` 去类型。`.js` 原样返回。
     fn prepare_source(&self, path: &Path, code: &str) -> Result<String, String>;
 
+    /// 把一条 JS 异常消息归类成控制流结果（`exit` 之类的正常终止）。
+    ///
+    /// 哨兵格式是宿主自己的约定（bolt 用 `__bolt_exit_<code>__`），crate 不硬编码
+    /// 它：由宿主认领，认不出就返回 `None`，退回普通的 [`crate::JsError::Script`]。
+    fn classify_error(&self, _message: &str) -> Option<crate::JsError> {
+        None
+    }
+
     /// 插件自己 `console.log` 的输出。
     fn log(&self, level: LogLevel, message: &str);
 }

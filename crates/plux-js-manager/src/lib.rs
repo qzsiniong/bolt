@@ -32,4 +32,4 @@ pub use manifest::{
     UI_ENTRY, UiCapabilities, UiSpec,
 };
 pub use meta::PluginMeta;
-pub use store::{DEFAULT_TIMEOUT, InvokeRequest, PluginStore, bundle_key};
+pub use store::{DEFAULT_TIMEOUT, InvokeRequest, PluginStore, RuntimeState, bundle_key};

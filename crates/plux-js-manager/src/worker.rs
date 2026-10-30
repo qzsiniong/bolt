@@ -6,6 +6,10 @@
 //! 让同步的 `invoke` 与异步的引擎能干净地待在一起，也顺带把"引擎不跨线程"这条
 //! QuickJS 约束变成了结构性保证。
 //!
+//! **加载是非阻塞的**：`spawn` 只起线程就返回，引擎构建与入口求值都在工人线程里
+//! 跑。就绪与否由 `LoadState` 记录——它在 gpui 主线程上被 `ensure_loaded` 调用，
+//! 30s 的加载预算不该算在 UI 的响应时间上。
+//!
 //! 超时与取消靠 `AsyncRuntime` 的 interrupt handler：宿主置位
 //! [`PluginWorker::abort`]，QuickJS 在下一个中断点抛不可捕获异常，线程回到消息
 //! 循环。标志只由工人线程在每条命令开头清零，因此不存在跨线程竞争。
@@ -14,15 +18,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
+use parking_lot::{Condvar, Mutex};
 use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module, Value};
 
-use crate::env::JsEnv;
+use crate::cancel::CancelToken;
+use crate::env::{JsEnv, LogLevel};
 use crate::error::JsError;
 use crate::loader::{PluginLoader, PluginResolver};
-use crate::store::InvokeRequest;
+use crate::store::{InvokeRequest, RuntimeState};
 use crate::value::{format_caught, value_to_json};
 
 /// 与普通脚本一致：栈上限 8 MiB（`while(true)` 递归也不会立刻踩穿）。
@@ -35,6 +41,12 @@ const IDLE_BUDGET: Duration = Duration::from_millis(200);
 
 /// 加载（建引擎 + 求值入口模块）的超时。
 pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 等待插件回复 / 等待就绪的轮询间隔：既用来查超时，也用来查用户取消。
+pub(crate) const POLL: Duration = Duration::from_millis(100);
+
+/// 丢给 `Drop` 的宽限：正常停在消息循环里的线程毫秒级退出。
+const DROP_GRACE: Duration = Duration::from_millis(500);
 
 /// 命令派发脚本。三档回退顺序：具名导出 → default 对象 → `globalThis.plux.commands`。
 const DISPATCH: &str = r#"
@@ -86,42 +98,152 @@ pub(crate) enum WorkerMsg {
     Shutdown,
 }
 
+/// 运行时生命周期：一次性的就绪事件，但**结论要能被之后的每一次 invoke 反复读到**。
+///
+/// 这也是不用 ready 通道的原因：`bounded(1)` 只能被一个读者消费，第二个读者只会
+/// 看到 `Disconnected`，分不清"还在加载"和"加载失败"。
+#[derive(Clone, Debug)]
+pub(crate) enum LoadState {
+    Loading,
+    Ready,
+    /// 加载阶段失败：线程已（或即将）退出。错误留给之后每一次调用。
+    Failed(JsError),
+    /// 曾就绪，之后线程退出（收到 Shutdown 或 panic）。
+    Exited(JsError),
+}
+
+impl LoadState {
+    fn is_terminal(&self) -> bool {
+        matches!(self, Self::Failed(_) | Self::Exited(_))
+    }
+
+    fn error(&self) -> Option<JsError> {
+        match self {
+            Self::Failed(error) | Self::Exited(error) => Some(error.clone()),
+            _ => None,
+        }
+    }
+}
+
+/// 工人线程与等待者共享的状态。锁只保护这一个字段，`Condvar` 广播所有等待者。
+struct Shared {
+    state: Mutex<LoadState>,
+    ready: Condvar,
+    /// 起线程的时刻：加载超时按它算，不按每次 invoke 算（否则每次调用都能刷新 30s）。
+    spawned_at: Instant,
+}
+
+impl Shared {
+    fn mark_ready(&self) {
+        *self.state.lock() = LoadState::Ready;
+        self.ready.notify_all();
+    }
+
+    /// 先落 Console 再置状态：用户即使不再点这条命令，也能在面板里看到原因。
+    fn fail(&self, error: JsError, env: &dyn JsEnv, label: &str) {
+        let level = if error.is_control_flow() {
+            LogLevel::Warn
+        } else {
+            LogLevel::Error
+        };
+        env.log(level, &format!("插件 {label} 加载失败：{error}"));
+        *self.state.lock() = LoadState::Failed(error);
+        self.ready.notify_all();
+    }
+}
+
 /// 一个插件的工人线程句柄。
 pub(crate) struct PluginWorker {
     tx: Sender<WorkerMsg>,
     abort: Arc<AtomicBool>,
-    join: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    join: Mutex<Option<JoinHandle<()>>>,
+    shared: Arc<Shared>,
+    /// 是否已经请求过退出：`unload` 之后 `Drop` 会再调一次 `shutdown`，
+    /// 不记住这一点就会把 500ms 的宽限等两遍。
+    stopped: AtomicBool,
 }
 
 impl PluginWorker {
-    /// 起线程并等它把引擎与入口模块准备好。
+    /// 起线程并**立即返回**：引擎构建与入口求值都在工人线程里跑。
     ///
-    /// 返回时插件已可执行命令；失败时线程已退出，不需要再清理。
+    /// 只有"线程建不起来"会在这里失败；引擎加载的成败通过 [`Self::state`] 与
+    /// [`Self::wait_ready`] 传递，并已由 `env.log` 报给 Console。
     pub(crate) fn spawn(spec: WorkerSpec, env: Arc<dyn JsEnv>) -> Result<Arc<Self>, JsError> {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let (ready_tx, ready_rx) = crossbeam_channel::bounded(1);
         let abort = Arc::new(AtomicBool::new(false));
         let thread_abort = abort.clone();
+        let shared = Arc::new(Shared {
+            state: Mutex::new(LoadState::Loading),
+            ready: Condvar::new(),
+            spawned_at: Instant::now(),
+        });
+        let thread_shared = shared.clone();
 
         let join = std::thread::Builder::new()
             .name(format!("plux-js:{}", spec.id))
-            .spawn(move || worker_main(spec, env, thread_abort, rx, ready_tx))
+            .spawn(move || worker_main(spec, env, thread_abort, rx, thread_shared))
             .map_err(|e| JsError::Runtime(format!("无法启动插件线程：{e}")))?;
 
-        let worker = Arc::new(Self {
+        Ok(Arc::new(Self {
             tx,
             abort,
-            join: parking_lot::Mutex::new(Some(join)),
-        });
+            join: Mutex::new(Some(join)),
+            shared,
+            stopped: AtomicBool::new(false),
+        }))
+    }
 
-        match ready_rx.recv_timeout(LOAD_TIMEOUT) {
-            Ok(Ok(())) => Ok(worker),
-            Ok(Err(e)) => Err(e),
-            Err(_) => {
-                worker.abort();
-                Err(JsError::Timeout(LOAD_TIMEOUT))
+    /// 等就绪。并发调用共享同一次等待与同一份结论。
+    ///
+    /// 加载也算进本次执行预算——否则最坏是 30s 加载 + 60s 执行。超时**不 abort**：
+    /// 中断一次正在进行的加载会把它永久打成 Failed。
+    pub(crate) fn wait_ready(
+        &self,
+        timeout: Duration,
+        cancel: &CancelToken,
+    ) -> Result<(), JsError> {
+        let load_deadline = self.shared.spawned_at + LOAD_TIMEOUT;
+        let deadline = Instant::now() + timeout;
+        let mut state = self.shared.state.lock();
+        loop {
+            match &*state {
+                LoadState::Ready => return Ok(()),
+                LoadState::Failed(error) => {
+                    return Err(JsError::Runtime(format!("插件加载失败：{error}")));
+                }
+                LoadState::Exited(error) => return Err(error.clone()),
+                LoadState::Loading => {}
             }
+            if cancel.is_cancelled() {
+                return Err(JsError::Cancelled);
+            }
+            let now = Instant::now();
+            if now >= load_deadline {
+                return Err(JsError::Runtime(format!(
+                    "插件加载超时（{}s）",
+                    LOAD_TIMEOUT.as_secs()
+                )));
+            }
+            if now >= deadline {
+                return Err(JsError::Timeout(timeout));
+            }
+            // 切片上限 POLL：用户点"停止"后 100ms 内能看到 Cancelled。
+            let slice = (deadline.min(load_deadline) - now).min(POLL);
+            self.shared.ready.wait_for(&mut state, slice);
         }
+    }
+
+    /// 健康查询：不阻塞、不消费结论。
+    pub(crate) fn state(&self) -> RuntimeState {
+        match &*self.shared.state.lock() {
+            LoadState::Loading => RuntimeState::Loading,
+            LoadState::Ready => RuntimeState::Ready,
+            _ => RuntimeState::Dead,
+        }
+    }
+
+    pub(crate) fn last_error(&self) -> Option<JsError> {
+        self.shared.state.lock().error()
     }
 
     /// 投递一条消息（超时/取消由 `PluginStore` 判定，这里只负责发）。
@@ -136,19 +258,100 @@ impl PluginWorker {
         self.abort.store(true, Ordering::SeqCst);
     }
 
-    /// 停线程并等它退出。
-    pub(crate) fn shutdown(&self) {
+    /// 停线程，但**只在 `grace` 内等收尾**；超时就丢掉 JoinHandle 放手。
+    ///
+    /// QuickJS 线程无法被强杀：加载中的线程可能正卡在引擎构建或宿主阻塞调用上，
+    /// 无条件 join 会把"删插件 / 重建运行时"变成主线程上的最长 30s 卡顿。
+    /// 返回 true 表示线程已经收尾（此后资源全部释放）。
+    pub(crate) fn shutdown(&self, grace: Duration) -> bool {
+        let first_request = !self.stopped.swap(true, Ordering::SeqCst);
         self.abort();
         let _ = self.tx.send(WorkerMsg::Shutdown);
+
+        // 已经请求过（unload 之后的 Drop）：不再重复等宽限，只在线程确实收尾时 join。
+        if !first_request {
+            return self.reap();
+        }
+
+        let settled = {
+            let mut state = self.shared.state.lock();
+            let deadline = Instant::now() + grace;
+            loop {
+                if state.is_terminal() {
+                    break true;
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    break false;
+                }
+                self.shared.ready.wait_for(&mut state, deadline - now);
+            }
+        };
+
+        if settled {
+            self.reap();
+        }
+        settled
+    }
+
+    /// 线程已到终止态时 join（不会阻塞：终止态在引擎析构之后才置位）。
+    fn reap(&self) -> bool {
+        if !self.shared.state.lock().is_terminal() {
+            return false;
+        }
         if let Some(join) = self.join.lock().take() {
             let _ = join.join();
         }
+        true
+    }
+
+    /// 测试专用：让线程退出，但**不摘表**，用来模拟"运行时意外死亡"。
+    #[cfg(test)]
+    pub(crate) fn exit_for_test(&self) {
+        let _ = self.tx.send(WorkerMsg::Shutdown);
     }
 }
 
 impl Drop for PluginWorker {
     fn drop(&mut self) {
-        self.shutdown();
+        self.shutdown(DROP_GRACE);
+    }
+}
+
+/// 线程退出守卫：声明在 `worker_main` 最前面 → 最后被 drop，于是终止态一定在
+/// context/runtime 析构之后才置位（`shutdown` 因此可以只等终态就 join），
+/// panic 时也由 unwind 的 `Drop` 兜住。
+struct ExitGuard {
+    shared: Arc<Shared>,
+    env: Arc<dyn JsEnv>,
+    label: String,
+}
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        let needs_log = {
+            let mut state = self.shared.state.lock();
+            match &*state {
+                // 已经写明原因的失败不要被覆盖。
+                LoadState::Failed(_) | LoadState::Exited(_) => false,
+                LoadState::Loading => {
+                    *state =
+                        LoadState::Failed(JsError::Runtime("插件线程在就绪前退出".to_string()));
+                    true
+                }
+                LoadState::Ready => {
+                    *state = LoadState::Exited(JsError::Runtime("插件运行时已退出".to_string()));
+                    false
+                }
+            }
+        };
+        self.shared.ready.notify_all();
+        if needs_log {
+            self.env.log(
+                LogLevel::Error,
+                &format!("插件 {} 加载失败：线程在就绪前退出", self.label),
+            );
+        }
     }
 }
 
@@ -157,15 +360,25 @@ fn worker_main(
     env: Arc<dyn JsEnv>,
     abort: Arc<AtomicBool>,
     rx: Receiver<WorkerMsg>,
-    ready: Sender<Result<(), JsError>>,
+    shared: Arc<Shared>,
 ) {
+    let _exit = ExitGuard {
+        shared: shared.clone(),
+        env: env.clone(),
+        label: format!("{} v{}", spec.id, spec.version),
+    };
+
     let tokio_rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(runtime) => runtime,
         Err(e) => {
-            let _ = ready.send(Err(JsError::Runtime(format!("无法启动异步运行时：{e}"))));
+            shared.fail(
+                JsError::Runtime(format!("无法启动异步运行时：{e}")),
+                &*env,
+                &format!("{} v{}", spec.id, spec.version),
+            );
             return;
         }
     };
@@ -175,11 +388,11 @@ fn worker_main(
     let engine = tokio_rt.block_on(build_engine(&spec, &env, &abort));
     let (runtime, context) = match engine {
         Ok(engine) => {
-            let _ = ready.send(Ok(()));
+            shared.mark_ready();
             engine
         }
         Err(e) => {
-            let _ = ready.send(Err(e));
+            shared.fail(e, &*env, &format!("{} v{}", spec.id, spec.version));
             return;
         }
     };
@@ -266,15 +479,12 @@ async fn build_engine(
                 "import * as ns from {entry:?};\nglobalThis.__plux_ns = ns;\nglobalThis.__plux_default = (ns && ns.default) || undefined;\n",
             );
             let promise = Module::evaluate(ctx.clone(), "<plux:entry>", bridge)
-                .map_err(|e| {
-                    let caught = rquickjs::CaughtError::from_error(&ctx, e);
-                    JsError::Script(format_caught(&caught))
-                })?;
+                .map_err(|e| caught(env, rquickjs::CaughtError::from_error(&ctx, e)))?;
             promise
                 .into_future::<()>()
                 .await
                 .catch(&ctx)
-                .map_err(|e| JsError::Script(format_caught(&e)))?;
+                .map_err(|e| caught(env, e))?;
 
             Ok::<(), JsError>(())
         })
@@ -298,27 +508,23 @@ async fn invoke(
 
             let payload = serde_json::json!({
                 "command": request.command,
-                "argv": request
-                    .args
-                    .as_deref()
-                    .map(|args| serde_json::from_str::<serde_json::Value>(args).unwrap_or(serde_json::Value::Null))
-                    .unwrap_or(serde_json::Value::Null),
+                // 缺省给空数组：DISPATCH 里 `Array.isArray(call.argv)` 必须成立。
+                "argv": request.args.clone().unwrap_or_default(),
                 "root": ctx.globals().get::<_, String>("__plux_root").unwrap_or_default(),
             });
             let call = ctx.json_parse(payload.to_string()).map_err(runtime_error)?;
-            ctx.globals().set("__plux_call", call).map_err(runtime_error)?;
+            ctx.globals()
+                .set("__plux_call", call)
+                .map_err(runtime_error)?;
 
             let name = format!("<plux:call:{seq}>");
             let promise = Module::evaluate(ctx.clone(), name.as_str(), DISPATCH)
-                .map_err(|e| {
-                    let caught = rquickjs::CaughtError::from_error(&ctx, e);
-                    JsError::Script(format_caught(&caught))
-                })?;
+                .map_err(|e| caught(env, rquickjs::CaughtError::from_error(&ctx, e)))?;
             promise
                 .into_future::<()>()
                 .await
                 .catch(&ctx)
-                .map_err(|e| JsError::Script(format_caught(&e)))?;
+                .map_err(|e| caught(env, e))?;
 
             if let Some(missing) = read_string(&ctx, "__plux_missing")? {
                 return Err(JsError::MissingHandler(missing));
@@ -327,6 +533,18 @@ async fn invoke(
             value_to_json(&ctx, &value).map_err(|e| JsError::Script(e.to_string()))
         })
         .await
+}
+
+/// 异常 → `JsError`：先问宿主认不认这条控制流（`exit` 之类的正常终止），
+/// 再退回普通脚本错误。哨兵格式属于宿主约定，crate 不硬编码。
+fn caught(env: &Arc<dyn JsEnv>, error: rquickjs::CaughtError) -> JsError {
+    if let rquickjs::CaughtError::Exception(exception) = &error
+        && let Some(message) = exception.message()
+        && let Some(flow) = env.classify_error(&message)
+    {
+        return flow;
+    }
+    JsError::Script(format_caught(&error))
 }
 
 fn read_string(ctx: &rquickjs::Ctx<'_>, name: &str) -> Result<Option<String>, JsError> {

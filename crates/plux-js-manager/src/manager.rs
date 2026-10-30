@@ -91,4 +91,16 @@ impl<'a> Manager<'a, FunctionOutput, PluginMeta> for JsManager {
             .unload(info.info.id(), &info.bundle.version.to_string());
         Ok(())
     }
+
+    /// plux 注销插件时会先 `unload_plugin` 再调用这里；`PluginStore::unload` 是幂等
+    /// 的，兜一次底保证工人线程不会因为某条路径漏了 unload 而残留。
+    fn unregister_plugin(
+        &mut self,
+        plugin: &Plugin<'a, FunctionOutput, PluginMeta>,
+    ) -> ManagerResult<()> {
+        let info = plugin.info();
+        self.store
+            .unload(info.info.id(), &info.bundle.version.to_string());
+        Ok(())
+    }
 }

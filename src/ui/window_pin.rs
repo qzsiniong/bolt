@@ -16,8 +16,8 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::{
-    Context, ElementId, IntoElement, InteractiveElement, ParentElement, Render,
-    Styled, Window, MouseButton, div,
+    Context, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    Styled, Window, div,
 };
 
 /// 直接改 NSWindow 层级实现置顶 / 取消置顶。

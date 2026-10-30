@@ -3,6 +3,10 @@
 //! plux 的 `Loader` 是 `&mut` 单线程的，命令却要在工作线程里跑（不能卡住 GPUI
 //! 主线程）。所以 [`crate::JsManager`] 只持有本表的 `Arc`，宿主也从这里调
 //! [`PluginStore::invoke`]：`Loader` 负责生命周期与元数据，本表负责执行。
+//!
+//! [`PluginStore::ensure_loaded`] **不阻塞**：它只把工人线程拉起来就返回，引擎构建
+//! 与入口求值发生在插件线程上；等待就绪统一压到 [`PluginStore::invoke`] 里，那里
+//! 本来就在工作线程上，且已经有超时与取消。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,25 +20,42 @@ use plux_rs::Bundle;
 use crate::cancel::CancelToken;
 use crate::env::{JsEnv, Scope};
 use crate::error::JsError;
-use crate::worker::{PluginWorker, WorkerSpec};
+use crate::worker::{POLL, PluginWorker, WorkerSpec};
 
 /// 命令的默认超时。插件里一个卡死的 `while(true)` 不该把应用拖住。
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// 等待插件回复时的轮询间隔：既用来查超时，也用来查用户取消。
-const POLL: Duration = Duration::from_millis(100);
 
 /// 请求中断后等工人线程收尾的宽限：等它回一条（会被丢弃的）回复，确认它已经
 /// 回到消息循环，下一条命令不会被前一条的残留中断标志误伤。
 const ABORT_GRACE: Duration = Duration::from_millis(500);
 
+/// 卸载时等工人线程收尾的宽限。
+///
+/// 正常停在消息循环里的线程毫秒级退出；**加载中**的线程最多等这么久，之后放手
+/// ——删插件 / 重建运行时不该把主线程拖住 30s（QuickJS 线程不可强杀）。
+const UNLOAD_GRACE: Duration = Duration::from_millis(500);
+
+/// 宿主可见的运行时状态投影。
+///
+/// 三态而不是布尔：`Loading` 要放行（交给 `invoke` 的 `wait_ready` 去等），
+/// `Dead` 才需要宿主重建——两者混成一个 `bool` 正是"线程死了却永不重建"的成因。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeState {
+    Loading,
+    Ready,
+    Dead,
+}
+
 /// 一次命令调用。
 pub struct InvokeRequest {
     /// 清单里声明的命令 id。
     pub command: String,
-    /// 额外参数，JSON 数组文本（可选）。
-    pub args: Option<String>,
-    /// 执行预算。
+    /// 命令参数：就是 JS 侧看到的 `ctx.argv`。
+    ///
+    /// 收已解析的值而不是 JSON 文本：类型本身就是校验，非法 JSON 这个概念消失，
+    /// worker 侧也不用再做一次「解析失败就静默当 null」的兜底。
+    pub args: Option<Vec<serde_json::Value>>,
+    /// 执行预算（含等待运行时就绪的时间）。
     pub timeout: Duration,
     /// 用户中止 / 关闭窗口时置位。
     pub cancel: CancelToken,
@@ -53,8 +74,8 @@ impl InvokeRequest {
         }
     }
 
-    pub fn with_args(mut self, args: impl Into<String>) -> Self {
-        self.args = Some(args.into());
+    pub fn with_args(mut self, args: Vec<serde_json::Value>) -> Self {
+        self.args = Some(args);
         self
     }
 
@@ -85,7 +106,10 @@ impl PluginStore {
         })
     }
 
-    /// 确保插件已有常驻运行时；已加载时直接返回。
+    /// 确保插件已被安排加载；**不阻塞**。
+    ///
+    /// 已有条目一律 `Ok`（无论是否就绪）：重复调用不该重启运行时。加载成败通过
+    /// [`Self::state`] 暴露，并由 [`Self::invoke`] 在真正执行前等待。
     ///
     /// `permissions` 是插件清单里声明的权限（缺省为空 = 全关），运行时据此
     /// 过滤宿主模块的导出。
@@ -98,10 +122,13 @@ impl PluginStore {
         permissions: &[String],
     ) -> Result<(), JsError> {
         let key = (id.to_string(), version.to_string());
-        if self.workers.lock().contains_key(&key) {
+        // 查表与 spawn 在同一把锁内完成：spawn 现在只建线程（微秒级），可以持锁。
+        // 这样彻底消掉了原来"锁外 spawn、锁内复查、败者回收"的路径——败者的 Drop
+        // 现在会 join 一个正在加载的线程，而且两个引擎会各跑一遍插件顶层副作用。
+        let mut workers = self.workers.lock();
+        if workers.contains_key(&key) {
             return Ok(());
         }
-
         let spec = WorkerSpec {
             id: id.to_string(),
             version: version.to_string(),
@@ -109,16 +136,24 @@ impl PluginStore {
             entry: entry.to_path_buf(),
             permissions: permissions.to_vec(),
         };
-        let worker = PluginWorker::spawn(spec, self.env.clone())?;
-
-        // 加载期间别的线程可能已经装好了同一个插件：以先到的为准。
-        let mut workers = self.workers.lock();
-        if let Some(existing) = workers.get(&key) {
-            let _ = existing;
-            return Ok(());
-        }
-        workers.insert(key, worker);
+        workers.insert(key, PluginWorker::spawn(spec, self.env.clone())?);
         Ok(())
+    }
+
+    /// 运行时状态；`None` 表示从未加载或已经卸载。
+    pub fn state(&self, id: &str, version: &str) -> Option<RuntimeState> {
+        self.workers
+            .lock()
+            .get(&(id.to_string(), version.to_string()))
+            .map(|worker| worker.state())
+    }
+
+    /// 上一次加载 / 运行失败的原因，供宿主展示"为什么死了"。
+    pub fn last_error(&self, id: &str, version: &str) -> Option<JsError> {
+        self.workers
+            .lock()
+            .get(&(id.to_string(), version.to_string()))
+            .and_then(|worker| worker.last_error())
     }
 
     /// 执行一条命令。阻塞到插件返回、超时或用户取消。
@@ -144,6 +179,11 @@ impl PluginStore {
         } = request;
 
         let (reply_tx, reply_rx) = bounded(1);
+        // 先等就绪再投递：加载中的插件不该收到命令，否则消息会压在一个还没建好的
+        // 引擎前面排队，超时也只能报"线程已退出"这种含糊话。
+        let started = Instant::now();
+        worker.wait_ready(timeout, &cancel)?;
+
         worker.send(crate::worker::WorkerMsg::Invoke {
             request: InvokeRequest {
                 command,
@@ -155,7 +195,8 @@ impl PluginStore {
             reply: reply_tx,
         })?;
 
-        let deadline = Instant::now() + timeout;
+        // 加载已经花掉的时间要从本次预算里扣掉。
+        let deadline = started + timeout;
         loop {
             match reply_rx.recv_timeout(POLL) {
                 Ok(result) => return result,
@@ -186,14 +227,15 @@ impl PluginStore {
         error
     }
 
-    /// 停止并卸载插件运行时。
+    /// 停止并卸载插件运行时。先摘表（此后 `invoke` 得 `NotLoaded`），再让线程收尾；
+    /// 收尾有界，卡住的加载最多耽误 [`UNLOAD_GRACE`]。
     pub fn unload(&self, id: &str, version: &str) {
         let worker = self
             .workers
             .lock()
             .remove(&(id.to_string(), version.to_string()));
         if let Some(worker) = worker {
-            worker.shutdown();
+            let _ = worker.shutdown(UNLOAD_GRACE);
         }
     }
 
@@ -206,12 +248,21 @@ impl PluginStore {
     pub fn loaded_count(&self) -> usize {
         self.workers.lock().len()
     }
+
+    /// 测试专用：拿到工人线程句柄，用来模拟「运行时意外死亡」。
+    #[cfg(test)]
+    pub(crate) fn worker_for_test(&self, id: &str, version: &str) -> Option<Arc<PluginWorker>> {
+        self.workers
+            .lock()
+            .get(&(id.to_string(), version.to_string()))
+            .cloned()
+    }
 }
 
 impl Drop for PluginStore {
     fn drop(&mut self) {
         for (_, worker) in self.workers.lock().drain() {
-            worker.shutdown();
+            let _ = worker.shutdown(UNLOAD_GRACE);
         }
     }
 }
@@ -495,7 +546,8 @@ mod tests {
             if permissions.iter().any(|p| p == "typeStr") {
                 spec.exports.push("typeStr".to_string());
             } else {
-                spec.denied.push(("typeStr".to_string(), "typeStr".to_string()));
+                spec.denied
+                    .push(("typeStr".to_string(), "typeStr".to_string()));
             }
             vec![spec]
         }
@@ -579,5 +631,343 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    /// 门控环境：`install_base` 先送 `started`，再阻塞等 `release`。测试因此能精确
+    /// 停在「正在加载」上——不用 sleep，也没有阈值可 flaky。
+    struct GateEnv {
+        started: crossbeam_channel::Sender<()>,
+        release: Mutex<crossbeam_channel::Receiver<()>>,
+        logs: Arc<Mutex<Vec<String>>>,
+    }
+
+    type Gate = (
+        Arc<GateEnv>,
+        crossbeam_channel::Receiver<()>,
+        crossbeam_channel::Sender<()>,
+    );
+
+    fn gate_env() -> Gate {
+        let (started_tx, started_rx) = crossbeam_channel::bounded(1);
+        let (release_tx, release_rx) = crossbeam_channel::bounded(1);
+        let env = Arc::new(GateEnv {
+            started: started_tx,
+            release: Mutex::new(release_rx),
+            logs: Arc::new(Mutex::new(Vec::new())),
+        });
+        (env, started_rx, release_tx)
+    }
+
+    impl JsEnv for GateEnv {
+        fn install_base<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+            // console 先装：插件顶层的 console.log 要能落到 logs 里。
+            let logs = self.logs.clone();
+            let console = Object::new(ctx.clone())?;
+            console.set(
+                "log",
+                Function::new(ctx.clone(), move |message: String| {
+                    logs.lock().push(message);
+                })?,
+            )?;
+            ctx.globals().set("console", console)?;
+
+            let _ = self.started.send(());
+            // 等测试放行；超时兜底，免得测试失败时把线程永久挂住。
+            let _ = self.release.lock().recv_timeout(Duration::from_secs(5));
+            Ok(())
+        }
+
+        fn install_scope<'js>(&self, _ctx: &Ctx<'js>, _scope: &dyn Scope) -> rquickjs::Result<()> {
+            Ok(())
+        }
+
+        fn host_modules(&self, _permissions: &[String]) -> Vec<crate::env::HostModuleSpec> {
+            Vec::new()
+        }
+
+        fn prepare_source(&self, _path: &Path, code: &str) -> Result<String, String> {
+            Ok(code.to_string())
+        }
+
+        fn log(&self, _level: LogLevel, message: &str) {
+            self.logs.lock().push(message.to_string());
+        }
+    }
+
+    /// 建一个 `demo-v1.0.0.js` 插件目录并返回根路径。
+    fn write_demo(tmp: &TempDir, entry: &str) -> std::path::PathBuf {
+        tmp.write("demo-v1.0.0.js/extension.json", &manifest("demo"));
+        tmp.write("demo-v1.0.0.js/index.js", entry);
+        tmp.0.join("demo-v1.0.0.js")
+    }
+
+    fn wait_for_state(store: &PluginStore, want: RuntimeState) {
+        for _ in 0..500 {
+            if store.state("demo", "1.0.0") == Some(want) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!(
+            "state never became {want:?} (last: {:?})",
+            store.state("demo", "1.0.0")
+        );
+    }
+
+    #[test]
+    fn ensure_loaded_returns_before_the_worker_is_ready() {
+        let tmp = TempDir::new("store-nonblocking");
+        let root = write_demo(&tmp, "export function hello() { return 'hi'; }");
+        let (env, started, release) = gate_env();
+        let store = PluginStore::new(env);
+
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .expect("spawn must not wait for the engine");
+        // 关键断言：返回时引擎还没建好。
+        assert_eq!(store.state("demo", "1.0.0"), Some(RuntimeState::Loading));
+
+        started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("worker starts");
+        let _ = release.send(());
+
+        let output = call(&store, "hello").expect("hello should run");
+        assert_eq!(output.as_deref(), Some("hi"));
+        assert_eq!(store.state("demo", "1.0.0"), Some(RuntimeState::Ready));
+    }
+
+    #[test]
+    fn invoke_waits_for_a_loading_worker_and_loads_only_once() {
+        let tmp = TempDir::new("store-wait-ready");
+        let root = write_demo(
+            &tmp,
+            "console.log('boot');\nexport function hello() { return 'ready'; }",
+        );
+        let (env, _started, release) = gate_env();
+        let logs = env.logs.clone();
+        let store = PluginStore::new(env);
+
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .unwrap();
+
+        let unlocked = release.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            let _ = unlocked.send(());
+        });
+
+        assert_eq!(
+            call(&store, "hello").unwrap().as_deref(),
+            Some("ready"),
+            "invoke must wait for readiness instead of failing"
+        );
+        // 第二次调用不该重新加载：顶层副作用只跑一遍。
+        call(&store, "hello").unwrap();
+        let boots = logs.lock().iter().filter(|line| *line == "boot").count();
+        assert_eq!(boots, 1, "plugin top-level must run once");
+    }
+
+    #[test]
+    fn load_failure_is_logged_once_and_replayed_to_every_invoke() {
+        let tmp = TempDir::new("store-load-failure");
+        let root = write_demo(&tmp, "throw new Error('boom');");
+        let (env, _started, _release) = gate_env();
+        let logs = env.logs.clone();
+        let store = PluginStore::new(env);
+
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .expect("spawn itself succeeds; the failure is asynchronous");
+        wait_for_state(&store, RuntimeState::Dead);
+
+        // 失败只报一次，但每一次 invoke 都能拿到原因。
+        for _ in 0..2 {
+            match call(&store, "hello").unwrap_err() {
+                JsError::Runtime(message) => assert!(message.contains("boom"), "{message}"),
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+        let failures = logs
+            .lock()
+            .iter()
+            .filter(|line| line.contains("加载失败"))
+            .count();
+        assert_eq!(failures, 1, "load failure must be logged exactly once");
+    }
+
+    #[test]
+    fn concurrent_ensure_loaded_starts_exactly_one_worker() {
+        let tmp = TempDir::new("store-concurrent-load");
+        let root = write_demo(
+            &tmp,
+            "console.log('boot');\nexport function hello() { return 'ok'; }",
+        );
+        let (env, _started, release) = gate_env();
+        let logs = env.logs.clone();
+        let store = PluginStore::new(env);
+
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    store
+                        .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+                        .expect("ensure_loaded");
+                })
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(store.loaded_count(), 1);
+
+        let _ = release.send(());
+        wait_for_state(&store, RuntimeState::Ready);
+        let boots = logs.lock().iter().filter(|line| *line == "boot").count();
+        assert_eq!(boots, 1, "only one engine may evaluate the entry module");
+    }
+
+    #[test]
+    fn unload_during_load_is_bounded() {
+        let tmp = TempDir::new("store-unload-loading");
+        let root = write_demo(&tmp, "export function hello() { return 'hi'; }");
+        let (env, started, release) = gate_env();
+        let store = PluginStore::new(env);
+
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .unwrap();
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let started_at = Instant::now();
+        store.unload("demo", "1.0.0");
+        assert!(
+            started_at.elapsed() < Duration::from_millis(900),
+            "unload must not wait for a stuck load (took {:?})",
+            started_at.elapsed()
+        );
+        assert!(!store.is_loaded("demo", "1.0.0"));
+        assert!(matches!(call(&store, "hello"), Err(JsError::NotLoaded(_))));
+
+        // 放行，让被放手的线程自己退出，别留给别的测试。
+        let _ = release.send(());
+    }
+
+    #[test]
+    fn worker_death_flips_state_to_dead() {
+        let tmp = TempDir::new("store-death");
+        let root = write_demo(&tmp, "export function hello() { return 'hi'; }");
+        let (env, _started, _release) = gate_env();
+        // 这个插件不需要门：直接放行加载。
+        let _ = _release.send(());
+        let store = PluginStore::new(env);
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .unwrap();
+        wait_for_state(&store, RuntimeState::Ready);
+
+        // 只让线程退出，不摘表：模拟运行时意外死亡。
+        store
+            .worker_for_test("demo", "1.0.0")
+            .expect("worker")
+            .exit_for_test();
+        wait_for_state(&store, RuntimeState::Dead);
+        assert!(
+            store
+                .last_error("demo", "1.0.0")
+                .is_some_and(|error| error.to_string().contains("运行时已退出")),
+            "death must carry a reason"
+        );
+        assert!(matches!(call(&store, "hello"), Err(JsError::Runtime(_))));
+    }
+
+    /// 认领 exit 哨兵的宿主，模拟 bolt 的 `classify_error`。
+    struct SentryEnv;
+
+    impl JsEnv for SentryEnv {
+        fn install_base<'js>(&self, _ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+            Ok(())
+        }
+
+        fn install_scope<'js>(&self, _ctx: &Ctx<'js>, _scope: &dyn Scope) -> rquickjs::Result<()> {
+            Ok(())
+        }
+
+        fn host_modules(&self, _permissions: &[String]) -> Vec<crate::env::HostModuleSpec> {
+            Vec::new()
+        }
+
+        fn prepare_source(&self, _path: &Path, code: &str) -> Result<String, String> {
+            Ok(code.to_string())
+        }
+
+        fn log(&self, _level: LogLevel, _message: &str) {}
+
+        fn classify_error(&self, message: &str) -> Option<JsError> {
+            message
+                .strip_prefix("__bolt_exit_")?
+                .strip_suffix("__")?
+                .parse()
+                .ok()
+                .map(JsError::Exit)
+        }
+    }
+
+    #[test]
+    fn exit_sentinel_becomes_exit_error() {
+        let tmp = TempDir::new("store-exit");
+        let root = write_demo(
+            &tmp,
+            "export function quit() { throw new Error('__bolt_exit_7__'); }",
+        );
+        let store = PluginStore::new(Arc::new(SentryEnv));
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .unwrap();
+
+        assert_eq!(call(&store, "quit").unwrap_err(), JsError::Exit(7));
+        assert!(JsError::Exit(7).is_control_flow());
+    }
+
+    #[test]
+    fn argv_reaches_the_handler_as_an_array() {
+        let tmp = TempDir::new("store-argv");
+        let root = write_demo(
+            &tmp,
+            "export function echo(ctx) { return Array.isArray(ctx.argv) ? ctx.argv : 'not-array'; }",
+        );
+        let (env, _started, release) = gate_env();
+        let _ = release.send(());
+        let store = PluginStore::new(env);
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .unwrap();
+
+        let request = InvokeRequest::new("echo", CancelToken::new())
+            .with_args(vec![serde_json::json!(1), serde_json::json!("a")]);
+        assert_eq!(
+            store.invoke("demo", "1.0.0", request).unwrap().as_deref(),
+            Some(r#"[1,"a"]"#)
+        );
+    }
+
+    #[test]
+    fn argv_defaults_to_an_empty_array() {
+        let tmp = TempDir::new("store-argv-default");
+        let root = write_demo(
+            &tmp,
+            "export function size(ctx) { return Array.isArray(ctx.argv) ? ctx.argv.length : -1; }",
+        );
+        let (env, _started, release) = gate_env();
+        let _ = release.send(());
+        let store = PluginStore::new(env);
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"), &[])
+            .unwrap();
+
+        assert_eq!(call(&store, "size").unwrap().as_deref(), Some("0"));
     }
 }

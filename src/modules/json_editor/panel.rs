@@ -4,18 +4,18 @@
 //! heuristic from the extension so pasting a blob of valid JSON immediately
 //! gets pretty-printed.
 
+use super::parsers;
+use crate::ui::window_pin::WindowPin;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
-use gpui_kit::{AppContext, ParentElement, Styled,
-    App, Context, Entity, FocusHandle, Focusable, IntoElement, Render, Subscription, Window,
-    FontWeight, div, px,
+use gpui_kit::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement,
+    ParentElement, Render, Styled, Subscription, Window, div, px,
 };
-use super::parsers;
-use crate::ui::window_pin::WindowPin;
 
 /// Net insertion of at least this many characters is treated as a paste —
 /// auto-format the incoming text if it parses as strict JSON.

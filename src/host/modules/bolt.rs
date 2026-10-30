@@ -261,11 +261,20 @@ fn env_var(key: String) -> Result<Option<String>> {
     Ok(std::env::var(&key).ok())
 }
 
-/// `exit(code)` — throws a sentinel exception the runner detects (see
-/// `runner::report_outcome`); the run finishes cleanly with the exit code.
+/// `exit(code)` 的哨兵格式。**单一事实来源**：脚本路径（`runner::report_outcome`）
+/// 与插件路径（`JsEnv::classify_error`）都从这里解析，避免前缀各写一遍。
+pub(crate) fn exit_code(message: &str) -> Option<i32> {
+    message
+        .strip_prefix("__bolt_exit_")?
+        .strip_suffix("__")?
+        .parse()
+        .ok()
+}
+
+/// `exit(code)` — throws a sentinel exception the host detects; the run finishes
+/// cleanly with the exit code instead of being reported as a failure.
 fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
-    let msg = format!("__bolt_exit_{}__", code);
-    Err(throw_error(&ctx, msg))
+    Err(throw_error(&ctx, format!("__bolt_exit_{}__", code)))
 }
 
 // ── Interaction functions ──────────────────────────────────────────────────

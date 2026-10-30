@@ -10,7 +10,7 @@ use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
 
-use plux_js_manager::{HostModuleSpec, JsEnv, LogLevel, Scope};
+use plux_js_manager::{HostModuleSpec, JsEnv, JsError, LogLevel, Scope};
 use rquickjs::Ctx;
 
 use crate::console_channel::ConsoleChannel;
@@ -73,6 +73,12 @@ impl JsEnv for BoltJsEnv {
             LogLevel::Warn => self.console.warn(message),
             LogLevel::Error => self.console.error(message),
         }
+    }
+
+    /// 插件命令里的 `exit(code)` 与脚本路径同义：抛哨兵正常结束，不是失败。
+    /// 哨兵格式由 bolt 自己定义，解析也只在这一处。
+    fn classify_error(&self, message: &str) -> Option<JsError> {
+        bolt::exit_code(message).map(JsError::Exit)
     }
 }
 

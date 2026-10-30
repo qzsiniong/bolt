@@ -34,6 +34,11 @@ pub enum JsError {
     #[error("命令已取消")]
     Cancelled,
 
+    /// `exit(code)` 用抛出哨兵异常的方式结束命令：这是正常终止，不是插件 bug。
+    /// 哨兵格式由宿主解析（见 [`crate::env::JsEnv::classify_error`]），crate 只承载结果。
+    #[error("退出码 {0}")]
+    Exit(i32),
+
     /// JS threw, or the module failed to evaluate.
     #[error("{0}")]
     Script(String),
@@ -51,6 +56,6 @@ impl JsError {
     /// Whether the error is a normal control outcome (abort / timeout) rather
     /// than a plugin bug. Hosts use it to pick the log level.
     pub fn is_control_flow(&self) -> bool {
-        matches!(self, Self::Timeout(_) | Self::Cancelled)
+        matches!(self, Self::Timeout(_) | Self::Cancelled | Self::Exit(_))
     }
 }

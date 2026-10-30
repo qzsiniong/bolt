@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 use futures::channel::oneshot;
-use gpui_kit::{AppContext,
-    AnyWindowHandle, App, Entity, PathPromptOptions, TitlebarOptions, WindowBounds,
+use gpui_kit::{
+    AnyWindowHandle, App, AppContext, Entity, PathPromptOptions, TitlebarOptions, WindowBounds,
     WindowKind, WindowOptions, px, size,
 };
 

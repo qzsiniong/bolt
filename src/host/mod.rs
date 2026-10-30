@@ -177,7 +177,8 @@ impl Loader for HostLoader {
         //    `globalThis.__<name>`，插件与脚本两条链路行为一致）。脚本链路
         //    是用户自己写的代码，全权：denied 恒为空。
         if let Some(module) = self.registry.modules.get(name) {
-            let source = plux_js_manager::forwarding_module_source(&module.name, &module.exports, &[]);
+            let source =
+                plux_js_manager::forwarding_module_source(&module.name, &module.exports, &[]);
             return Module::declare(ctx.clone(), name, source);
         }
 

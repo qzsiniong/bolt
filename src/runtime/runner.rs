@@ -139,10 +139,20 @@ pub fn run_plugin(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
             console.info(format!("✔ Finished {label}"));
         }
         Ok(None) => console.info(format!("✔ Finished {label}")),
+        // 与脚本路径一致：exit() 是正常终止，退出码跟在 ✔ 后面。
+        Err(JsError::Exit(code)) => console.info(format!("✔ Finished {label} (exit {code})")),
         Err(JsError::Cancelled) => console.warn(format!("⏹ Aborted {label}")),
         Err(JsError::Timeout(timeout)) => console.error(format!(
             "命令超时（{} ms），已中断：{label}",
             timeout.as_millis()
+        )),
+        // 运行时掉了（加载失败 / 线程退出）时，宿主下一次执行会先重建再跑；
+        // 这里把"下一步该做什么"直接写清楚，别让人只看到一句线程错误。
+        Err(JsError::NotLoaded(_)) => console.error(format!(
+            "插件运行时尚未就绪：{label}（重新执行该命令会自动加载）"
+        )),
+        Err(JsError::Runtime(message)) => console.error(format!(
+            "{message}\n提示：重新执行该命令会自动重建插件运行时；仍失败请查看上面的加载报错"
         )),
         Err(error) => console.error(error.to_string()),
     }
@@ -246,10 +256,7 @@ pub(crate) fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) 
 fn report_outcome(console: &ConsoleChannel, err: &rquickjs::CaughtError, file_name: &str) {
     if let rquickjs::CaughtError::Exception(ex) = err
         && let Some(msg) = ex.message()
-        && let Some(code) = msg
-            .strip_prefix("__bolt_exit_")
-            .and_then(|rest| rest.strip_suffix("__"))
-            .and_then(|code| code.parse::<i32>().ok())
+        && let Some(code) = bolt::exit_code(&msg)
     {
         console.info(format!("✔ Finished {file_name} (exit {code})"));
         return;
@@ -470,6 +477,110 @@ mod tests {
         assert!(
             lines.iter().any(|l| l.contains("Aborted")),
             "missing abort notice: {lines:?}"
+        );
+    }
+
+    /// 真插件 + 真 `PluginStore` 的 RunEnv：验证插件路径与脚本路径的输出对齐。
+    fn plugin_env(
+        tmp: &crate::test_support::TempDir,
+        dir: &str,
+        manifest: &str,
+        entry: &str,
+        registry: Arc<HostRegistry>,
+        channel: ConsoleChannel,
+        cancel: &CancelToken,
+    ) -> (RunEnv, Arc<plux_js_manager::PluginStore>) {
+        let root = tmp.0.join(dir);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(plux_js_manager::MANIFEST_FILE), manifest).unwrap();
+        std::fs::write(root.join("index.js"), entry).unwrap();
+
+        let env = Arc::new(crate::modules::extensions::js_env::BoltJsEnv {
+            registry: registry.clone(),
+            console: channel.clone(),
+        });
+        let store = plux_js_manager::PluginStore::new(env);
+        let id = dir.split("-v").next().unwrap_or_default();
+        let version = dir
+            .trim_start_matches(id)
+            .trim_start_matches("-v")
+            .trim_end_matches(".js");
+        store
+            .ensure_loaded(id, version, &root, &root.join("index.js"), &[])
+            .unwrap();
+
+        let env = RunEnv {
+            scripts_dir: tmp.0.clone(),
+            registry,
+            console: channel,
+            cancel: cancel.clone(),
+            interaction: no_ui(cancel),
+            plugins: Some(store.clone()),
+        };
+        (env, store)
+    }
+
+    #[test]
+    fn run_plugin_reports_the_exit_sentinel_as_finished() {
+        let tmp = crate::test_support::TempDir::new("runner-plugin-exit");
+        let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
+        let (env, _store) = plugin_env(
+            &tmp,
+            "quit-v1.0.0.js",
+            r#"{ "id": "quit", "version": "1.0.0", "commands": [{ "id": "quit", "title": "Quit" }] }"#,
+            "import { exit } from 'bolt';\nexport function quit() { exit(2); }",
+            registry,
+            channel,
+            &cancel,
+        );
+
+        run_plugin(
+            Bundle::from_filename("quit-v1.0.0.js").unwrap(),
+            "quit",
+            "Quit · Quit",
+            env,
+        );
+
+        let lines = drain(&rx);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("✔ Finished") && line.contains("(exit 2)")),
+            "exit must be reported as a clean finish: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("__bolt_exit_")),
+            "the sentinel must never leak into the console: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn run_plugin_hints_that_a_dead_runtime_is_rebuilt() {
+        let tmp = crate::test_support::TempDir::new("runner-plugin-dead");
+        let (registry, channel, rx) = make_runner();
+        let cancel = CancelToken::new();
+        let (env, _store) = plugin_env(
+            &tmp,
+            "dead-v1.0.0.js",
+            r#"{ "id": "dead", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "throw new Error('top-level boom');",
+            registry,
+            channel,
+            &cancel,
+        );
+
+        run_plugin(
+            Bundle::from_filename("dead-v1.0.0.js").unwrap(),
+            "go",
+            "Dead · Go",
+            env,
+        );
+
+        let lines = drain(&rx);
+        assert!(
+            lines.iter().any(|line| line.contains("自动重建")),
+            "a dead runtime must explain how to recover: {lines:?}"
         );
     }
 }

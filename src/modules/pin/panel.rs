@@ -9,10 +9,10 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
-    AnyElement, App, ClickEvent, Context, DispatchPhase, Hsla, Image, ImageFormat, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, Render, ScrollDelta,
-    ScrollWheelEvent, Window, div, hsla, px, size,
+    AnyElement, App, ClickEvent, Context, DispatchPhase, Hsla, Image, ImageFormat,
+    InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, ParentElement,
+    Pixels, Point, Render, ScrollDelta, ScrollWheelEvent, StatefulInteractiveElement, Styled,
+    Window, div, hsla, px, size,
 };
 
 use super::clipboard::{self, PinContent};

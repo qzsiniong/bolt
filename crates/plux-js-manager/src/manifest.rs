@@ -527,7 +527,10 @@ mod tests {
         let manifest = r#"{ "id": "demo", "version": "1.0.0", "permissions": ["fss"] }"#;
         write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("typo must fail");
-        assert!(err.contains("未知权限") && err.contains("fs, net, exec, env, typeStr"), "{err}");
+        assert!(
+            err.contains("未知权限") && err.contains("fs, net, exec, env, typeStr"),
+            "{err}"
+        );
     }
 
     #[test]

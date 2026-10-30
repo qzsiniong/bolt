@@ -158,18 +158,22 @@ export async function hello({ command, plugin, root, argv }) {
 }
 ```
 
-- **每个插件一个常驻运行时**：第一条命令执行时才加载（插件顶层的副作用不会在启动时跑），之后一直活着，因此模块级状态跨命令保留——计数器、缓存、已经建好的连接都算。
-- **每插件一条专用线程**：plux 的 `Manager` / 函数调用是同步的，而宿主 API（定时器、`fetch`、`Async(...)`）依赖 tokio 反应堆，所以插件线程自带一个 current-thread 运行时，两者在同一线程里待着。GPUI 主线程只做「懒加载 + 投递命令」，命令执行从不占主线程。
+- **每个插件一个常驻运行时**：第一条命令执行时才加载（插件顶层的副作用不会在启动时跑），之后一直活着，因此模块级状态跨命令保留——计数器、缓存、已经建好的连接都算。**加载不阻塞主线程**：主线程只把工人线程拉起来就返回，引擎构建与入口求值都在插件线程里进行，等待就绪发生在命令执行线程上（算进该次命令的超时预算）。
+- **每插件一条专用线程**：plux 的 `Manager` / 函数调用是同步的，而宿主 API（定时器、`fetch`、`Async(...)`）依赖 tokio 反应堆，所以插件线程自带一个 current-thread 运行时，两者在同一线程里待着。GPUI 主线程只做「安排加载 + 投递命令」，从不等待引擎就绪，命令执行也从不占主线程。
 - **单条命令超时 60 秒**。超时或用户点交互窗的「中止」都靠 QuickJS 的 interrupt handler 抛不可捕获异常，插件线程随后回到消息循环——`while (true) {}` 卡死不会拖垮应用，下一条命令照常能跑。
 - **资源上限**：栈 8 MiB、堆 64 MiB；入口模块加载超时 30 秒。
 - 命令返回后宿主给残留的定时器 / 未决 Promise 200 ms 预算跑完，不会因为一个没清掉的 `setInterval` 卡住下一次调用。
+- **运行时死了会自动重建**：加载失败或线程退出后，下一次执行该命令时宿主先复位 plux 的 `is_load` 再重新安排（同一插件 3 秒冷却，防连点）。加载失败的原因经 `console` 落到面板，每次调用都会原样复述，不会退化成"线程已退出"这种含糊话。
+- 插件命令里的 `exit(code)` 与脚本同义：`✔ Finished … (exit N)`，不是错误。
 
 插件脚本与普通脚本的能力来源相同：`console`、定时器、`bolt` 内置模块以及全部宿主交互 API（`typeStr` / `requestFocus` / `confirm` / `pickPath` / `scanQr`）。差别在权限：**普通脚本全权**（脚本编辑器里看得见全部代码，等同你自己写的）；**插件脚本命令受清单 `permissions` 约束**，未声明的危险 API（`readFile` / `writeFile` / `listDir` / `fetch` / `exec` / `env` / `typeStr`）调用时抛错。交互 API 挂在常驻上下文上，每轮执行前用当轮的交互桥覆盖一次，所以进度窗、确认框、中止按钮都跟着当次命令走。
 
 #### 错误隔离与生效时机
 
 - 清单解析失败、目录名不合约定、入口缺失、`id`/`version` 与目录名不一致 —— 该插件被跳过，原因写进 Console（`warn` 等级），其他插件不受影响。
-- 每次唤出 Launcher 都重新扫描磁盘：**新增的插件目录下次唤出即可用**，不必重启应用；已注册的插件不会重复注册，也不会被卸载（运行时要跨命令保留状态）。改动**已有**插件的清单或入口则需要重启应用。
+- 每次唤出 Launcher 都重新扫描磁盘：**新增的插件目录下次唤出即可用**，不必重启应用；已注册的插件不会重复注册。**删掉的插件目录会在下次唤出时注销**，运行时随之下线。
+- 同一个 id 装了多个版本时只保留**最高版本**的运行时与命令（item id 是 `ext.<id>.<command>`，不含版本）；低版本的注册保留给 plux 的依赖解析。
+- 改动**已有**插件的清单或入口仍需重启应用（元数据在注册时读取）；只改脚本源码则会因为运行时重建而生效——加载失败后修好文件，再执行一次命令即可。
 - 两种目录会被跳过：没有 `extension.json` 的目录（作者的草稿等）静默忽略；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `extension.json` 安装的能力冲突。
 
 ### 仓库自带插件
@@ -732,7 +736,7 @@ ctx.globals().set("console", console)?;
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`；模块转发源码与文件解析复用 `plux-js-manager` 的导出，与插件侧同一份实现）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
-| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS）、`store`（跨线程执行入口）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
+| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS，四态就绪状态机）、`store`（跨线程执行入口 + 运行时健康状态）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道：有界（1000 条，溢出丢最旧），`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`、`run_js` headless 运行器） |
 
@@ -742,7 +746,7 @@ ctx.globals().set("console", console)?;
 
 - **线程模型**：GPUI 主线程只负责渲染；脚本与插件命令都在独立工作线程执行，输出经 `ConsoleChannel` 回传面板。
 - **三套运行时，一个引擎**：普通脚本在 worker 线程上跑一次性 rquickjs（可中断、可取消、可并发 await）；插件脚本命令在**每插件一条**的常驻线程上跑（`PluginStore::invoke` 同步调用，超时/取消靠 interrupt handler）；UI 命令在 GPUI 主线程上由 gpui-shell 执行并原生渲染。三者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 命令的 `console` 与错误经 `tracing` 转到同一个 Console 面板。
-- **插件生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 懒加载 / 读元数据」；真正的命令执行交给 `PluginStore`（`Arc` 可跨线程），因此打开 Launcher 扫描插件不会卡住 UI，命令也不会阻塞主线程。
+- **插件生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 安排加载 / 读元数据」；真正的命令执行交给 `PluginStore`（`Arc` 可跨线程）。`ensure_loaded` 只起线程不等待，等就绪发生在执行线程上，所以打开 Launcher 与第一次执行命令都不会卡住 UI。宿主另有一套健康检查：`plugin.is_load` 说已加载、`PluginStore` 却说运行时已死时，先 `unload` 复位再重新安排——plux 的 `load_plugin` 对已加载插件是 no-op，少了这一步就永远不会重建。
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
 - **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。两侧的「说明符 → 磁盘文件」与「宿主模块转发源码生成」是**同一份实现**（`plux_js_manager::{resolve_file, forwarding_module_source}`），不再各写一遍。转发模块是**转发函数**而不是一次性解构——宿主 API 分两批安装（加载时装基础函数、每轮命令前装交互 API），解构会把加载时的 `undefined` 固化进 const 绑定。
 - **插件权限的落点**：`HostModule::export_guarded` 登记每个导出所需的权限；`JsEnv::host_modules(permissions)` 按插件清单把导出拆成「允许 / 拒绝」两半，拒绝项在转发模块里生成抛错桩（`import` 不炸，调用时点名缺哪个权限）。脚本链路不经过这道过滤——用户脚本全权。

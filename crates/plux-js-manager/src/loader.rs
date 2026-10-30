@@ -121,7 +121,11 @@ impl Loader for PluginLoader {
 ///
 /// 宿主（bolt）的普通脚本 loader 复用同一份生成逻辑（`denied` 传空），
 /// 保证两条链路行为一致。
-pub fn forwarding_module_source(name: &str, exports: &[String], denied: &[(String, String)]) -> String {
+pub fn forwarding_module_source(
+    name: &str,
+    exports: &[String],
+    denied: &[(String, String)],
+) -> String {
     if exports.is_empty() && denied.is_empty() {
         return "// empty host module".to_string();
     }
@@ -225,11 +229,8 @@ mod tests {
 
     #[test]
     fn all_denied_still_emits_a_module() {
-        let source = forwarding_module_source(
-            "bolt",
-            &[],
-            &[("fetch".to_string(), "net".to_string())],
-        );
+        let source =
+            forwarding_module_source("bolt", &[], &[("fetch".to_string(), "net".to_string())]);
         assert!(
             source.contains("export function fetch"),
             "denied-only module must still export the name: {source}"

@@ -8,8 +8,9 @@
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::{ParentElement, Styled,
-    AnyElement, Context, EventEmitter, IntoElement, Render, Window, FontWeight, div,
+use gpui_kit::{
+    AnyElement, Context, EventEmitter, FontWeight, IntoElement, ParentElement, Render, Styled,
+    Window, div,
 };
 
 use crate::runtime::interaction::ProgressSnapshot;

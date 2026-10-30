@@ -6,9 +6,9 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::{
-    InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
-    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
-    WeakEntity, Window, FontWeight, div, transparent_black,
+    AnyElement, App, Context, EventEmitter, FocusHandle, Focusable, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    div, transparent_black,
 };
 
 use super::editor::EditorPanel;

@@ -18,10 +18,10 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::v_flex;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::{
-    AppContext, InteractiveElement, ParentElement, StatefulInteractiveElement, Styled,
-    AnyWindowHandle, App, Bounds, Context, DisplayId, IntoElement, MouseButton,
-    Render, Task, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
-    FontWeight, div, point, px, rgb, size,
+    AnyWindowHandle, App, AppContext, Bounds, Context, DisplayId, FontWeight, InteractiveElement,
+    IntoElement, MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled, Task,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, point, px,
+    rgb, size,
 };
 
 use crate::app::shell::AppShell;
