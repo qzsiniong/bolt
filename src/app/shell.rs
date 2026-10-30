@@ -4,12 +4,12 @@ use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use global_hotkey::GlobalHotKeyManager;
 use gpui_kit::{AnyWindowHandle, Entity, Global, Task};
 
 use super::launcher::{LauncherAction, Module};
-use crate::console_channel::{ConsoleChannel, ConsoleEntry};
+use crate::console_channel::ConsoleChannel;
 use crate::runtime::run_service::RunService;
 
 /// How often the global hotkey channel and launcher requests are polled.
@@ -39,8 +39,9 @@ pub(crate) struct AppShell {
     /// next paint instead of waiting for the next open.
     pub(crate) items_revision: Cell<u64>,
     pub(crate) run_service: Entity<RunService>,
+    /// 输出写入端。读者从 [`ConsoleChannel::history`] 取共享缓冲（脚本管理器
+    /// 的 Console 面板、独立 Console 窗口各持一个游标）。
     pub(crate) console_channel: ConsoleChannel,
-    pub(crate) console_rx: Receiver<ConsoleEntry>,
     pub(crate) lsp: Result<Arc<crate::lsp::LspClient>, String>,
     /// Kept alive for the app lifetime; dropping unregisters the hotkey.
     pub(crate) _hotkey_manager: Option<GlobalHotKeyManager>,

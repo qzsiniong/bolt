@@ -270,22 +270,20 @@ mod tests {
     use crate::host::modules;
     use std::time::Duration;
 
-    fn drain(
-        rx: &crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>,
-    ) -> Vec<String> {
-        rx.try_iter().map(|e| e.text).collect()
+    fn drain(channel: &ConsoleChannel) -> Vec<String> {
+        channel
+            .history()
+            .entries()
+            .into_iter()
+            .map(|e| e.text)
+            .collect()
     }
 
-    fn make_runner() -> (
-        Arc<HostRegistry>,
-        ConsoleChannel,
-        crossbeam_channel::Receiver<crate::console_channel::ConsoleEntry>,
-    ) {
+    fn make_runner() -> (Arc<HostRegistry>, ConsoleChannel) {
         let mut registry = HostRegistry::new();
         modules::register_all(&mut registry);
         let registry = Arc::new(registry);
-        let (channel, rx) = ConsoleChannel::new();
-        (registry, channel, rx)
+        (registry, ConsoleChannel::new())
     }
 
     /// Bridge with no UI attached. Interaction APIs would fail through it, but
@@ -296,13 +294,13 @@ mod tests {
 
     fn run_env(
         registry: Arc<HostRegistry>,
-        channel: ConsoleChannel,
+        channel: &ConsoleChannel,
         cancel: &CancelToken,
     ) -> RunEnv {
         RunEnv {
             scripts_dir: std::env::temp_dir(),
             registry,
-            console: channel,
+            console: channel.clone(),
             cancel: cancel.clone(),
             interaction: no_ui(cancel),
             plugins: None,
@@ -311,15 +309,15 @@ mod tests {
 
     #[test]
     fn run_plain_js_console_log() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         run_script(
             "console.log('hello world'); console.info('info');",
             Language::JavaScript,
             "test.js",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             lines.iter().any(|l| l.contains("hello world")),
             "missing hello world: {lines:?}"
@@ -332,7 +330,7 @@ mod tests {
 
     #[test]
     fn run_ts_with_import() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let code = r#"
             import { env } from 'bolt';
@@ -343,9 +341,9 @@ mod tests {
             code,
             Language::TypeScript,
             "demo.ts",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             lines.iter().any(|l| l.contains("hello,")),
             "missing hello message: {lines:?}"
@@ -354,7 +352,7 @@ mod tests {
 
     #[test]
     fn run_sync_host_fn() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let code = r#"
             import { writeFile, readFile } from 'bolt';
@@ -366,9 +364,9 @@ mod tests {
             code,
             Language::JavaScript,
             "test.js",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             lines.iter().any(|l| l.contains("hi from script")),
             "missing file content: {lines:?}"
@@ -377,7 +375,7 @@ mod tests {
 
     #[test]
     fn run_set_timeout() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let code = r#"
             console.log('start');
@@ -388,9 +386,9 @@ mod tests {
             code,
             Language::JavaScript,
             "test.js",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         // The callback must observe the full top-level execution first: the
         // run only finishes after pending timers have fired.
         let start = lines.iter().position(|l| l.contains("start")).unwrap();
@@ -404,7 +402,7 @@ mod tests {
 
     #[test]
     fn run_clear_interval_stops_repeating() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let code = r#"
             let n = 0;
@@ -418,9 +416,9 @@ mod tests {
             code,
             Language::JavaScript,
             "test.js",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         let ticks: Vec<&String> = lines.iter().filter(|l| l.contains("tick")).collect();
         assert_eq!(
             ticks.len(),
@@ -432,7 +430,7 @@ mod tests {
 
     #[test]
     fn abort_while_awaiting_host_call() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let killer = cancel.clone();
         std::thread::spawn(move || {
@@ -444,9 +442,9 @@ mod tests {
             "import { sleep } from 'bolt'; await sleep(60000); console.log('never');",
             Language::JavaScript,
             "sleep.js",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "abort did not interrupt the host call: {lines:?}"
@@ -459,7 +457,7 @@ mod tests {
 
     #[test]
     fn abort_infinite_loop() {
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let killer = cancel.clone();
         std::thread::spawn(move || {
@@ -471,9 +469,9 @@ mod tests {
             "while (true) {}",
             Language::JavaScript,
             "loop.js",
-            run_env(registry, channel, &cancel),
+            run_env(registry, &channel, &cancel),
         );
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             lines.iter().any(|l| l.contains("Aborted")),
             "missing abort notice: {lines:?}"
@@ -487,7 +485,7 @@ mod tests {
         manifest: &str,
         entry: &str,
         registry: Arc<HostRegistry>,
-        channel: ConsoleChannel,
+        channel: &ConsoleChannel,
         cancel: &CancelToken,
     ) -> (RunEnv, Arc<plux_js_manager::PluginStore>) {
         let root = tmp.0.join(dir);
@@ -509,7 +507,7 @@ mod tests {
         let env = RunEnv {
             scripts_dir: tmp.0.clone(),
             registry,
-            console: channel,
+            console: channel.clone(),
             cancel: cancel.clone(),
             interaction: no_ui(cancel),
             plugins: Some(store.clone()),
@@ -520,7 +518,7 @@ mod tests {
     #[test]
     fn run_plugin_reports_the_exit_sentinel_as_finished() {
         let tmp = crate::test_support::TempDir::new("runner-plugin-exit");
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let (env, _store) = plugin_env(
             &tmp,
@@ -528,7 +526,7 @@ mod tests {
             r#"{ "id": "quit", "version": "1.0.0", "commands": [{ "id": "quit", "title": "Quit" }] }"#,
             "import { exit } from 'bolt';\nexport function quit() { exit(2); }",
             registry,
-            channel,
+            &channel,
             &cancel,
         );
 
@@ -539,7 +537,7 @@ mod tests {
             env,
         );
 
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             lines
                 .iter()
@@ -555,7 +553,7 @@ mod tests {
     #[test]
     fn run_plugin_hints_that_a_dead_runtime_is_rebuilt() {
         let tmp = crate::test_support::TempDir::new("runner-plugin-dead");
-        let (registry, channel, rx) = make_runner();
+        let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
         let (env, _store) = plugin_env(
             &tmp,
@@ -563,7 +561,7 @@ mod tests {
             r#"{ "id": "dead", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
             "throw new Error('top-level boom');",
             registry,
-            channel,
+            &channel,
             &cancel,
         );
 
@@ -574,7 +572,7 @@ mod tests {
             env,
         );
 
-        let lines = drain(&rx);
+        let lines = drain(&channel);
         assert!(
             lines.iter().any(|line| line.contains("自动重建")),
             "a dead runtime must explain how to recover: {lines:?}"

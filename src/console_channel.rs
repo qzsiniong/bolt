@@ -1,11 +1,11 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use chrono::{DateTime, Local};
-use crossbeam_channel::{Receiver, Sender, bounded};
 
-/// Console 通道容量。面板自身也只保留这么多条（`MAX_ENTRIES`），两边对齐：
-/// 面板长时间不打开时，通道缓存的是"最近 1000 条"而不是无限累积。
+/// Console 缓冲区容量。所有读者（脚本管理器的 Console 面板、独立 Console 窗口）
+/// 共享这一份缓冲；面板自身也只保留这么多条（`MAX_ENTRIES`），两边对齐。
 const CONSOLE_CAP: usize = 1000;
 
 /// Error 级条目落盘 `bolt.log` 时保留的最大行数（滚动裁剪）。
@@ -51,52 +51,128 @@ pub struct ConsoleEntry {
     pub timestamp: i64,
 }
 
-/// Cloneable handle used by the runner (and any Rust side) to push lines into
-/// the Console panel. The matching `Receiver` lives in [`ConsolePanel`].
+/// 进程级输出缓冲：写入方是 [`ConsoleChannel`]，读者各自持一个游标取增量。
 ///
-/// The channel is bounded (`CONSOLE_CAP`): when the panel has not been opened
-/// for a long time and output keeps arriving, the oldest entry is dropped to
-/// make room, so the buffer always holds the most recent lines instead of
-/// growing without limit.
+/// 早先这里是「有界 channel + 唯一的 `Receiver`」——面板一旦建立就独占消费，
+/// 第二个读者（独立 Console 窗口）拿不到任何历史。改成共享缓冲后，谁开谁关
+/// 只影响自己的游标，面板与窗口可以同时显示同一份输出。
+#[derive(Clone, Default)]
+pub struct ConsoleLog {
+    inner: Arc<Mutex<LogInner>>,
+}
+
+#[derive(Default)]
+struct LogInner {
+    entries: VecDeque<ConsoleEntry>,
+    /// 累计写入条数；`entries` 里最早一条的编号是 `revision - entries.len()`。
+    revision: u64,
+}
+
+impl ConsoleLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 累计写入条数，可直接当游标用。
+    pub fn revision(&self) -> u64 {
+        self.lock().revision
+    }
+
+    /// `cursor` 之后的新条目 + 新游标。
+    ///
+    /// `cursor` 指向的条目已被容量裁掉时，从现存最早一条开始给：宁可多给几条，
+    /// 不能漏（窗口本来就只保留最近 1000 条，多给也只多到这里）。
+    pub fn since(&self, cursor: u64) -> (Vec<ConsoleEntry>, u64) {
+        let inner = self.lock();
+        let revision = inner.revision;
+        let oldest = revision.saturating_sub(inner.entries.len() as u64);
+        let skip = cursor.max(oldest) - oldest;
+        let entries = inner.entries.iter().skip(skip as usize).cloned().collect();
+        (entries, revision)
+    }
+
+    /// 全部现存条目（调试/测试用）。
+    pub fn entries(&self) -> Vec<ConsoleEntry> {
+        self.lock().entries.iter().cloned().collect()
+    }
+
+    fn push(&self, entry: ConsoleEntry) {
+        let mut inner = self.lock();
+        inner.entries.push_back(entry);
+        inner.revision += 1;
+        while inner.entries.len() > CONSOLE_CAP {
+            inner.entries.pop_front();
+        }
+    }
+
+    /// 锁中毒（某个持有者 panic）时继续用里面的数据：Console 输出不该让整个
+    /// 应用跟着炸。
+    fn lock(&self) -> MutexGuard<'_, LogInner> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Cloneable handle used by the runner (and any Rust side) to push lines into
+/// the Console. Readers get the shared [`ConsoleLog`] via [`Self::history`].
+///
+/// The buffer is bounded (`CONSOLE_CAP`): when nobody reads for a long time and
+/// output keeps arriving, the oldest entry is dropped to make room, so it always
+/// holds the most recent lines instead of growing without limit.
 #[derive(Clone)]
 pub struct ConsoleChannel {
-    tx: Sender<ConsoleEntry>,
-    /// Private receiver clone: the overflow valve. Only the sender side pops
-    /// from it, to free a slot when the buffer is full.
-    rx: Receiver<ConsoleEntry>,
+    log: ConsoleLog,
     /// `Some` 时 Error 级条目同步落盘（打包成 .app 后 stderr 不可见，
-    /// Console 面板又只在脚本管理器窗口里，落盘是启动失败唯一的出路）。
+    /// 落盘是启动失败唯一的出路）。
     error_log: Option<Arc<ErrorLog>>,
+    /// 调试构建下把每条输出同时打到终端，见 [`mirror_to_terminal`]。
+    mirror: bool,
 }
 
 impl ConsoleChannel {
-    /// Create a channel and return the sender handle plus the receiver the
-    /// panel should drain. Errors are NOT written to disk — tests use this;
+    /// Create a channel with no disk log and no terminal mirror. Tests use this;
     /// production goes through [`new_with_error_log`].
     #[cfg(test)]
-    pub fn new() -> (Self, Receiver<ConsoleEntry>) {
-        Self::new_inner(None)
+    pub fn new() -> Self {
+        Self::new_inner(None, false)
     }
 
     /// Same as [`new`], but `Error`-level entries are also appended to
-    /// `log_path` (rolling, keeps the last [`MAX_LOG_LINES`] lines).
-    pub fn new_with_error_log(log_path: PathBuf) -> (Self, Receiver<ConsoleEntry>) {
-        Self::new_inner(Some(Arc::new(ErrorLog {
-            path: log_path,
-            lock: Mutex::new(()),
-        })))
+    /// `log_path` (rolling, keeps the last [`MAX_LOG_LINES`] lines), and every
+    /// line is mirrored to the terminal in debug builds.
+    pub fn new_with_error_log(log_path: PathBuf) -> Self {
+        Self::new_inner(
+            Some(Arc::new(ErrorLog {
+                path: log_path,
+                lock: Mutex::new(()),
+            })),
+            terminal_mirror_enabled(),
+        )
     }
 
-    fn new_inner(error_log: Option<Arc<ErrorLog>>) -> (Self, Receiver<ConsoleEntry>) {
-        let (tx, rx) = bounded(CONSOLE_CAP);
-        (
-            Self {
-                tx: tx.clone(),
-                rx: rx.clone(),
-                error_log,
-            },
-            rx,
+    #[cfg(test)]
+    fn new_quiet_with_error_log(log_path: PathBuf) -> Self {
+        Self::new_inner(
+            Some(Arc::new(ErrorLog {
+                path: log_path,
+                lock: Mutex::new(()),
+            })),
+            false,
         )
+    }
+
+    fn new_inner(error_log: Option<Arc<ErrorLog>>, mirror: bool) -> Self {
+        Self {
+            log: ConsoleLog::new(),
+            error_log,
+            mirror,
+        }
+    }
+
+    /// 共享缓冲句柄：每个读者各自持游标，互不影响。
+    pub fn history(&self) -> ConsoleLog {
+        self.log.clone()
     }
 
     pub fn info(&self, text: impl Into<String>) {
@@ -120,12 +196,59 @@ impl ConsoleChannel {
         {
             log.append(&entry);
         }
-        // 满了就丢最旧的：面板只关心最近发生的事。try_send 与消费端并发时
-        // 可能竞争失败——丢一条输出无所谓，不能为此阻塞发送方。
-        if self.tx.is_full() {
-            let _ = self.rx.try_recv();
+        self.log.push(entry.clone());
+        if self.mirror {
+            mirror_to_terminal(&entry);
         }
-        let _ = self.tx.try_send(entry);
+    }
+}
+
+/// 输出该走哪一路标准流。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalStream {
+    Out,
+    Err,
+}
+
+/// Log/Info 走 stdout，Warn/Error 走 stderr——这样 `cargo run 2>/dev/null` 仍能
+/// 看到正常输出，管道里也还能按流转发。
+fn terminal_stream(level: ConsoleLevel) -> TerminalStream {
+    match level {
+        ConsoleLevel::Log | ConsoleLevel::Info => TerminalStream::Out,
+        ConsoleLevel::Warn | ConsoleLevel::Error => TerminalStream::Err,
+    }
+}
+
+/// 调试构建下把一条输出同时打到终端，`cargo run` 的窗口里就能直接看到，
+/// 不必再去点开 Console 窗口。
+///
+/// 发布构建默认静默（打包成 .app 后根本没有终端），需要时用环境变量
+/// `BOLT_CONSOLE_TERMINAL=1` 打开、`=0` 关掉。
+fn mirror_to_terminal(entry: &ConsoleEntry) {
+    use std::io::Write as _;
+
+    let line = format!("{}{}", entry.level.prefix(), entry.text);
+    match terminal_stream(entry.level) {
+        TerminalStream::Out => {
+            let mut out = std::io::stdout().lock();
+            let _ = writeln!(out, "{line}");
+            // 逐行 flush：输出常常是崩溃/退出前的最后一条，攒在缓冲里就丢了。
+            let _ = out.flush();
+        }
+        TerminalStream::Err => {
+            let mut err = std::io::stderr().lock();
+            let _ = writeln!(err, "{line}");
+            let _ = err.flush();
+        }
+    }
+}
+
+/// 终端镜像默认值：调试构建开，发布构建关；`BOLT_CONSOLE_TERMINAL` 可覆盖。
+fn terminal_mirror_enabled() -> bool {
+    match std::env::var("BOLT_CONSOLE_TERMINAL").as_deref() {
+        Ok("0") | Ok("off") | Ok("no") => false,
+        Ok("1") | Ok("on") | Ok("yes") => true,
+        _ => cfg!(debug_assertions),
     }
 }
 
@@ -182,12 +305,17 @@ mod tests {
 
     #[test]
     fn overflow_drops_the_oldest_entry() {
-        let (channel, rx) = ConsoleChannel::new();
+        let channel = ConsoleChannel::new();
         for i in 0..(CONSOLE_CAP + 50) {
             channel.info(format!("line-{i}"));
         }
-        let texts: Vec<String> = rx.try_iter().map(|e| e.text).collect();
-        assert_eq!(texts.len(), CONSOLE_CAP, "channel must stay bounded");
+        let texts: Vec<String> = channel
+            .history()
+            .entries()
+            .into_iter()
+            .map(|e| e.text)
+            .collect();
+        assert_eq!(texts.len(), CONSOLE_CAP, "buffer must stay bounded");
         // 最旧的 50 条被挤出；其余按序保留，最后一条一定在。
         assert!(
             !texts.iter().any(|t| t == "line-0"),
@@ -205,10 +333,62 @@ mod tests {
     }
 
     #[test]
+    fn since_returns_only_the_new_entries() {
+        let channel = ConsoleChannel::new();
+        let log = channel.history();
+
+        assert!(log.since(0).0.is_empty(), "empty log has no entries");
+        assert_eq!(log.since(0).1, 0);
+
+        channel.info("one");
+        channel.warn("two");
+        let (entries, cursor) = log.since(0);
+        assert_eq!(
+            entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        assert_eq!(cursor, 2);
+
+        channel.error("three");
+        let (entries, cursor) = log.since(cursor);
+        assert_eq!(
+            entries.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            ["three"]
+        );
+        assert_eq!(cursor, 3);
+        // 游标到顶后再问一次：什么都没有，但游标不回退。
+        let (nothing, same) = log.since(cursor);
+        assert!(nothing.is_empty());
+        assert_eq!(same, 3);
+    }
+
+    #[test]
+    fn since_after_trimming_restarts_from_the_oldest_survivor() {
+        let channel = ConsoleChannel::new();
+        let log = channel.history();
+        for i in 0..(CONSOLE_CAP + 10) {
+            channel.info(format!("line-{i}"));
+        }
+        // 0 号早被裁掉：从现存最早一条开始给，不会漏给"空"。
+        let (entries, cursor) = log.since(0);
+        assert_eq!(entries.len(), CONSOLE_CAP);
+        assert_eq!(entries[0].text, "line-10");
+        assert_eq!(cursor, CONSOLE_CAP as u64 + 10);
+    }
+
+    #[test]
+    fn levels_split_between_stdout_and_stderr() {
+        assert_eq!(terminal_stream(ConsoleLevel::Log), TerminalStream::Out);
+        assert_eq!(terminal_stream(ConsoleLevel::Info), TerminalStream::Out);
+        assert_eq!(terminal_stream(ConsoleLevel::Warn), TerminalStream::Err);
+        assert_eq!(terminal_stream(ConsoleLevel::Error), TerminalStream::Err);
+    }
+
+    #[test]
     fn error_entries_are_written_to_the_log_and_rolled() {
         let tmp = tempfile_dir();
         let log = tmp.join("nested/bolt.log");
-        let (channel, _rx) = ConsoleChannel::new_with_error_log(log.clone());
+        let channel = ConsoleChannel::new_quiet_with_error_log(log.clone());
 
         channel.info("info stays out of the log");
         channel.error("first failure");

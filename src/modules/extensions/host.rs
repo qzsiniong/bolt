@@ -712,7 +712,7 @@ mod tests {
     fn host(tmp: &TempDir) -> ExtensionsHost {
         let mut registry = HostRegistry::new();
         crate::host::modules::register_all(&mut registry);
-        let (console, _rx) = ConsoleChannel::new();
+        let console = ConsoleChannel::new();
         let env = Arc::new(BoltJsEnv {
             registry: Arc::new(registry),
             console,

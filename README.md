@@ -18,7 +18,7 @@
 - **QuickJS 执行引擎**：进程内嵌入 `rquickjs`，无需 Node 运行时，脚本在独立线程执行，不阻塞界面。
 - **TypeScript 直接运行**：通过 swc 做类型擦除（TS → JS）后交给 QuickJS 执行。
 - **Rust 扩展模块（HostModule）**：Rust 侧注册模块后，脚本可用 ES module `import { x } from "name"` 直接调用，声明自动生成到 `types/<name>.d.ts`。
-- **Console 面板**：按时间戳正序输出、等级着色（Log / Info / Warn / Error）、等级筛选、底部跟随滚动。
+- **Console 面板与独立窗口**：按时间戳正序输出、等级着色（Log / Info / Warn / Error）、等级筛选、底部跟随滚动；脚本管理器的 dock 里有一份，Launcher 里搜「Console」还能开一个独立窗口。**调试构建下每条输出同时打到终端**（Info/Log → stdout，Warn/Error → stderr），`cargo run` 的窗口里就能直接看，不必来回开窗口。
 
 ## Launcher 与扩展
 
@@ -32,12 +32,13 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 扩展管理 / 新建扩展 / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条插件命令一条：带 `ui` 的开窗口，其余的在插件运行时里执行。
+Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 扩展管理 / 新建扩展 / Console / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条插件命令一条：带 `ui` 的开窗口，其余的在插件运行时里执行。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
 - **扩展管理 / 新建扩展**：见[管理、禁用与卸载](#管理禁用与卸载)与[新建扩展](#新建扩展)；插件级动作（重载 / 禁用 / 卸载等）在每条扩展命令的 Cmd+K 面板里也有一份。
-- 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（Console 输出会缓冲，待管理器打开后可见）。
+- **Console**：打开独立的 Console 窗口（单例），见 [Console](#console)。
+- 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（输出会进共享缓冲，打开 Console 窗口或管理器即可查看）。
 
 ### 粘贴识别（Cmd+V）
 
@@ -72,6 +73,24 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 **自定义搜索词**：所有 item（应用、脚本、Pin 等）统一通过 Launcher 动作面板的「**编辑搜索关键词**」修改，保存到 `~/Library/Application Support/bolt/item-keywords.json`（按 item id 覆盖整个 keywords，多个词用逗号分隔，留空恢复默认）。应用会在此基础上叠加内置默认别名（源码维护在 `src/modules/apps/default-aliases.json`，`include_str!` 编进二进制）；编辑过的 item 以编辑值为准。
 
 **使用统计**：排序不是简单的「用得多就靠前」，而是对每次确认记一个时间点、按 `Σ exp(-λ·距今天数)` 打分（默认只在最近 30 天内计分、90 天后丢弃），所以**最近用过**的会压过**很早以前用过很多次**的，长期不用则自然滑落。记录持久化在 `~/Library/Application Support/bolt/item-usage.json`（`item id → [使用时间点…]`），图标缓存放在 `app-icons/` 子目录。打分与裁剪实现在 [src/core/smart_rank.rs](src/core/smart_rank.rs)。
+
+### Console
+
+输出只有一条链路：所有来源——脚本的 `console.*`、插件命令与插件运行时的输出、UI 扩展的 `tracing`、宿主自己的启动/操作/错误日志——都写进 `ConsoleChannel`，落到**一份共享缓冲**（最近 1000 条，溢出丢最旧）。`Error` 级条目另外滚动写入 `~/Library/Application Support/bolt/bolt.log`（保留 500 行），打包成 `.app` 后这是唯一的落盘线索。
+
+**读者各持游标**：脚本管理器右下角的 Console 面板与独立的 Console 窗口读同一份缓冲，各自记住「读到哪儿」。两个可以同时开着、各自滚动、各看各的等级筛选，谁也不抢谁的输出。
+
+| 场景 | 看哪里 |
+| --- | --- |
+| 写脚本时连跑几次 | 管理器里的 Console 面板（跟随最新，可按等级筛选） |
+| 只想瞄一眼后台发生了什么 | Launcher 搜「Console」开独立窗口（单例，重复调用只激活已有窗口） |
+| 调试构建、人在终端 | 每条输出同时打到终端，见下 |
+
+**终端镜像**（调试构建默认开）：每条输出在写进缓冲的同时也打到终端——`Log` / `Info` 走 **stdout**，`Warn` / `Error` 走 **stderr**，逐行 flush（崩溃或退出前的最后一条不会卡在缓冲里丢掉）。所以 `cargo run 2>/dev/null` 只留正常输出，`2>&1 | grep '^\[x\]'` 能单独捞错误。`BOLT_CONSOLE_TERMINAL=0` 关掉；`=1` 让 release 构建也打开（`.app` 没有终端，默认关）。
+
+窗口工具栏与面板一致（等级筛选 + `Clear`）。`Clear` 只清当前视图：缓冲里仍有历史，之后再开窗口还能看到它们。
+
+独立窗口的标题栏右上角有**置顶图钉**（复用 [`WindowPin`](src/ui/window_pin.rs)），并且**默认就置顶**：调试时它是个常驻仪表盘，被编辑器或浏览器盖住就没用了。点一下图钉落到普通层级，再点抬回 floating。层级是 NSWindow 的运行时消息，切换不重建窗口；dock 里的面板跟着脚本管理器窗口走，没有自己的层级，所以没有图钉。置顶状态不跨「关窗再开」保留——每次开窗都回到默认的置顶。
 
 ### 插件（plux-rs）
 
@@ -407,9 +426,9 @@ scripts/
 
 **QuickJS-JIT 签名要求**：`entitlements.plist` 里声明了 `com.apple.security.cs.allow-unsigned-executable-memory`，因为 QuickJS-JIT 在进程内动态生成机器码。没有这个 entitlement，签名后的 App 一跑脚本就会 `SIGKILL`。
 
-应用启动时会依次完成：**先建 Console 通道**（第一时间创建，启动期任何失败都进 Console 面板而不是 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：**先建 Console 缓冲**（第一时间创建，启动期任何失败都进 Console 而不是只到 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
 
-`eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（有界，容量 1000、溢出丢最旧；面板打开前的条目会缓存下来，等用户打开管理器再补上）。`Error` 级条目还会同步落盘到数据目录的 `bolt.log`（滚动保留最近 500 行）——Console 面板只在脚本管理器窗口里，用户若从不打开它，日志文件就是启动失败唯一的出路。
+`eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（共享缓冲，容量 1000、溢出丢最旧；视图打开前的条目会留着，打开后一并显示；调试构建下还会同时打到终端）。`Error` 级条目另外同步落盘到数据目录的 `bolt.log`（滚动保留最近 500 行）——用户若从不打开 Console，日志文件就是启动失败唯一的出路。
 
 > **首次构建**：UI 命令的运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
 >
@@ -487,7 +506,7 @@ scripts/
 
 ### `console`
 
-运行时注入的全局对象，输出被捕获到 Console 面板：
+运行时注入的全局对象，输出进 Console 缓冲（见 [Console](#console)：管理器面板、独立窗口、调试构建下的终端镜像都读它）：
 
 ```ts
 console.log('...');    // Log
@@ -789,8 +808,8 @@ ctx.globals().set("console", console)?;
 | 文件 / 目录 | 职责 |
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
-| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；拆成 `item` 契约、`collect` 收集排序、`filter` 查询/粘贴过滤、`actions` 动作构建、`list` 自绘列表（悬停不选中、单击选中、双击执行）、`panel` Cmd+K 浮层、`mod` 主视图与键盘分流；搜索框是宿主自己的 `Input`，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接 + 插件清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表持久化、`actions` 插件级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载等落地操作、`manager/` 扩展管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；拆成 `item` 契约、`collect` 收集排序、`filter` 查询/粘贴过滤、`actions` 动作构建、`list` 自绘列表（悬停不选中、单击选中、双击执行）、`panel` Cmd+K 浮层、`mod` 主视图与键盘分流；搜索框是宿主自己的 `Input`，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 缓冲） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`console/`（`panel` 是 Console 视图：脚本管理器的 dock 面板与独立窗口共用同一个组件，`chrome` 决定要不要自己画标题栏；`window` 是独立窗口的开窗逻辑（单例），`mod` 提供 Launcher 里的「Console」命令）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接 + 插件清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表持久化、`actions` 插件级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载等落地操作、`manager/` 扩展管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
 | [src/ui/](src/ui) | 跨模块共享 UI 与纯前端逻辑：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`clipboard/`（NSPasteboard 读取与内容识别：`mod` 类型与 peek/read 入口、`files` Finder 文件条目、`html` 富文本转纯文本、`image` 格式与尺寸识别；`read_paste_content` 供 Launcher Cmd+V 与 pin 共用） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 执行链路：`runner`（普通脚本的 QuickJS 运行 + 插件命令的 `run_plugin`）、`interaction`（宿主交互桥）、`interaction_window_manager`（待命/进度/确认浮窗与 pickPath 选择器的状态机）、`run_service`（应用级运行服务：任务队列、取消与状态广播，`RunTask` 分脚本与插件两种）、`ts_transform`（swc 类型擦除） |
@@ -798,15 +817,16 @@ ctx.globals().set("console", console)?;
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
 | [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS，四态就绪状态机）、`store`（跨线程执行入口 + 运行时健康状态）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
-| [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道：有界（1000 条，溢出丢最旧），`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；跨层共享的叶子模块 |
+| [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出：`ConsoleChannel` 是写入端，`ConsoleLog` 是引用计数的共享缓冲（1000 条、溢出丢最旧），读者用 `since(cursor)` 取增量；`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；调试构建下每条输出同时打到 stdout/stderr。跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`、`run_js` headless 运行器） |
 
 分组规则：`app` 管进程装配与 Launcher 主 UI（对具体模块一无所知），`modules` 放内容模块（各自向 Launcher 贡献 items、自管窗口与状态），`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放执行链路，`host` 放宿主扩展框架及其背后的原生实现，`lsp` 放语言服务器客户端，`core` 放与领域无关、可单独测试的通用基础设施。新增模块只需在 `modules/` 下实现 `Module` trait 并加进 `default_modules()`。需要脱离 gpui 单独测试的能力（如插件运行时）放 `crates/` 下的独立 crate。
 
 ## 架构要点
 
-- **线程模型**：GPUI 主线程只负责渲染；脚本与插件命令都在独立工作线程执行，输出经 `ConsoleChannel` 回传面板。
-- **三套运行时，一个引擎**：普通脚本在 worker 线程上跑一次性 rquickjs（可中断、可取消、可并发 await）；插件脚本命令在**每插件一条**的常驻线程上跑（`PluginStore::invoke` 同步调用，超时/取消靠 interrupt handler）；UI 命令在 GPUI 主线程上由 gpui-shell 执行并原生渲染。三者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 命令的 `console` 与错误经 `tracing` 转到同一个 Console 面板。
+- **线程模型**：GPUI 主线程只负责渲染；脚本与插件命令都在独立工作线程执行，输出经 `ConsoleChannel` 写进共享缓冲，视图按游标增量取。
+- **一份缓冲，多个读者**：Console 输出原来走「有界 channel + 唯一 `Receiver`」——谁先建面板谁独占消费，后来者拿不到历史。现在写入端只往 `ConsoleLog` 里追加，读者各自持一个 `cursor` 调 `since(cursor)` 取增量：脚本管理器的 dock 面板与独立 Console 窗口因此能同时开着，关闭/重开也不影响对方，缓冲仍是固定容量（不用为了"多个读者"复制通道）。顺带把「满了丢最旧」从"发送方偷偷 pop 一端的 Receiver"改成缓冲自己的队列语义，写入路径不再出现读端操作。
+- **三套运行时，一个引擎**：普通脚本在 worker 线程上跑一次性 rquickjs（可中断、可取消、可并发 await）；插件脚本命令在**每插件一条**的常驻线程上跑（`PluginStore::invoke` 同步调用，超时/取消靠 interrupt handler）；UI 命令在 GPUI 主线程上由 gpui-shell 执行并原生渲染。三者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 命令的 `console` 与错误经 `tracing` 转到同一份 Console 缓冲。
 - **插件生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 安排加载 / 读元数据」；真正的命令执行交给 `PluginStore`（`Arc` 可跨线程）。`ensure_loaded` 只起线程不等待，等就绪发生在执行线程上，所以打开 Launcher 与第一次执行命令都不会卡住 UI。宿主另有一套健康检查：`plugin.is_load` 说已加载、`PluginStore` 却说运行时已死时，先 `unload` 复位再重新安排——plux 的 `load_plugin` 对已加载插件是 no-op，少了这一步就永远不会重建。
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
 - **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。两侧的「说明符 → 磁盘文件」与「宿主模块转发源码生成」是**同一份实现**（`plux_js_manager::{resolve_file, forwarding_module_source}`），不再各写一遍。转发模块是**转发函数**而不是一次性解构——宿主 API 分两批安装（加载时装基础函数、每轮命令前装交互 API），解构会把加载时的 `undefined` 固化进 const 绑定。

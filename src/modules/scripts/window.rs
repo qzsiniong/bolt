@@ -35,17 +35,17 @@ pub(crate) fn open_manager(cx: &mut App, new_script: bool) {
         // Dead window: fall through and create a new one.
     }
 
-    let (lsp, console_rx, run_service, console) = {
+    let (lsp, console_log, run_service, console) = {
         let shell = cx.global::<AppShell>();
         (
             shell.lsp.clone(),
-            shell.console_rx.clone(),
+            shell.console_channel.history(),
             shell.run_service.clone(),
             shell.console_channel.clone(),
         )
     };
     let opened = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-        cx.new(|cx| Workspace::new(window, cx, lsp, console_rx, run_service))
+        cx.new(|cx| Workspace::new(window, cx, lsp, console_log, run_service))
     });
     match opened {
         Ok((handle, workspace)) => {

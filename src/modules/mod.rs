@@ -4,6 +4,7 @@
 
 pub(crate) mod apps;
 pub(crate) mod color_picker;
+pub(crate) mod console;
 pub(crate) mod extensions;
 pub(crate) mod json_editor;
 pub(crate) mod pin;
@@ -20,5 +21,6 @@ pub(crate) fn default_modules(
         Box::new(pin::PinModule),
         Box::new(color_picker::ColorPickerModule),
         Box::new(extensions::ExtensionsModule),
+        Box::new(console::ConsoleModule),
     ]
 }

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crossbeam_channel::Receiver;
 use gpui_kit::component::dock::{DockArea, DockLayout, DockSkin, panel_handle};
 use gpui_kit::{
     AppContext, Context, Entity, InteractiveElement, IntoElement, KeyBinding, ParentElement,
@@ -9,8 +8,9 @@ use gpui_kit::{
 
 use super::panels::editor::{RunRequested, StopRequested};
 use super::panels::script_list_panel::ScriptSelected;
-use super::panels::{ConsolePanel, EditorPanel, ScriptListPanel};
-use crate::console_channel::ConsoleEntry;
+use super::panels::{EditorPanel, ScriptListPanel};
+use crate::console_channel::ConsoleLog;
+use crate::modules::console::panel::ConsolePanel;
 use crate::runtime::run_service::{RunService, RunStateChanged};
 
 gpui_kit::actions!(bolt, [SaveScript, RunScript, NewScript]);
@@ -34,7 +34,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         lsp: Result<Arc<crate::lsp::LspClient>, String>,
-        console_rx: Receiver<ConsoleEntry>,
+        console_log: ConsoleLog,
         run_service: Entity<RunService>,
     ) -> Self {
         // Window-level shortcuts: Cmd+S save, Cmd+Enter run, Cmd+N new.
@@ -48,7 +48,7 @@ impl Workspace {
             .new(|cx| DockArea::new("main", Some(1), window, cx).with_renderer(DockSkin::new(cx)));
 
         let script_list = cx.new(|cx| ScriptListPanel::new(window, cx));
-        let console = cx.new(|cx| ConsolePanel::new(window, console_rx, cx));
+        let console = cx.new(|cx| ConsolePanel::new(window, console_log, cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx, lsp.ok()));
         // Let the list panel warn about unsaved edits before it replaces the
         // script currently open in the editor.

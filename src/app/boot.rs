@@ -22,16 +22,16 @@ use crate::modules::scripts::state::ScriptsState;
 use crate::runtime::run_service::RunService;
 
 pub(crate) fn run() {
-    // Console channel 先于一切创建：启动期错误（目录准备、播种、项目文件）
-    // 也进 Console 面板——打包成 .app 后 stderr 用户根本看不到。channel 有界
-    // （丢最旧），面板打开前产生的条目会缓存，打开后一并显示。Error 级条目
-    // 同时落盘 bolt.log：Console 面板只在脚本管理器窗口里，用户若从不打开
-    // 它，落盘文件就是启动失败唯一的出路。
+    // Console 先于一切创建：启动期错误（目录准备、播种、项目文件）也要进
+    // Console——打包成 .app 后 stderr 用户根本看不到。缓冲有界（丢最旧，留最近
+    // 1000 条），视图打开前产生的条目会留着，打开后一并显示。Error 级条目
+    // 同时落盘 bolt.log：用户若从不打开 Console 窗口，落盘文件就是启动失败的
+    // 唯一线索。调试构建下每条输出还会同时打到终端（见 console_channel）。
     let log_path = dirs::data_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("bolt")
         .join("bolt.log");
-    let (console_channel, console_rx) = ConsoleChannel::new_with_error_log(log_path);
+    let console_channel = ConsoleChannel::new_with_error_log(log_path);
 
     let scripts_dir = script_store::scripts_dir();
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {
@@ -209,6 +209,7 @@ pub(crate) fn run() {
             // 各内容模块的应用级状态：窗口单例与模块专属资源。
             cx.set_global(ScriptsState { manager: None });
             cx.set_global(JsonEditorState { window: None });
+            cx.set_global(crate::modules::console::ConsoleState { window: None });
             cx.set_global(ExtensionsState {
                 ui_windows: Default::default(),
                 assets: extension_assets,
@@ -238,7 +239,6 @@ pub(crate) fn run() {
                 items_revision: std::cell::Cell::new(0),
                 run_service,
                 console_channel,
-                console_rx,
                 lsp: lsp_client,
                 _hotkey_manager: hotkey_manager,
                 _app_tick: app_tick,

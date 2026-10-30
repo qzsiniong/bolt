@@ -57,16 +57,21 @@ pub fn run_with_registry(
     scripts_dir: &Path,
     registry: Arc<HostRegistry>,
 ) -> Vec<String> {
-    let (channel, rx) = ConsoleChannel::new();
+    let channel = ConsoleChannel::new();
     let cancel = CancelToken::new();
     let env = RunEnv {
         scripts_dir: scripts_dir.to_path_buf(),
         registry,
-        console: channel,
+        console: channel.clone(),
         cancel: cancel.clone(),
         interaction: InteractionBridge::new(cancel).0,
         plugins: None,
     };
     run_script(code, Language::JavaScript, "test.js", env);
-    rx.try_iter().map(|e| e.text).collect()
+    channel
+        .history()
+        .entries()
+        .into_iter()
+        .map(|e| e.text)
+        .collect()
 }

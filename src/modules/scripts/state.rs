@@ -6,8 +6,8 @@ use super::workspace::Workspace;
 
 /// Scripts 模块状态，随 app 生命周期存活的 Global。
 pub(crate) struct ScriptsState {
-    /// 脚本管理器窗口。workspace 只弱持有：窗口关闭必须把它（及其 console
-    /// drain）释放，console 输出在 channel 里缓冲到下一个管理器窗口打开。
+    /// 脚本管理器窗口。workspace 只弱持有：窗口关闭必须把它（及其 Console
+    /// 视图的轮询任务）释放，输出在共享缓冲里留着，等下一次打开窗口时补上。
     pub(crate) manager: Option<(AnyWindowHandle, WeakEntity<Workspace>)>,
 }
 

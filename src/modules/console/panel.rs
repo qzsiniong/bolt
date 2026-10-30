@@ -1,28 +1,44 @@
+//! Console 视图：脚本管理器 dock 里的面板，也是独立 Console 窗口的根视图。
+//!
+//! 两种形态共用同一个组件（`chrome` 区分）：dock 里由 dock 画标题栏，独立窗口
+//! 要自己画一条 `TitleBar`。内容一律从 [`ConsoleLog`] 按游标增量取——面板和窗口
+//! 可以同时开着，各看各的滚动位置，谁也不抢谁的输出。
+
 use std::time::Duration;
 
-use crossbeam_channel::Receiver;
 use gpui_kit::HighlightStyle;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Disableable;
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    Hsla, InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement,
-    Styled, Task, WeakEntity, Window, div, px,
+    AnyElement, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, px,
 };
 
-use crate::console_channel::{ConsoleEntry, ConsoleLevel};
+use crate::console_channel::{ConsoleEntry, ConsoleLevel, ConsoleLog};
+use crate::ui::window_pin::{WindowPin, set_window_level};
 
-/// Maximum lines retained in the panel; older entries are dropped.
+/// Maximum lines retained in the view; older entries are dropped.
 const MAX_ENTRIES: usize = 1000;
 
-pub struct ConsolePanel {
+/// 这个视图是被 dock 嵌着，还是自己占一个窗口。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Chrome {
+    Docked,
+    Windowed,
+}
+
+pub(crate) struct ConsolePanel {
     focus_handle: FocusHandle,
-    rx: Receiver<ConsoleEntry>,
+    log: ConsoleLog,
+    /// 已经消费到 `log` 的哪个位置。每个视图各一份，互不干扰。
+    cursor: u64,
     entries: Vec<ConsoleEntry>,
     editor: Entity<EditorState>,
     decorations: TextDecorationCollection,
@@ -34,31 +50,86 @@ pub struct ConsolePanel {
     /// `None` shows every level; `Some(level)` shows only that level.
     filter: Option<ConsoleLevel>,
     filter_menu_open: bool,
+    chrome: Chrome,
+    /// 独立窗口标题栏右上角的置顶图钉（公共控件，自带状态与窗口层级同步）。
+    /// dock 形态没有自己的标题栏，也就没有图钉。
+    pin: Option<Entity<WindowPin>>,
     _task: Task<()>,
 }
 
 impl ConsolePanel {
-    pub fn new(window: &mut Window, rx: Receiver<ConsoleEntry>, cx: &mut Context<Self>) -> Self {
+    /// dock 面板形态（脚本管理器窗口右下角）。
+    pub(crate) fn new(window: &mut Window, log: ConsoleLog, cx: &mut Context<Self>) -> Self {
+        Self::with_chrome(window, log, Chrome::Docked, cx)
+    }
+
+    /// 独立窗口形态（Launcher →「Console」）。
+    pub(crate) fn new_windowed(
+        window: &mut Window,
+        log: ConsoleLog,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::with_chrome(window, log, Chrome::Windowed, cx)
+    }
+
+    fn with_chrome(
+        window: &mut Window,
+        log: ConsoleLog,
+        chrome: Chrome,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let task = cx.spawn(Self::drain_loop);
         let editor = cx.new(|ecx| EditorState::new(window, ecx));
         editor.update(cx, |s, cx| s.set_readonly(true, cx));
         let decorations = editor.update(cx, |s, cx| s.create_decorations_collection(vec![], cx));
+        // 从头读：窗口/面板晚打开时也能看到启动期与之前的输出（缓冲只留最近
+        // 1000 条，更早的已经被裁掉）。之后按游标取增量。
+        let entries = log.entries();
+        let cursor = log.revision();
+        // 独立窗口**默认置顶**：调试时它就是个常驻仪表盘，被编辑器/浏览器盖住
+        // 就失去了意义。窗口层级是 NSWindow 的运行时消息（见 `window_pin`），
+        // 所以在这里抬层级、图钉以同一状态初始化，两者不会漂移。
+        //
+        // dock 面板跟着管理器窗口走，没有自己的层级，也就不创建图钉。
+        let windowed = chrome == Chrome::Windowed;
+        if windowed {
+            set_window_level(window, true);
+        }
+        let pin = windowed.then(|| cx.new(|_| WindowPin::new(true)));
         Self {
             focus_handle: cx.focus_handle(),
-            rx,
-            entries: Vec::new(),
+            log,
+            cursor,
+            entries,
             editor,
             decorations,
             last_text: String::new(),
             follow: true,
             filter: None,
             filter_menu_open: false,
+            chrome,
+            pin,
             _task: task,
         }
     }
 
-    /// Background loop: drain the channel a few times a second and trigger a
-    /// re-render whenever new lines arrive. Exits when the panel is dropped.
+    /// 取走缓冲里的新条目；返回是否有变化。
+    fn poll(&mut self) -> bool {
+        let (incoming, cursor) = self.log.since(self.cursor);
+        self.cursor = cursor;
+        if incoming.is_empty() {
+            return false;
+        }
+        self.entries.extend(incoming);
+        if self.entries.len() > MAX_ENTRIES {
+            let drop_n = self.entries.len() - MAX_ENTRIES;
+            self.entries.drain(..drop_n);
+        }
+        true
+    }
+
+    /// Background loop: poll the shared buffer a few times a second and trigger
+    /// a re-render whenever new lines arrive. Exits when the view is dropped.
     async fn drain_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
         loop {
             cx.background_executor()
@@ -66,16 +137,7 @@ impl ConsolePanel {
                 .await;
             let alive = this
                 .update(cx, |panel, cx| {
-                    let mut drained = false;
-                    while let Ok(entry) = panel.rx.try_recv() {
-                        panel.entries.push(entry);
-                        drained = true;
-                    }
-                    if panel.entries.len() > MAX_ENTRIES {
-                        let drop_n = panel.entries.len() - MAX_ENTRIES;
-                        panel.entries.drain(..drop_n);
-                    }
-                    if drained {
+                    if panel.poll() {
                         cx.notify();
                     }
                 })
@@ -95,6 +157,35 @@ impl ConsolePanel {
         self.filter = filter;
         self.filter_menu_open = false;
         cx.notify();
+    }
+
+    /// 独立窗口的标题栏（dock 形态由 dock 自己画标签，用不到）。
+    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+        let colors = cx.theme().colors;
+        let count = self.entries.len();
+        TitleBar::new()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(colors.foreground)
+                            .child("Console"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(colors.muted_foreground)
+                            .child(format!("{count} 条输出")),
+                    ),
+            )
+            // 右上角置顶图钉：标题栏右侧由它自己 justify_end 贴边。
+            .when_some(self.pin.clone(), |bar, pin| bar.child(pin))
+            .into_any_element()
     }
 }
 
@@ -171,15 +262,9 @@ impl Focusable for ConsolePanel {
 
 impl Render for ConsolePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Drain anything that arrived since the last render too, so typing in
+        // Drain anything that arrived since the last poll too, so typing in
         // the editor immediately surfaces pending output without waiting.
-        while let Ok(entry) = self.rx.try_recv() {
-            self.entries.push(entry);
-        }
-        if self.entries.len() > MAX_ENTRIES {
-            let drop_n = self.entries.len() - MAX_ENTRIES;
-            self.entries.drain(..drop_n);
-        }
+        self.poll();
 
         let theme = cx.theme();
         let border = theme.border;
@@ -209,6 +294,16 @@ impl Render for ConsolePanel {
             );
         }
 
+        // dock 形态下 dock 标签已经写着 "Console"，这里再写一遍只是重复；
+        // 独立窗口的左半边留给筛选按钮。
+        let toolbar_left = match self.chrome {
+            Chrome::Docked => div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Console"),
+            Chrome::Windowed => div(),
+        };
+
         let toolbar = div()
             .flex()
             .items_center()
@@ -217,12 +312,7 @@ impl Render for ConsolePanel {
             .py_2()
             .border_b_1()
             .border_color(border)
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child("Console"),
-            )
+            .child(toolbar_left)
             .child(
                 div()
                     .flex()
@@ -342,14 +432,20 @@ impl Render for ConsolePanel {
             self.decorations.set(decorations, cx);
         }
 
-        div().size_full().flex().flex_col().child(toolbar).child(
-            div().flex_1().min_h_0().child(
-                Editor::new(&self.editor)
-                    .readonly(true)
-                    .appearance(false)
-                    .bordered(false)
-                    .size_full(),
-            ),
-        )
+        let mut root = div().size_full().flex().flex_col();
+        if self.chrome == Chrome::Windowed {
+            root = root.child(self.header(cx));
+        }
+        root.child(toolbar)
+            .child(
+                div().flex_1().min_h_0().child(
+                    Editor::new(&self.editor)
+                        .readonly(true)
+                        .appearance(false)
+                        .bordered(false)
+                        .size_full(),
+                ),
+            )
+            .into_any_element()
     }
 }
