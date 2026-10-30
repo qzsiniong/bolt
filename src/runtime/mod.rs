@@ -9,6 +9,7 @@ use crate::app::shell::AppShell;
 use crate::model::script::Language;
 
 pub(crate) mod interaction;
+pub(crate) mod interaction_window_manager;
 pub(crate) mod run_service;
 pub(crate) mod runner;
 pub(crate) mod ts_transform;
