@@ -77,13 +77,26 @@ impl Loader for PluginLoader {
         name: &str,
         _attrs: Option<ImportAttributes<'js>>,
     ) -> Result<Module<'js>> {
-        // 1. 宿主模块 → 从 globalThis.__<name> 上重新导出。
+        // 1. 宿主模块 → 转发函数，每次调用都从 globalThis.__<name> 上现取。
+        //    不能用 `const { a, b } = globalThis.__x` 解构：宿主模块的导出分两批
+        //    安装（install_base 装基础函数，install_scope 在每轮命令前装交互
+        //    API），而入口模块在 install_base 之后、第一次 install_scope 之前就
+        //    求值了——一次性解构会把当时的 undefined 固化进 const 绑定，插件里
+        //    `import { confirm } from 'bolt'` 永远拿到 undefined。
         if let Some(exports) = self.host_modules.get(name) {
             let source = if exports.is_empty() {
                 "// empty host module".to_string()
             } else {
-                let names = exports.join(", ");
-                format!("const {{ {names} }} = globalThis.__{name};\nexport {{ {names} }};\n")
+                let forwards = exports
+                    .iter()
+                    .map(|export| {
+                        format!(
+                            "export function {export}(...args) {{ return globalThis.__{name}.{export}(...args); }}"
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{forwards}\n")
             };
             return Module::declare(ctx.clone(), name, source);
         }

@@ -148,14 +148,26 @@ impl Loader for HostLoader {
         name: &str,
         _attrs: Option<ImportAttributes<'js>>,
     ) -> Result<Module<'js>> {
-        // 1. Registered host module → re-export from the global namespace.
+        // 1. Registered host module → forward to the global namespace.
+        //    转发函数每次调用都现取 `globalThis.__<name>`：宿主的交互 API
+        //    （typeStr / confirm …）可能在模块求值之后才被装上，一次性解构会把
+        //    当时的 undefined 固化进 const 绑定。
         if let Some(module) = self.registry.modules.get(name) {
-            let exports = module.exports.join(", ");
-            let global = format!("__{}", module.name);
-            let source = if exports.is_empty() {
+            let source = if module.exports.is_empty() {
                 "// empty host module".to_string()
             } else {
-                format!("const {{ {exports} }} = globalThis.{global};\nexport {{ {exports} }};\n")
+                let forwards = module
+                    .exports
+                    .iter()
+                    .map(|export| {
+                        format!(
+                            "export function {export}(...args) {{ return globalThis.__{}.{export}(...args); }}",
+                            module.name
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{forwards}\n")
             };
             return Module::declare(ctx.clone(), name, source);
         }

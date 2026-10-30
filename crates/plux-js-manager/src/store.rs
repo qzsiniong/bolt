@@ -452,4 +452,82 @@ mod tests {
         call(&store, "hello").unwrap();
         assert!(env.take_logs().iter().any(|line| line == "from plugin"));
     }
+
+    /// 带宿主模块的环境：`install_base` 只装基础函数，`install_scope` 才装
+    /// `typeStr`——复现 bolt 的真实时序。
+    struct ScopedEnv {
+        logs: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Default for ScopedEnv {
+        fn default() -> Self {
+            Self {
+                logs: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl JsEnv for ScopedEnv {
+        fn install_base<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
+            let g = Object::new(ctx.clone())?;
+            g.set("base", Function::new(ctx.clone(), || "base")?)?;
+            ctx.globals().set("__bolt", g)?;
+            Ok(())
+        }
+
+        fn install_scope<'js>(&self, ctx: &Ctx<'js>, _scope: &dyn Scope) -> rquickjs::Result<()> {
+            let g: Object = ctx.globals().get("__bolt")?;
+            g.set("typeStr", Function::new(ctx.clone(), |text: String| text)?)?;
+            Ok(())
+        }
+
+        fn host_modules(&self) -> Vec<crate::env::HostModuleSpec> {
+            vec![crate::env::HostModuleSpec {
+                name: "bolt".to_string(),
+                exports: vec!["base".to_string(), "typeStr".to_string()],
+            }]
+        }
+
+        fn prepare_source(&self, _path: &Path, code: &str) -> Result<String, String> {
+            Ok(code.to_string())
+        }
+
+        fn log(&self, _level: LogLevel, message: &str) {
+            self.logs.lock().push(message.to_string());
+        }
+    }
+
+    struct TestScope;
+
+    impl Scope for TestScope {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn host_module_exports_track_apis_installed_after_load() {
+        let tmp = TempDir::new("store-scope-module");
+        let dir = "demo-v1.0.0.js";
+        tmp.write(&format!("{dir}/{MANIFEST_FILE}"), &manifest("demo"));
+        tmp.write(
+            &format!("{dir}/index.js"),
+            "import * as bolt from 'bolt';\nexport function hello() { return `${typeof bolt.typeStr}|${bolt.typeStr('hi')}`; }",
+        );
+
+        let env = Arc::new(ScopedEnv::default());
+        let store = PluginStore::new(env);
+        let root = tmp.0.join(dir);
+        store
+            .ensure_loaded("demo", "1.0.0", &root, &root.join("index.js"))
+            .expect("plugin should load");
+
+        // 调用时带上 scope，install_scope 才会把 typeStr 装上。
+        let request = InvokeRequest::new("hello", CancelToken::new())
+            .with_scope(Arc::new(TestScope) as Arc<dyn Scope>);
+        assert_eq!(
+            store.invoke("demo", "1.0.0", request).unwrap().as_deref(),
+            Some("function|hi")
+        );
+    }
 }
