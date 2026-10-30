@@ -1,8 +1,10 @@
 //! `extension.json` — 插件清单元数据、校验与目录名约定。
 //!
 //! 目录名必须是 plux 的 bundle 约定 `{id}-v{version}.{format}`（本 crate 只认
-//! `format = "js"`），因为 plux 的 [`Bundle`] 完全从目录名解析出来。清单里的
-//! `id`/`version` 必须与目录名一致：作者改名即改版本，清单与目录不允许漂移。
+//! `format = "js"`），因为 plux 的 [`Bundle`] 完全从目录名解析出来——`Loader`
+//! 拿到的只有一个路径，`Manager` 没有覆盖 bundle 的机会。所以目录名是
+//! **唯一事实来源**：清单里的 `id`/`version` 可以省略（省略即取目录名），
+//! 写了就必须一致，不允许两边漂移。
 //!
 //! 命令分两类：带 `ui` 块的命令由 gpui-shell 打开原生窗口（入口固定
 //! [`UI_ENTRY`]），不带的在插件常驻运行时里执行同名 JS 函数。
@@ -40,12 +42,16 @@ pub const PERMISSIONS: &[&str] = &["fs", "net", "exec", "env", "typeStr"];
 /// 一个插件目录的清单。宽松解析（忽略未知字段）。
 #[derive(Clone, Debug, Deserialize)]
 pub struct PluginManifest {
+    /// 可省略：目录名里已经写着。写了必须与目录名一致。解析后**始终**是目录名
+    /// 里的 id（[`read`] 会回填），下游不必再处理"没写"的情况。
+    #[serde(default)]
     pub id: String,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// 必须与目录名里的版本一致。
+    /// 同 `id`：省略时取目录名里的版本，写了必须一致。
+    #[serde(default)]
     pub version: String,
     #[serde(default = "default_entry")]
     pub entry: String,
@@ -198,24 +204,32 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
     let mut manifest: PluginManifest =
         serde_json::from_str(&raw).map_err(|e| format!("解析 {MANIFEST_FILE} 失败：{e}"))?;
 
-    if manifest.id != bundle.id {
+    // 目录名是唯一事实来源：id / version 写了就严格比对（漂移是作者最容易踩的
+    // 坑），没写（或空串）就用目录名回填。回填放在最前面，后面的 `display_name`
+    // 之类才拿得到 id。
+    if !manifest.id.is_empty() && manifest.id != bundle.id {
         return Err(format!(
             "清单 id `{}` 与目录名里的 id `{}` 不一致",
             manifest.id, bundle.id
         ));
     }
-    let declared = Version::parse(&manifest.version).map_err(|e| {
-        format!(
-            "清单 version `{}` 不是合法语义化版本：{e}",
-            manifest.version
-        )
-    })?;
-    if declared != bundle.version {
-        return Err(format!(
-            "清单 version `{}` 与目录名里的版本 `{}` 不一致",
-            manifest.version, bundle.version
-        ));
+    manifest.id = bundle.id.clone();
+
+    if !manifest.version.is_empty() {
+        let declared = Version::parse(&manifest.version).map_err(|e| {
+            format!(
+                "清单 version `{}` 不是合法语义化版本：{e}",
+                manifest.version
+            )
+        })?;
+        if declared != bundle.version {
+            return Err(format!(
+                "清单 version `{}` 与目录名里的版本 `{}` 不一致",
+                manifest.version, bundle.version
+            ));
+        }
     }
+    manifest.version = bundle.version.to_string();
 
     if manifest.commands.is_empty() {
         manifest.commands.push(PluginCommand {
@@ -531,6 +545,36 @@ mod tests {
             err.contains("未知权限") && err.contains("fs, net, exec, env, typeStr"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn id_and_version_may_be_omitted_and_come_from_the_dir_name() {
+        // 目录名已经是唯一事实来源：清单里重复一遍 id/version 没有信息量。
+        let tmp = TempDir::new("manifest-derive");
+        let manifest = r#"{ "name": "演示", "commands": [{ "id": "go", "title": "Go" }] }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("dir name fills the gap");
+        assert_eq!(package.manifest.id, "demo");
+        assert_eq!(package.manifest.version, "1.0.0");
+
+        // 空串等同没写：空 id 本来也没有意义。
+        write_plugin(
+            &tmp,
+            "other-v2.1.0.js",
+            r#"{ "id": "", "version": "" }"#,
+            &["index.js"],
+        );
+        let package = read(&tmp.0.join("other-v2.1.0.js")).expect("empty means absent");
+        assert_eq!(package.manifest.id, "other");
+        assert_eq!(package.manifest.version, "2.1.0");
+
+        // 补出来的命令标题取自展示名 → 退回 id，所以回填必须在补命令之前发生。
+        write_plugin(&tmp, "bare-v1.0.0.js", "{ }", &["index.js"]);
+        let package =
+            read(&tmp.0.join("bare-v1.0.0.js")).expect("empty object is a valid manifest");
+        assert_eq!(package.manifest.commands.len(), 1);
+        assert_eq!(package.manifest.commands[0].title, "bare");
     }
 
     #[test]

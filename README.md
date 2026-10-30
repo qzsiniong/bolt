@@ -85,7 +85,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 **目录名就是 bundle 标识**。plux-rs 的 `Bundle` 完全从目录名解析出 `id` / `version` / `format`，所以：
 
 - 目录名必须是 `<id>-v<version>.js`（`v` 前缀、语义化版本、`.js` 后缀，缺一不可，如 `demo-v1.0.0.js`）；
-- 清单里的 `id` 与 `version` 必须与目录名**逐字一致**——改名即改版本，两边漂移的插件会被拒绝加载并在 Console 报错；
+- 清单里的 `id` 与 `version` **可以省略**——目录名已经写着它们，再抄一遍只是冗余；写了就必须与目录名**逐字一致**，两边漂移的插件会被拒绝加载并在 Console 报错（这是作者改目录名时最容易漏的一步，所以保留这道检查）；
 - `format` 后缀目前只认 `.js`，它是宿主挑 manager 的依据，与入口文件的扩展名不是一回事。
 
 #### `extension.json`
@@ -111,14 +111,16 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `id` | ✅ | 插件标识，必须与目录名里的 id 一致 |
-| `version` | ✅ | 语义化版本，必须与目录名里的版本一致 |
+| `id` | | 插件标识；**省略时取目录名里的 id**，写了必须一致 |
+| `version` | | 语义化版本；**省略时取目录名里的版本**，写了必须一致 |
 | `name` | | 展示名，省略时退回 `id` |
 | `description` | | 插件说明 |
 | `entry` | | 脚本命令入口，默认 `index.js`，只接受 `.js` / `.ts`。**纯 UI 插件不需要**：没有脚本命令时这个字段根本不读，也不用在目录里放 `index.js` |
 | `depends` / `optional_depends` | | `["base@^1.0"]` 形式的依赖声明，映射到 plux 的 `Depend`（不带 `@` 表示任意版本） |
 | `permissions` | | 脚本命令要用的权限名，如 `["fs", "net"]`。**缺省一个都不给（fail-closed）**：没声明的危险 API 在调用时抛错，报错里会写明缺哪个权限。详见[信任模型](docs/trust-model.md) |
 | `commands` | | 命令数组；**省略时会自动补一条 id 为 `run`、标题为插件展示名的命令** |
+
+`id` / `version` 是**唯一可以整行删掉**的字段：目录名 `<id>-v<version>.js` 是 plux bundle 的唯一定义处（`Loader` 只拿到路径，manager 没有覆盖 bundle 的机会）。因此最小清单就是一个 `{ }`——不过通常至少要写 `commands`，否则只有一条以插件名为标题的命令。
 
 `commands[*]` 的字段：
 
