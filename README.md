@@ -8,7 +8,7 @@
 
 - **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、插件命令或打开管理器。
 - **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
-- **插件化扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `plugin.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
+- **插件化扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
 - **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在插件自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
@@ -74,7 +74,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 ~/Library/Application Support/bolt/
 ├── extensions/
 │   ├── demo-v1.0.0.js/              # 目录名 = <id>-v<version>.js
-│   │   ├── plugin.json              # 清单（必填）
+│   │   ├── extension.json              # 清单（必填）
 │   │   ├── index.js                 # 脚本命令入口（默认 index.js，也支持 .ts）
 │   │   └── main.js                  # UI 命令入口（有 ui 命令时才需要）
 │   └── json-editor-v1.0.0.js/
@@ -87,7 +87,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 - 清单里的 `id` 与 `version` 必须与目录名**逐字一致**——改名即改版本，两边漂移的插件会被拒绝加载并在 Console 报错；
 - `format` 后缀目前只认 `.js`，它是宿主挑 manager 的依据，与入口文件的扩展名不是一回事。
 
-#### `plugin.json`
+#### `extension.json`
 
 ```json
 {
@@ -168,7 +168,7 @@ export async function hello({ command, plugin, root, argv }) {
 
 - 清单解析失败、目录名不合约定、入口缺失、`id`/`version` 与目录名不一致 —— 该插件被跳过，原因写进 Console（`warn` 等级），其他插件不受影响。
 - 每次唤出 Launcher 都重新扫描磁盘：**新增的插件目录下次唤出即可用**，不必重启应用；已注册的插件不会重复注册，也不会被卸载（运行时要跨命令保留状态）。改动**已有**插件的清单或入口则需要重启应用。
-- 两种目录会被跳过：没有 `plugin.json` 的目录（作者的草稿等）静默忽略；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `plugin.json` 安装的能力冲突。
+- 两种目录会被跳过：没有 `extension.json` 的目录（作者的草稿等）静默忽略；插件目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `extension.json` 安装的能力冲突。
 
 ### 仓库自带插件
 
@@ -183,7 +183,7 @@ export async function hello({ command, plugin, root, argv }) {
 
 ```text
 extensions/demo-v1.0.0.js/
-├── plugin.json    # 清单
+├── extension.json    # 清单
 ├── index.js       # 脚本命令入口
 └── main.js        # UI 命令入口：export default class extends View
 ```
@@ -728,7 +728,7 @@ ctx.globals().set("console", console)?;
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
-| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`plugin.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS）、`store`（跨线程执行入口）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
+| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS）、`store`（跨线程执行入口）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出通道（crossbeam），跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`） |
 

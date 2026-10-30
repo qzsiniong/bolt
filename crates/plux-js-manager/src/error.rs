@@ -16,7 +16,7 @@ pub enum JsError {
     #[error("插件未注册：{0}")]
     UnknownPlugin(String),
 
-    /// The command id is not declared in `plugin.json`.
+    /// The command id is not declared in `extension.json`.
     #[error("命令不存在：{0}")]
     UnknownCommand(String),
 

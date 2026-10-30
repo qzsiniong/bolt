@@ -1,7 +1,7 @@
 //! plux-rs 的 JavaScript（QuickJS）插件管理器。
 //!
 //! 与官方 `plux-lua-manager` 对应：实现 [`plux_rs::Manager`]，把插件目录里的
-//! `plugin.json` 解析成 [`PluginMeta`]，并为每个插件维护一个**常驻**的 QuickJS
+//! `extension.json` 解析成 [`PluginMeta`]，并为每个插件维护一个**常驻**的 QuickJS
 //! 运行时（专用线程 + 消息驱动），命令之间保留模块状态。
 //!
 //! 本 crate 不依赖宿主：console、宿主模块（`import "bolt"`）与交互 API 全部通过

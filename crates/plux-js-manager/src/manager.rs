@@ -4,7 +4,7 @@
 //!
 //! | plux 回调 | 本 crate 的动作 |
 //! |---|---|
-//! | `register_plugin` | 读 `plugin.json`、校验目录名/清单/入口，返回 [`PluginMeta`] |
+//! | `register_plugin` | 读 `extension.json`、校验目录名/清单/入口，返回 [`PluginMeta`] |
 //! | `load_plugin` | 起工人线程、建常驻运行时、求值入口模块 |
 //! | `unload_plugin` | 停线程、销毁运行时 |
 //!

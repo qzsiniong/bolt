@@ -1,4 +1,4 @@
-//! `plugin.json` — 插件清单元数据、校验与目录名约定。
+//! `extension.json` — 插件清单元数据、校验与目录名约定。
 //!
 //! 目录名必须是 plux 的 bundle 约定 `{id}-v{version}.{format}`（本 crate 只认
 //! `format = "js"`），因为 plux 的 [`Bundle`] 完全从目录名解析出来。清单里的
@@ -14,7 +14,7 @@ use semver::{Version, VersionReq};
 use serde::Deserialize;
 
 /// 每个插件目录一份的清单文件名。
-pub const MANIFEST_FILE: &str = "plugin.json";
+pub const MANIFEST_FILE: &str = "extension.json";
 /// 脚本入口的默认名。
 pub const DEFAULT_ENTRY: &str = "index.js";
 /// UI 命令的入口文件名。gpui-shell 对没有 `gpui-shell.json` 的目录固定加载它，

@@ -1,11 +1,11 @@
 //! 插件目录的定位、播种与扫描。
 //!
 //! 目录约定（plux 的 bundle 命名）：`<extensions>/<id>-v<version>.js/`，
-//! 目录里放 `plugin.json` 与入口脚本。清单本身的解析与校验在
+//! 目录里放 `extension.json` 与入口脚本。清单本身的解析与校验在
 //! `plux_js_manager::manifest` 里，本模块只管"文件在哪、怎么播种、哪些目录
 //! 看起来是插件但已经不可用"。
 //!
-//! 没有 `plugin.json` 的目录一律忽略——作者的草稿、过时的旧布局都不该刷一屏错误。
+//! 没有 `extension.json` 的目录一律忽略——作者的草稿不该刷一屏错误。
 
 use std::path::{Path, PathBuf};
 
@@ -67,7 +67,7 @@ pub fn ensure_dir(dir: &Path) -> Result<(), String> {
 
 /// 扫描扩展根，返回可注册的插件目录与错误消息。
 ///
-/// - 有 `plugin.json` → 收集（是否合法交给 plux manager 判断）。
+/// - 有 `extension.json` → 收集（是否合法交给 plux manager 判断）。
 /// - 没有 → 忽略（作者的草稿目录不该刷一屏错误）。
 /// - 同时有 `gpui-shell.json` → 报错，因为 gpui-shell 会走严格清单路径。
 pub fn scan(extensions: &Path) -> (Vec<PathBuf>, Vec<String>) {

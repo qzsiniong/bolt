@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn module_imports_resolve_inside_the_plugin() {
         let tmp = TempDir::new("store-import");
-        tmp.write("demo-v1.0.0.js/plugin.json", &manifest("demo"));
+        tmp.write("demo-v1.0.0.js/extension.json", &manifest("demo"));
         tmp.write(
             "demo-v1.0.0.js/index.js",
             "export { hello } from './lib/hello.js';",
