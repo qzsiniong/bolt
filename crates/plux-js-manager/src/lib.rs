@@ -10,6 +10,7 @@
 pub mod cancel;
 pub mod env;
 pub mod error;
+pub mod fingerprint;
 pub mod loader;
 pub mod manager;
 pub mod manifest;
@@ -25,6 +26,7 @@ mod test_support;
 pub use cancel::CancelToken;
 pub use env::{EmptyEnv, HostModuleSpec, JsEnv, LogLevel, Scope};
 pub use error::JsError;
+pub use fingerprint::dir_fingerprint;
 pub use loader::{forwarding_module_source, resolve_file};
 pub use manager::JsManager;
 pub use manifest::{

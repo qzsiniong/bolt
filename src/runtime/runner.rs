@@ -131,7 +131,7 @@ pub fn run_plugin(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
     });
     let request = InvokeRequest::new(command, cancel.clone()).with_scope(scope);
 
-    match plugins.invoke(&bundle.id, &bundle.version.to_string(), request) {
+    match plugins.invoke(&bundle, request) {
         Ok(Some(output)) => {
             if !output.trim().is_empty() {
                 console.info(output);
@@ -500,13 +500,10 @@ mod tests {
             console: channel.clone(),
         });
         let store = plux_js_manager::PluginStore::new(env);
-        let id = dir.split("-v").next().unwrap_or_default();
-        let version = dir
-            .trim_start_matches(id)
-            .trim_start_matches("-v")
-            .trim_end_matches(".js");
+        // 目录名就是 bundle（`{id}-v{version}.js`）：身份只在一处解析。
+        let bundle = plux_rs::Bundle::from_filename(dir).expect("valid bundle");
         store
-            .ensure_loaded(id, version, &root, &root.join("index.js"), &[])
+            .ensure_loaded(&bundle, &root, &root.join("index.js"), &[])
             .unwrap();
 
         let env = RunEnv {

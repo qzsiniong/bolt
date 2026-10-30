@@ -6,7 +6,9 @@
 //! - 其余命令 → 插件常驻运行时里的同名 JS 函数。
 //!
 //! 磁盘内容每次打开 Launcher 都会重新扫描（作者改完清单不用重启），但已注册的
-//! 插件不会重复注册、也不会被卸载——插件运行时的状态要跨命令保留。
+//! 插件不会重复注册、也不会被卸载——插件运行时的状态要跨命令保留。例外是目录
+//! 内容变了而版本号没变：那时注册表里的元数据与跑着的引擎都停在旧内容上，宿主
+//! 主动注销并按新内容重新注册（见 `host::ExtensionsHost::refresh`）。
 
 pub(crate) mod host;
 pub(crate) mod js_env;
@@ -36,19 +38,22 @@ impl Module for ExtensionsModule {
     }
 
     fn collect_items(&self, cx: &App) -> Vec<LauncherItem> {
-        let (targets, errors) = {
+        let (targets, report) = {
             let state = cx.global::<ExtensionsState>();
             // `collect_items` 只拿到 `&App`，而注册插件要 `&mut Loader`：
             // 宿主因此放在 RefCell 里（GPUI 是单线程的，不存在并发借用）。
             let mut host = state.host.borrow_mut();
-            let errors = host.refresh();
-            (host.commands(), errors)
+            let report = host.refresh();
+            (host.commands(), report)
         };
 
-        if !errors.is_empty() {
+        if !report.errors.is_empty() || !report.notices.is_empty() {
             let console = cx.global::<AppShell>().console_channel.clone();
-            for error in errors {
+            for error in report.errors {
                 console.warn(error);
+            }
+            for notice in report.notices {
+                console.info(notice);
             }
         }
 

@@ -72,13 +72,7 @@ impl<'a> Manager<'a, FunctionOutput, PluginMeta> for JsManager {
             return Ok(());
         };
         self.store
-            .ensure_loaded(
-                meta.id(),
-                &info.bundle.version.to_string(),
-                &meta.root,
-                entry,
-                &meta.manifest.permissions,
-            )
+            .ensure_loaded(&info.bundle, &meta.root, entry, &meta.manifest.permissions)
             .map_err(boxed)
     }
 
@@ -86,9 +80,7 @@ impl<'a> Manager<'a, FunctionOutput, PluginMeta> for JsManager {
         &mut self,
         plugin: &Plugin<'a, FunctionOutput, PluginMeta>,
     ) -> ManagerResult<()> {
-        let info = plugin.info();
-        self.store
-            .unload(info.info.id(), &info.bundle.version.to_string());
+        self.store.unload(&plugin.info().bundle);
         Ok(())
     }
 
@@ -98,9 +90,7 @@ impl<'a> Manager<'a, FunctionOutput, PluginMeta> for JsManager {
         &mut self,
         plugin: &Plugin<'a, FunctionOutput, PluginMeta>,
     ) -> ManagerResult<()> {
-        let info = plugin.info();
-        self.store
-            .unload(info.info.id(), &info.bundle.version.to_string());
+        self.store.unload(&plugin.info().bundle);
         Ok(())
     }
 }

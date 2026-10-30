@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use plux_js_manager::{JsEnv, JsManager, PluginMeta, PluginStore, RuntimeState, UiSpec};
+use plux_js_manager::{
+    JsEnv, JsManager, PluginMeta, PluginStore, RuntimeState, UiSpec, dir_fingerprint,
+};
 use plux_rs::function::FunctionOutput;
 use plux_rs::utils::{RegisterPluginError, UnloadPluginError, UnregisterPluginError};
 use plux_rs::{Bundle, Loader};
@@ -48,6 +50,17 @@ impl CommandTarget {
     }
 }
 
+/// 一次 [`ExtensionsHost::refresh`] 的结果。
+///
+/// 分两档：`errors` 是「插件坏了」（清单写坏、注册失败、重载被拒），`notices` 是
+/// 「插件没坏，只是你改了内容却没升版本号」。都塞进 errors 会让开发期的正常迭代
+/// 看起来像故障，作者很快就会学会忽略控制台里的红字。
+#[derive(Debug, Default)]
+pub(crate) struct RefreshReport {
+    pub(crate) errors: Vec<String>,
+    pub(crate) notices: Vec<String>,
+}
+
 pub(crate) struct ExtensionsHost {
     /// 见模块头部：必须钉在 Box 里。
     loader: Box<ExtensionsLoader>,
@@ -63,7 +76,13 @@ pub(crate) struct ExtensionsHost {
     /// `None` = 还没成功扫描过，此时不做任何过滤。
     live: Option<HashSet<Bundle>>,
     /// 每个插件上次重建运行时的时刻，用来给重建加冷却。
-    rebuilt_at: HashMap<(String, String), Instant>,
+    rebuilt_at: HashMap<Bundle, Instant>,
+    /// 上次扫描时各插件目录的内容指纹。
+    ///
+    /// plux 的插件身份只有 `(id, version)`：同 id 同版本再注册只会回
+    /// `AlreadyExistsIDAndVersion`，元数据与运行时都留在旧内容上。开发期改完代码
+    /// 忘了升版本号是常事，指纹就是"磁盘变了"的唯一证据。
+    fingerprints: HashMap<Bundle, u64>,
 }
 
 impl ExtensionsHost {
@@ -84,47 +103,105 @@ impl ExtensionsHost {
             init_error,
             live: None,
             rebuilt_at: HashMap::new(),
+            fingerprints: HashMap::new(),
         }
     }
 
-    /// 重新扫描磁盘并注册新插件；返回本次发现的错误（不含已注册插件的重复注册）。
-    pub(crate) fn refresh(&mut self) -> Vec<String> {
+    /// 重新扫描磁盘、注册新插件、并让内容变过的插件重新生效。
+    pub(crate) fn refresh(&mut self) -> RefreshReport {
+        let mut report = RefreshReport::default();
         if let Some(error) = &self.init_error {
-            return vec![error.clone()];
+            report.errors.push(error.clone());
+            return report;
         }
 
-        let (dirs, mut errors) = manifest::scan(&self.extensions_dir);
+        let (dirs, scan_errors) = manifest::scan(&self.extensions_dir);
+        report.errors.extend(scan_errors);
         // 先按目录名算"磁盘上有谁"：注册失败（清单写坏）也算存在。
         let live: HashSet<Bundle> = dirs
             .iter()
             .filter_map(|dir| plux_js_manager::manifest::bundle_from_dir(dir).ok())
             .collect();
-        let live_keys: HashSet<(String, String)> = live
-            .iter()
-            .map(|bundle| (bundle.id.clone(), bundle.version.to_string()))
-            .collect();
 
         for dir in dirs {
             let Some(path) = dir.to_str() else {
-                errors.push(format!("插件路径不是合法 UTF-8：{}", dir.display()));
+                report
+                    .errors
+                    .push(format!("插件路径不是合法 UTF-8：{}", dir.display()));
                 continue;
             };
+            // 目录名不合规时 register_plugin 会报一条统一的错，这里不重复判断。
+            let bundle = plux_js_manager::manifest::bundle_from_dir(&dir).ok();
+            let fingerprint = dir_fingerprint(&dir);
+            let update_baseline = match &bundle {
+                Some(bundle) => self.reload_if_changed(bundle, fingerprint, &mut report),
+                None => true,
+            };
+
             match self.loader.register_plugin(path) {
-                // 重复注册（同 id 同版本）是正常的：Launcher 每次打开都会刷新。
+                // 内容没变时的重复注册是正常路径：Launcher 每打开一次都会走到这里。
                 Ok(_) | Err(RegisterPluginError::AlreadyExistsIDAndVersion(..)) => {}
-                Err(error) => errors.push(format!(
+                Err(error) => report.errors.push(format!(
                     "扩展加载失败 {}：{}",
                     dir.display(),
                     describe(&error)
                 )),
             }
+
+            if let (Some(bundle), Some(fingerprint), true) = (bundle, fingerprint, update_baseline)
+            {
+                self.fingerprints.insert(bundle, fingerprint);
+            }
         }
 
         self.live = Some(live);
-        self.rebuilt_at.retain(|key, _| live_keys.contains(key));
-        self.drop_stale(&mut errors);
+        // 磁盘上已经消失的插件不必再留指纹/冷却记录；它若回来，本来也该重新建基准。
+        if let Some(live) = &self.live {
+            self.rebuilt_at.retain(|bundle, _| live.contains(bundle));
+            self.fingerprints.retain(|bundle, _| live.contains(bundle));
+        }
+        self.drop_stale(&mut report.errors);
         self.drop_shadowed();
-        errors
+        report
+    }
+
+    /// 内容变了、版本号没变：先注销旧条目，让调用方紧接着重新注册。
+    ///
+    /// 注销会连运行时一起卸掉（`unregister_plugin` 先 unload 再 remove），下次执行
+    /// 命令时用新代码重建引擎。返回 `false` 表示重载没成功——此时**不要**记录新
+    /// 指纹，下一轮扫描还要再试一次。
+    fn reload_if_changed(
+        &mut self,
+        bundle: &Bundle,
+        fingerprint: Option<u64>,
+        report: &mut RefreshReport,
+    ) -> bool {
+        let (Some(current), Some(known)) = (fingerprint, self.fingerprints.get(bundle).copied())
+        else {
+            // 第一次见到它（或目录读不了）：没有基准可比，谈不上"变了"。
+            return true;
+        };
+        if current == known {
+            return true;
+        }
+
+        match self.loader.unregister_plugin_by_bundle(bundle) {
+            // 上次注册就失败了（清单当时写坏）：没有旧条目可摘，直接重新注册。
+            Err(UnregisterPluginError::NotFound) => {}
+            Ok(()) => report.notices.push(format!(
+                "插件 {} v{} 的内容已变更，已重新加载（版本号未变，发布前记得升版本）",
+                bundle.id, bundle.version
+            )),
+            // 还被别的已加载插件依赖着：不能强拆，只能报出来让作者升版本号。
+            Err(error) => {
+                report.errors.push(format!(
+                    "插件 {} v{} 的内容已变更，但无法重新加载：{error}",
+                    bundle.id, bundle.version
+                ));
+                return false;
+            }
+        }
+        true
     }
 
     /// 磁盘上已经消失的插件：连注册一起摘掉，Launcher 里自然不再出现。
@@ -176,7 +253,7 @@ impl ExtensionsHost {
             }
         }
 
-        let shadowed: Vec<(String, String)> = self
+        let shadowed: Vec<Bundle> = self
             .loader
             .get_plugins()
             .iter()
@@ -186,11 +263,10 @@ impl ExtensionsHost {
                     .get(bundle.id.as_str())
                     .is_some_and(|kept| kept.version > bundle.version)
             })
-            .map(|bundle| (bundle.id, bundle.version.to_string()))
             .collect();
 
-        for (id, version) in shadowed {
-            self.store.unload(&id, &version);
+        for bundle in shadowed {
+            self.store.unload(&bundle);
         }
     }
 
@@ -257,26 +333,24 @@ impl ExtensionsHost {
     /// 运行时已死（加载失败 / 线程退出）时先复位 plux 的 `is_load` 再重新安排——
     /// 否则 `load_plugin_by_bundle` 会因为 `is_load == true` 直接 Ok，什么都不重建。
     pub(crate) fn ensure_loaded(&mut self, target: &CommandTarget) -> Result<(), String> {
-        let id = target.plugin_id.clone();
-        let version = target.bundle.version.to_string();
+        let bundle = &target.bundle;
         let registered = self
             .loader
-            .get_plugin_by_bundle(&target.bundle)
+            .get_plugin_by_bundle(bundle)
             .map(|plugin| plugin.is_load())
             .unwrap_or(false);
 
         if registered {
-            match self.store.state(&id, &version) {
+            match self.store.state(bundle) {
                 // 已就绪或正在加载：交给 invoke 的 wait_ready，不会重复起线程。
                 Some(RuntimeState::Ready) | Some(RuntimeState::Loading) => return Ok(()),
                 Some(RuntimeState::Dead) => {
-                    let key = (id.clone(), version.clone());
-                    if let Some(at) = self.rebuilt_at.get(&key)
+                    if let Some(at) = self.rebuilt_at.get(bundle)
                         && at.elapsed() < REBUILD_COOLDOWN
                     {
                         let reason = self
                             .store
-                            .last_error(&id, &version)
+                            .last_error(bundle)
                             .map(|error| error.to_string())
                             .unwrap_or_default();
                         return Err(format!(
@@ -284,9 +358,9 @@ impl ExtensionsHost {
                             (REBUILD_COOLDOWN - at.elapsed()).as_secs_f32()
                         ));
                     }
-                    self.rebuilt_at.insert(key, Instant::now());
+                    self.rebuilt_at.insert(bundle.clone(), Instant::now());
                     // 必须先卸载：load_plugin_by_bundle 对已加载插件是 no-op。
-                    if let Err(error) = self.loader.unload_plugin_by_bundle(&target.bundle) {
+                    if let Err(error) = self.loader.unload_plugin_by_bundle(bundle) {
                         return Err(format!("插件运行时已退出，且无法重建（{error}）"));
                     }
                 }
@@ -296,7 +370,7 @@ impl ExtensionsHost {
         }
 
         self.loader
-            .load_plugin_by_bundle(&target.bundle)
+            .load_plugin_by_bundle(bundle)
             .map_err(|e| e.to_string())
     }
 
@@ -342,6 +416,11 @@ mod tests {
         ExtensionsHost::new(&tmp.0, env)
     }
 
+    /// 测试里的插件身份：`(id, version)` 由 bundle 一处说清。
+    fn bundle(id: &str, version: &str) -> Bundle {
+        Bundle::from_filename(format!("{id}-v{version}.js").as_str()).expect("valid bundle")
+    }
+
     fn write_plugin(tmp: &TempDir, dir: &str, manifest: &str, entry: &str) {
         let root = tmp.0.join(dir);
         std::fs::create_dir_all(&root).unwrap();
@@ -355,8 +434,8 @@ mod tests {
         manifest::ensure_demo_plugin(&tmp.0).expect("write demo plugin");
 
         let mut host = host(&tmp);
-        let errors = host.refresh();
-        assert!(errors.is_empty(), "{errors:?}");
+        let report = host.refresh();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
 
         let commands = host.commands();
         assert_eq!(commands.len(), 2, "{commands:?}");
@@ -379,8 +458,7 @@ mod tests {
         let output = host
             .store()
             .invoke(
-                "demo",
-                "1.0.0",
+                &bundle("demo", "1.0.0"),
                 InvokeRequest::new("hello", CancelToken::new()),
             )
             .expect("hello should run");
@@ -401,15 +479,14 @@ mod tests {
         );
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         let target = host.commands().into_iter().next().expect("one command");
         host.ensure_loaded(&target).expect("probe should load");
 
         let output = host
             .store()
             .invoke(
-                "probe",
-                "1.0.0",
+                &bundle("probe", "1.0.0"),
                 InvokeRequest::new("home", CancelToken::new()),
             )
             .expect("home should run");
@@ -428,15 +505,14 @@ mod tests {
         );
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         let target = host.commands().into_iter().next().expect("one command");
         host.ensure_loaded(&target).expect("guard should load");
 
         let error = host
             .store()
             .invoke(
-                "guard",
-                "1.0.0",
+                &bundle("guard", "1.0.0"),
                 InvokeRequest::new("write", CancelToken::new()),
             )
             .expect_err("denied call must throw");
@@ -466,9 +542,13 @@ mod tests {
         );
 
         let mut host = host(&tmp);
-        let errors = host.refresh();
-        assert_eq!(errors.len(), 1, "{errors:?}");
-        assert!(errors[0].contains("bad-v1.0.0.js"), "{errors:?}");
+        let report = host.refresh();
+        assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+        assert!(
+            report.errors[0].contains("bad-v1.0.0.js"),
+            "{:?}",
+            report.errors
+        );
 
         let commands = host.commands();
         assert_eq!(commands.len(), 1);
@@ -486,22 +566,22 @@ mod tests {
         );
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         // 第二次扫描不该把已注册的插件当成错误报出来。
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         assert_eq!(host.commands().len(), 1);
     }
 
-    fn wait_state(store: &PluginStore, id: &str, version: &str, want: RuntimeState) {
+    fn wait_state(store: &PluginStore, bundle: &Bundle, want: RuntimeState) {
         for _ in 0..500 {
-            if store.state(id, version) == Some(want) {
+            if store.state(bundle) == Some(want) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!(
-            "state of {id} v{version} never became {want:?} (last: {:?})",
-            store.state(id, version)
+            "state of {bundle} never became {want:?} (last: {:?})",
+            store.state(bundle)
         );
     }
 
@@ -520,19 +600,19 @@ mod tests {
         }
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         assert_eq!(host.commands().len(), 2);
 
         std::fs::remove_dir_all(tmp.0.join("two-v1.0.0.js")).unwrap();
         assert!(
-            host.refresh().is_empty(),
+            host.refresh().errors.is_empty(),
             "deleting a plugin is not an error"
         );
         assert_eq!(host.commands().len(), 1);
         assert_eq!(host.commands()[0].plugin_id, "one");
 
         // 摘掉之后要幂等：下一轮扫描不该再报 NotFound。
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         assert_eq!(host.commands().len(), 1);
     }
 
@@ -547,7 +627,7 @@ mod tests {
         );
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         let older = host.commands().into_iter().next().expect("v1 command");
         host.ensure_loaded(&older).expect("v1 loads");
 
@@ -558,7 +638,7 @@ mod tests {
             r#"{ "id": "demo", "version": "1.1.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
             "export function hello() { return 'v2'; }",
         );
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
 
         let commands = host.commands();
         assert_eq!(
@@ -569,7 +649,7 @@ mod tests {
         assert_eq!(commands[0].bundle.version.to_string(), "1.1.0");
         assert_eq!(commands[0].item_id(), "ext.demo.hello");
         // 旧版本的运行时被停掉；注册保留给 plux 的依赖解析。
-        assert_eq!(host.store().state("demo", "1.0.0"), None);
+        assert_eq!(host.store().state(&bundle("demo", "1.0.0")), None);
     }
 
     #[test]
@@ -589,7 +669,7 @@ mod tests {
         .unwrap();
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         let target = host.commands().into_iter().next().expect("command");
         host.ensure_loaded(&target)
             .expect("spawn must not fail on a broken entry");
@@ -597,14 +677,13 @@ mod tests {
         assert!(
             store
                 .invoke(
-                    "demo",
-                    "1.0.0",
+                    &bundle("demo", "1.0.0"),
                     InvokeRequest::new("hello", CancelToken::new())
                 )
                 .is_err(),
             "broken entry must fail"
         );
-        wait_state(&store, "demo", "1.0.0", RuntimeState::Dead);
+        wait_state(&store, &bundle("demo", "1.0.0"), RuntimeState::Dead);
 
         // 作者修好文件后再点一次：健康检查要重建运行时，而不是永远短路。
         std::fs::write(
@@ -617,8 +696,7 @@ mod tests {
 
         let output = store
             .invoke(
-                "demo",
-                "1.0.0",
+                &bundle("demo", "1.0.0"),
                 InvokeRequest::new("hello", CancelToken::new()),
             )
             .expect("rebuilt plugin runs");
@@ -636,19 +714,185 @@ mod tests {
         );
 
         let mut host = host(&tmp);
-        assert!(host.refresh().is_empty());
+        assert!(host.refresh().errors.is_empty());
         let target = host.commands().into_iter().next().expect("command");
         host.ensure_loaded(&target)
             .expect("first load is scheduled");
         let store = host.store();
-        wait_state(&store, "demo", "1.0.0", RuntimeState::Dead);
+        wait_state(&store, &bundle("demo", "1.0.0"), RuntimeState::Dead);
 
         host.ensure_loaded(&target).expect("first rebuild");
-        wait_state(&store, "demo", "1.0.0", RuntimeState::Dead);
+        wait_state(&store, &bundle("demo", "1.0.0"), RuntimeState::Dead);
 
         let error = host
             .ensure_loaded(&target)
             .expect_err("second rebuild inside the cooldown must be refused");
         assert!(error.contains("后可重新执行"), "{error}");
+    }
+
+    fn invoke(store: &PluginStore, id: &str, version: &str, command: &str) -> Option<String> {
+        store
+            .invoke(
+                &bundle(id, version),
+                InvokeRequest::new(command, CancelToken::new()),
+            )
+            .expect("command should run")
+    }
+
+    #[test]
+    fn same_version_content_change_reloads_and_notifies() {
+        let tmp = TempDir::new("host-content-change");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
+            "export function hello() { return 'v1'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().notices.is_empty());
+        let target = host.commands().into_iter().next().expect("command");
+        host.ensure_loaded(&target).expect("loads");
+        let store = host.store();
+        assert_eq!(
+            invoke(&store, "demo", "1.0.0", "hello").as_deref(),
+            Some("v1")
+        );
+
+        // 改代码但不动版本号：plux 只会回 AlreadyExistsIDAndVersion，宿主自己得发现。
+        std::fs::write(
+            tmp.0.join("demo-v1.0.0.js/index.js"),
+            "export function hello() { return 'v2'; }",
+        )
+        .unwrap();
+
+        let report = host.refresh();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.notices.len(), 1, "{:?}", report.notices);
+        assert!(
+            report.notices[0].contains("内容已变更"),
+            "{:?}",
+            report.notices
+        );
+
+        // 运行时被连着卸掉了：下一次执行要按新代码重建。
+        let target = host.commands().into_iter().next().expect("command");
+        host.ensure_loaded(&target).expect("reload");
+        assert_eq!(
+            invoke(&store, "demo", "1.0.0", "hello").as_deref(),
+            Some("v2")
+        );
+    }
+
+    #[test]
+    fn manifest_edit_without_version_bump_updates_metadata() {
+        let tmp = TempDir::new("host-manifest-change");
+        let manifest = |title: &str| {
+            format!(
+                r#"{{ "id": "demo", "version": "1.0.0", "commands": [{{ "id": "hello", "title": "{title}" }}] }}"#
+            )
+        };
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            &manifest("Hello"),
+            "export function hello() {}",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        assert_eq!(host.commands()[0].title, "Hello");
+
+        std::fs::write(
+            tmp.0.join("demo-v1.0.0.js/extension.json"),
+            manifest("Hi there"),
+        )
+        .unwrap();
+        let report = host.refresh();
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        assert_eq!(report.notices.len(), 1, "{:?}", report.notices);
+        // 元数据必须重新读：注册表里的旧 PluginMeta 不能继续用。
+        assert_eq!(host.commands()[0].title, "Hi there");
+    }
+
+    #[test]
+    fn refresh_keeps_the_runtime_when_nothing_changed() {
+        // 计数存在模块状态里：运行时一旦被重建，它会从 1 重来。
+        let tmp = TempDir::new("host-runtime-kept");
+        write_plugin(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "bump", "title": "Bump" }] }"#,
+            "let n = 0;\nexport function bump() { n += 1; return String(n); }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        let target = host.commands().into_iter().next().expect("command");
+        host.ensure_loaded(&target).expect("loads");
+        let store = host.store();
+        assert_eq!(
+            invoke(&store, "demo", "1.0.0", "bump").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            invoke(&store, "demo", "1.0.0", "bump").as_deref(),
+            Some("2")
+        );
+
+        // Launcher 每打开一次都会 refresh：内容没变就不该动运行时。
+        let report = host.refresh();
+        assert!(
+            report.errors.is_empty() && report.notices.is_empty(),
+            "{report:?}"
+        );
+        assert_eq!(
+            invoke(&store, "demo", "1.0.0", "bump").as_deref(),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn content_change_is_reported_when_a_loaded_plugin_depends_on_it() {
+        let tmp = TempDir::new("host-content-dependent");
+        write_plugin(
+            &tmp,
+            "base-v1.0.0.js",
+            r#"{ "id": "base", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'base'; }",
+        );
+        write_plugin(
+            &tmp,
+            "app-v1.0.0.js",
+            r#"{ "id": "app", "version": "1.0.0", "depends": ["base@*"], "commands": [{ "id": "go", "title": "Go" }] }"#,
+            "export function go() { return 'app'; }",
+        );
+
+        let mut host = host(&tmp);
+        assert!(host.refresh().errors.is_empty());
+        for target in host.commands() {
+            host.ensure_loaded(&target).expect("both load");
+        }
+        let base_target = host
+            .commands()
+            .into_iter()
+            .find(|command| command.plugin_id == "base")
+            .expect("base command");
+        host.ensure_loaded(&base_target).expect("base loads");
+
+        std::fs::write(
+            tmp.0.join("base-v1.0.0.js/index.js"),
+            "export function go() { return 'base v2'; }",
+        )
+        .unwrap();
+
+        // 被已加载的插件依赖着，plux 拒绝卸载：只能报出来让作者升版本号。
+        let report = host.refresh();
+        assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
+        assert!(
+            report.errors[0].contains("无法重新加载"),
+            "{:?}",
+            report.errors
+        );
     }
 }
