@@ -65,6 +65,8 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 **多关键字**：搜索词按空白切分（连续空格、首尾空白、全角空格都算分隔），**每个词都要命中**才算匹配，词序无关；每个词只要在标题 / id / 副标题 / 关键词任一字段里出现即可——「微信 wechat」能命中同一个 item，只要它有字段含"微信"、有字段含"wechat"（不必是同一字段）。只有空白等于没输入，列表不过滤。Cmd+K 动作面板沿用同一规则（只匹配动作标题）。
 
+**鼠标语义**（Raycast 同款，主列表与 Cmd+K 面板一致）：hover **只给一层淡高亮，不动选中**——鼠标掠过不会把键盘选中的行抢走；**单击选中**（并把焦点留在搜索框，接着打字不用再点一次）；**双击执行**，等同回车。列表是自绘的（[src/app/launcher/list.rs](src/app/launcher/list.rs)），没有用 gpui-component 的 `Command`——它写死了「悬停即选中 + 单击即执行」且没有开关。键盘 ↑/↓ 移动选中时，新选中行会自动滚进视野。
+
 **显示名解析**：按系统语言优先级找 `InfoPlist.strings`——先 `zh-Hans-CN` 再 `zh-Hans` 再 `Base` 最后 `en`。企业微信这种特殊布局（`zh-Hans.lproj` 目录存在但没有 `InfoPlist.strings`，`Base.lproj` 才有"企业微信"）也能正确取到中文名。
 
 **自定义搜索词**：所有 item（应用、脚本、Pin 等）统一通过 Launcher 动作面板的「**编辑搜索关键词**」修改，保存到 `~/Library/Application Support/bolt/item-keywords.json`（按 item id 覆盖整个 keywords，多个词用逗号分隔，留空恢复默认）。应用会在此基础上叠加内置默认别名（源码维护在 `src/modules/apps/default-aliases.json`，`include_str!` 编进二进制）；编辑过的 item 以编辑值为准。
@@ -348,7 +350,7 @@ cargo test -p plux-js-manager    # 只跑插件运行时那部分
 
 ### 依赖说明（无本地补丁）
 
-项目**不再对 gpui-kit 生态打本地补丁**：Launcher 主搜索框与 Cmd+K 动作面板都用原生能力实现——`Command::searchable(false)` 关掉内置搜索，宿主在 `Command` 外部自定义 `Input`（类型 token、粘贴识别、二次过滤全在宿主侧），无需 cargo-patch-crate 与 `patches/` 目录。
+项目**不再对 gpui-kit 生态打本地补丁**：Launcher 主搜索框与 Cmd+K 动作面板都用原生能力实现——搜索框是宿主自己的 `Input`（类型 token、粘贴识别、二次过滤全在宿主侧），列表是自绘的 `list` 模块（悬停不选中、单击选中、双击执行），所以不需要 `Command::searchable(false)` 这类绕过手段，也不需要 cargo-patch-crate 与 `patches/` 目录。
 
 仓库仍保留两处 `[patch]`，但都是**版本改道**而非本地代码补丁：`rquickjs` 改道到 gpui-kit 仓库的兼容 facade（全图只链接一份 QuickJS）；`gpui-base` 改道到 registry 版，避免与 git 依赖产生两份不同 crate。
 
@@ -787,7 +789,7 @@ ctx.globals().set("console", console)?;
 | 文件 / 目录 | 职责 |
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
-| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；拆成 `item` 契约、`collect` 收集排序、`filter` 查询/粘贴过滤、`actions` 动作构建、`panel` Cmd+K 浮层、`mod` 主视图与键盘分流；搜索框是宿主外部 `Input`——`Command::searchable(false)` 关掉内置搜索，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
+| [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；拆成 `item` 契约、`collect` 收集排序、`filter` 查询/粘贴过滤、`actions` 动作构建、`list` 自绘列表（悬停不选中、单击选中、双击执行）、`panel` Cmd+K 浮层、`mod` 主视图与键盘分流；搜索框是宿主自己的 `Input`，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
 | [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接 + 插件清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表持久化、`actions` 插件级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载等落地操作、`manager/` 扩展管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
 | [src/ui/](src/ui) | 跨模块共享 UI 与纯前端逻辑：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`clipboard/`（NSPasteboard 读取与内容识别：`mod` 类型与 peek/read 入口、`files` Finder 文件条目、`html` 富文本转纯文本、`image` 格式与尺寸识别；`read_paste_content` 供 Launcher Cmd+V 与 pin 共用） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |

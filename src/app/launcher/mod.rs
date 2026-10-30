@@ -19,6 +19,7 @@ pub(crate) mod actions;
 pub(crate) mod collect;
 pub(crate) mod filter;
 pub(crate) mod item;
+pub(crate) mod list;
 pub(crate) mod panel;
 
 pub(crate) use item::{
@@ -36,17 +37,16 @@ use gpui_kit::base::input::{InlineToken, InlineTokenContext, InputContent};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Icon;
-use gpui_kit::component::IndexPath;
 use gpui_kit::component::Sizable as _;
-use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::component::input::{Enter, Escape, Input, InputEvent, InputState, InputToken};
 use gpui_kit::prelude::FluentBuilder as _;
 
 use super::shell::AppShell;
 use super::usage;
 use gpui_kit::{
-    App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, KeyBinding,
-    KeyDownEvent, ParentElement, Render, Styled, Task, Window, div, img, px, rems,
+    AnyElement, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    KeyBinding, KeyDownEvent, ParentElement, Render, ScrollHandle, Styled, Task, Window, div, img,
+    px,
 };
 
 use crate::ui::clipboard::{PendingPaste, peek_paste, read_paste_content};
@@ -72,7 +72,6 @@ pub struct Launcher {
     input: Entity<InputState>,
     /// 有效查询（剥 token 后的手输文本）；随 input 的 Change 同步。
     query_filter: String,
-    state: Entity<CommandState>,
     items: Vec<LauncherItem>,
     /// `items` 对应的 `AppShell::items_revision`。
     items_revision: u64,
@@ -81,10 +80,16 @@ pub struct Launcher {
     filter_epoch: u64,
     /// render 已应用过的 `filter_epoch`。
     applied_filter_epoch: u64,
-    /// 上一帧渲染进 Command 的 item 下标（row → items 下标）。确认回调的
-    /// IndexPath.row 是这份列表里的位置——粘贴/文本过滤后列表被压缩过，
-    /// 不能拿 row 去索引全量 items。
+    /// 上一帧渲染进列表的 item 下标（row → items 下标）。确认回调的 row 是
+    /// 这份列表里的位置——粘贴/文本过滤后列表被压缩过，不能拿 row 去索引
+    /// 全量 items。
     visible_indices: Vec<usize>,
+    /// 主列表选中行（`visible_indices` 里的下标）。None = 空列表。
+    ///
+    /// 只有单击、↑/↓ 与「过滤后重置到首项」会改它——hover 不动选中。
+    selected: Option<usize>,
+    /// 列表滚动句柄：选中行变了就把它带进视野。
+    scroll: ScrollHandle,
     /// Cmd+V 识别出的粘贴（图片惰性：只识别类型，字节确认时才读）。Some 时
     /// 列表过滤为声明能处理该类型的 items，回车把内容交给选中 item 的
     /// paste handler。与 on_paste hook 闭包共享（Rc+RefCell）。
@@ -103,7 +108,6 @@ impl Launcher {
         cx: &mut Context<Self>,
         requests: Sender<LauncherAction>,
     ) -> Self {
-        let state = cx.new(|cx| CommandState::new(window, cx));
         let input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search scripts or commands..."));
         // 主输入框变化时重算过滤（用户打字 / 退格删 token）。
@@ -160,12 +164,13 @@ impl Launcher {
         Self {
             input,
             query_filter: String::new(),
-            state,
             items,
             items_revision,
             filter_epoch: 0,
             applied_filter_epoch: 0,
             visible_indices: (0..item_count).collect(),
+            selected: (item_count > 0).then_some(0),
+            scroll: ScrollHandle::new(),
             paste: Rc::new(RefCell::new(None)),
             requests,
             panel: None,
@@ -173,26 +178,23 @@ impl Launcher {
         }
     }
 
-    fn resolve(&self, section: usize, row: usize) -> Option<&LauncherItem> {
-        // 平铺单组：row 直接对应上一帧渲染的可见列表（过滤后已压缩）。
-        if section != 0 {
-            return None;
-        }
+    /// 可见列表里的第 `row` 行对应的 item。
+    fn resolve(&self, row: usize) -> Option<&LauncherItem> {
         self.visible_indices
             .get(row)
             .and_then(|&index| self.items.get(index))
     }
 
-    /// 主回车确认：读当前选中项走 [`Self::on_confirm`]（空列表无选中则忽略）。
+    /// 主回车确认：读当前选中行走 [`Self::on_confirm`]（空列表无选中则忽略）。
     fn confirm_main(&mut self, window: &mut Window, cx: &mut App) {
-        let Some(index) = self.state.read(cx).selected_index() else {
+        let Some(row) = self.selected else {
             return;
         };
-        self.on_confirm(index, window, cx);
+        self.on_confirm(row, window, cx);
     }
 
-    fn on_confirm(&mut self, index: IndexPath, window: &mut Window, cx: &mut App) {
-        let Some(item) = self.resolve(index.section, index.row) else {
+    fn on_confirm(&mut self, row: usize, window: &mut Window, cx: &mut App) {
+        let Some(item) = self.resolve(row) else {
             return;
         };
         // 使用频率：主回车确认即计数（所有模块的 item 通用）。
@@ -273,22 +275,21 @@ impl Launcher {
         true
     }
 
-    /// ↑/↓：在可见序列里移动选中（`set_selected_index` 自带滚动到可见）。
-    fn move_selection(
-        &mut self,
-        position: usize,
-        delta: isize,
-        visible_len: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// ↑/↓：在可见序列里移动选中，并把新选中行滚进视野。
+    fn move_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let visible_len = self.visible_indices.len();
         if visible_len == 0 {
             return;
         }
-        let next = (position as isize + delta).clamp(0, visible_len as isize - 1) as usize;
-        self.state.update(cx, |state, cx| {
-            state.set_selected_index(Some(IndexPath::new(next)), window, cx);
-        });
+        let current = self.selected.unwrap_or(0) as isize;
+        let next = (current + delta).clamp(0, visible_len as isize - 1) as usize;
+        self.select_row(next, cx);
+    }
+
+    /// 把选中设到第 `row` 行（单击、↑/↓、过滤后重置都走这里）。
+    fn select_row(&mut self, row: usize, cx: &mut Context<Self>) {
+        self.selected = Some(row);
+        self.scroll.scroll_to_item(row);
         cx.notify();
     }
 
@@ -299,13 +300,12 @@ impl Launcher {
             return;
         }
         // 选中项来自主列表的 selection；经 visible_indices 反解回 items。
-        let Some(index) = self.state.read(cx).selected_index() else {
+        let Some(row) = self.selected else {
             return;
         };
-        let Some(item) = self.resolve(index.section, index.row).cloned() else {
+        let Some(item) = self.resolve(row).cloned() else {
             return;
         };
-        let state = cx.new(|cx| CommandState::new(window, cx));
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("搜索操作…"));
         cx.subscribe(&input, |this, _input, event: &InputEvent, cx| {
             if let InputEvent::Change = event
@@ -323,14 +323,16 @@ impl Launcher {
         // 焦点交给面板搜索框。
         let focus = input.read(cx).focus_handle(cx);
         focus.focus(window, cx);
+        let actions = actions_for(&item);
         self.panel = Some(ActionsPanel {
-            state,
             input,
             query_filter: String::new(),
             filter_epoch: 0,
             applied_filter_epoch: 0,
-            visible: (0..actions_for(&item).len()).collect(),
-            actions: actions_for(&item),
+            visible: (0..actions.len()).collect(),
+            selected: (!actions.is_empty()).then_some(0),
+            scroll: ScrollHandle::new(),
+            actions,
         });
         cx.notify();
     }
@@ -349,19 +351,15 @@ impl Launcher {
             let Some(panel) = self.panel.as_ref() else {
                 return;
             };
-            (
-                panel.actions.clone(),
-                panel.visible.clone(),
-                panel.state.read(cx).selected_index(),
-            )
+            (panel.actions.clone(), panel.visible.clone(), panel.selected)
         };
-        let Some(index) = selected else {
+        let Some(row) = selected else {
             return;
         };
-        let Some(&row) = visible.get(index.row) else {
+        let Some(&index) = visible.get(row) else {
             return;
         };
-        let Some(action) = actions.get(row) else {
+        let Some(action) = actions.get(index) else {
             return;
         };
         // 展示/编辑型动作：直接弹 AlertDialog，不关窗口（面板保留）。
@@ -375,31 +373,24 @@ impl Launcher {
     }
 
     /// 面板 ↑/↓ 移动选中。
-    fn move_panel_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(panel) = self.panel.as_ref() else {
+    fn move_panel_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let Some(panel) = self.panel.as_mut() else {
             return;
         };
         let visible_len = panel.visible.len();
         if visible_len == 0 {
             return;
         }
-        let position = panel
-            .state
-            .read(cx)
-            .selected_index()
-            .filter(|index| index.section == 0 && index.row < visible_len)
-            .map(|index| index.row)
-            .unwrap_or(0);
-        let next = (position as isize + delta).clamp(0, visible_len as isize - 1) as usize;
-        panel.state.update(cx, |state, cx| {
-            state.set_selected_index(Some(IndexPath::new(next)), window, cx);
-        });
+        let current = panel.selected.unwrap_or(0) as isize;
+        let next = (current + delta).clamp(0, visible_len as isize - 1) as usize;
+        panel.selected = Some(next);
+        panel.scroll.scroll_to_item(next);
         cx.notify();
     }
 }
 
 impl Render for Launcher {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // 模块可能在面板打开期间补齐 items（例如应用图标刚刚生成完）。
         // 只有 revision 变化时才重新收集，正常渲染只读一个 Cell。
         if cx.global::<AppShell>().items_revision.get() != self.items_revision {
@@ -416,25 +407,15 @@ impl Render for Launcher {
             self.filter_epoch += 1;
         }
 
-        // A weak handle: the closure is stored in CommandState (a child of
-        // this view), so a strong one would keep both entities alive forever.
-        let this = cx.entity().downgrade();
-
-        // 过滤条件变更后把选中重置到首项（set_selected_index 需要 window，
-        // 事件回调里没有，统一挪到 render 处理）。
+        // 过滤条件变更后把选中重置到首项（并把列表滚回顶部）。
         if self.applied_filter_epoch != self.filter_epoch {
             self.applied_filter_epoch = self.filter_epoch;
             let empty = {
                 let paste = self.paste.borrow();
                 visible_indices(&self.items, &self.query_filter, paste.as_ref()).is_empty()
             };
-            self.state.update(cx, |state, cx| {
-                state.set_selected_index(
-                    if empty { None } else { Some(IndexPath::new(0)) },
-                    window,
-                    cx,
-                );
-            });
+            self.selected = (!empty).then_some(0);
+            self.scroll.scroll_to_item(0);
         }
 
         let visible = {
@@ -444,88 +425,59 @@ impl Render for Launcher {
         };
         let visible_count = visible.len();
         self.visible_indices = visible;
-
-        let mut command = Command::new(&self.state)
-            // 宿主自定义搜索框：关掉内置搜索框与内置文本过滤——no-search
-            // 模式下 Command 对喂进去的 items 不做任何过滤，所以下面只把
-            // 过滤后的可见项放进 model（过滤在上方 visible_indices 做完）。
-            .searchable(false)
-            // Fill the window so the list (flex_1) stretches instead of
-            // leaving a blank strip below the footer; raise the list's cap
-            // accordingly (default 18.75rem is shorter than this window).
-            .h_full()
-            .max_h(rems(40.))
-            .on_confirm(move |index, window, app| {
-                let _ = this.update(app, |this, cx| this.on_confirm(index, window, cx));
-            })
-            .footer(move |_, _window, cx| {
-                div()
-                    .px_3()
-                    .py_2()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(format!("{visible_count} 个命令"))
-                    .into_any_element()
-            });
-
-        if !self.visible_indices.is_empty() {
-            // 平铺：单组、无组头（label 是 Option，不设就不渲染分组标题）；
-            // 只放可见项，model 里的 row == visible_indices 里的位置。
-            let mut group = CommandGroup::new();
-            for &index in &self.visible_indices {
-                let item = &self.items[index];
-                let item_clone = item.clone();
-                let entry = CommandItem::new()
-                    .label(item.title.clone())
-                    // `child` 会整体替换默认行渲染，这里的 icon 只是占位；
-                    // 真实图标在下面的 child 里按 LauncherIcon 分支绘制。
-                    .icon(match &item.icon {
-                        LauncherIcon::Named(icon) => *icon,
-                        LauncherIcon::Image(_) => IconName::AppWindow,
-                    })
-                    .child(move |_, cx| {
-                        // 闭包体内会被 move 的内层闭包引用，先取值（颜色是 Copy）。
-                        let muted = cx.theme().muted_foreground;
-                        h_flex()
-                            .flex_1()
-                            .gap_2()
-                            .items_center()
-                            .child(match item_clone.icon.clone() {
-                                LauncherIcon::Named(icon) => {
-                                    Icon::new(icon).size_6().into_any_element()
-                                }
-                                // 固定 24×24 容器：图片的行高与内置图标一致，
-                                // 列表各行不会因为应用图标尺寸不同而抖动。
-                                LauncherIcon::Image(source) => div()
-                                    .w(px(24.))
-                                    .h(px(24.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(img(source).w(px(24.)).h(px(24.)))
-                                    .into_any_element(),
-                            })
-                            .child(div().child(item_clone.title.clone()))
-                            .when_some(item_clone.subtitle.clone(), move |this, subtitle| {
-                                this.child(div().text_sm().text_color(muted).child(subtitle))
-                            })
-                            // 行尾类型徽章（应用/脚本/…）：平铺后没有分组标题，
-                            // 靠它区分 item 类型（Raycast 的右侧行内标签）。
-                            .child(
-                                div()
-                                    .ml_auto()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(item_clone.group.clone()),
-                            )
-                            .into_any_element()
-                    });
-                group = group.item(entry);
-            }
-            command = command.group(group);
+        // items 可能在面板打开期间变化（图标补齐、插件重载）：列表变短时把
+        // 选中夹回范围内，别指向不存在的一行。
+        if self
+            .selected
+            .is_some_and(|row| row >= self.visible_indices.len())
+        {
+            self.selected = self.visible_indices.len().checked_sub(1);
         }
+
+        // 自绘列表：hover 只淡高亮、单击选中、双击执行（见 `list` 模块）。
+        let mut rows: Vec<AnyElement> = Vec::with_capacity(self.visible_indices.len());
+        for (row, &index) in self.visible_indices.iter().enumerate() {
+            let item = &self.items[index];
+            let content = row_content(item, cx);
+            let launcher = cx.entity().downgrade();
+            rows.push(list::row(
+                row,
+                self.selected == Some(row),
+                content,
+                cx,
+                move |event, window, cx| {
+                    if list::is_activation(event) {
+                        // 确认会关窗口：延到本轮事件派发结束后再执行，别在行自己
+                        // 的 click 处理里拆窗口（旧 Command 的 confirm 也是 defer）。
+                        let launcher = launcher.clone();
+                        window.defer(cx, move |window, cx| {
+                            launcher
+                                .update(cx, |launcher, cx| launcher.on_confirm(row, window, cx))
+                                .ok();
+                        });
+                    } else {
+                        launcher
+                            .update(cx, |launcher, cx| {
+                                launcher.select_row(row, cx);
+                                // 点一下不该把键盘焦点从搜索框带走：继续输入即可。
+                                let focus = launcher.input.read(cx).focus_handle(cx);
+                                focus.focus(window, cx);
+                            })
+                            .ok();
+                    }
+                },
+            ));
+        }
+        let list = list::container("launcher-list", &self.scroll, None, rows);
+
+        let footer = div()
+            .px_3()
+            .py_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(format!("{visible_count} 个命令"));
 
         // 主搜索框：大号 + 闪电前缀（对齐原 Command 内置搜索框样式）。
         let search_input = Input::new(&self.input)
@@ -571,7 +523,7 @@ impl Render for Launcher {
                     window.remove_window();
                 }
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
                 let key = event.keystroke.key.as_str();
                 if !matches!(key, "up" | "down") || event.keystroke.modifiers.modified() {
                     return;
@@ -579,17 +531,9 @@ impl Render for Launcher {
                 cx.stop_propagation();
                 let delta = if key == "up" { -1 } else { 1 };
                 if this.panel.is_some() {
-                    this.move_panel_selection(delta, window, cx);
+                    this.move_panel_selection(delta, cx);
                 } else {
-                    let position = this
-                        .state
-                        .read(cx)
-                        .selected_index()
-                        .filter(|index| index.section == 0)
-                        .map(|index| index.row)
-                        .unwrap_or(0);
-                    let visible_len = this.visible_indices.len();
-                    this.move_selection(position, delta, visible_len, window, cx);
+                    this.move_selection(delta, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleActions, window, cx| {
@@ -598,18 +542,59 @@ impl Render for Launcher {
             .child(
                 v_flex()
                     .size_full()
+                    // 窗口本身没有表面色：原来由 Command 画，现在挂在根容器上。
+                    .bg(cx.theme().popover)
+                    .text_color(cx.theme().popover_foreground)
                     .child(div().px_3().pt_3().child(search_input))
-                    .child(command),
+                    .child(v_flex().flex_1().min_h_0().child(list).child(footer)),
             );
 
         // Cmd+K 动作面板：右下角浮层，列表在上、搜索框在底部（对齐 Raycast）。
         if let Some(panel) = &mut self.panel {
-            let overlay = render_overlay(panel, &self.requests, window, cx);
+            let overlay = render_overlay(panel, &self.requests, cx.entity().downgrade(), cx);
             root = root.child(overlay);
         }
 
         root
     }
+}
+
+/// 一行的内容：图标 + 标题 + 副标题 + 行尾类型徽章。
+///
+/// 行的选中/hover 样式与点击语义在 [`list::row`] 里，这里只管内容。
+fn row_content(item: &LauncherItem, cx: &App) -> AnyElement {
+    let muted = cx.theme().muted_foreground;
+    h_flex()
+        .flex_1()
+        .gap_2()
+        .items_center()
+        .child(match item.icon.clone() {
+            LauncherIcon::Named(icon) => Icon::new(icon).size_6().into_any_element(),
+            // 固定 24×24 容器：图片的行高与内置图标一致，列表各行不会因为
+            // 应用图标尺寸不同而抖动。
+            LauncherIcon::Image(source) => div()
+                .w(px(24.))
+                .h(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(img(source).w(px(24.)).h(px(24.)))
+                .into_any_element(),
+        })
+        .child(div().child(item.title.clone()))
+        .when_some(item.subtitle.clone(), move |this, subtitle| {
+            this.child(div().text_sm().text_color(muted).child(subtitle))
+        })
+        // 行尾类型徽章（应用/脚本/…）：平铺后没有分组标题，靠它区分类型
+        // （Raycast 的右侧行内标签）。
+        .child(
+            div()
+                .ml_auto()
+                .text_xs()
+                .text_color(muted)
+                .child(item.group.clone()),
+        )
+        .into_any_element()
 }
 
 #[cfg(test)]
