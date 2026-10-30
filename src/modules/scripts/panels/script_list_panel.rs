@@ -8,6 +8,7 @@ use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::*;
 
 use super::editor::EditorPanel;
+use crate::app::shell::AppShell;
 use crate::model::script::{Language, Script};
 use crate::model::script_store;
 
@@ -143,7 +144,8 @@ impl ScriptListPanel {
                         return;
                     }
                     Err(e) => {
-                        eprintln!("create_script: {e}");
+                        let console = cx.global::<AppShell>().console_channel.clone();
+                        console.error(format!("新建脚本失败：{e}"));
                         return;
                     }
                 }
@@ -174,23 +176,26 @@ impl ScriptListPanel {
     }
 
     /// Open the scripts directory in Finder.
-    fn reveal_scripts_dir(&mut self, _cx: &mut Context<Self>) {
+    fn reveal_scripts_dir(&mut self, cx: &mut Context<Self>) {
         if let Err(e) = script_store::reveal_in_finder(&self.scripts_dir, false) {
-            eprintln!("reveal scripts dir: {e}");
+            let console = cx.global::<AppShell>().console_channel.clone();
+            console.warn(format!("打开脚本目录失败：{e}"));
         }
     }
 
     /// Select a script file in Finder.
-    fn reveal_script(&mut self, file_name: String, _cx: &mut Context<Self>) {
+    fn reveal_script(&mut self, file_name: String, cx: &mut Context<Self>) {
         let path = self.scripts_dir.join(file_name);
         if let Err(e) = script_store::reveal_in_finder(&path, true) {
-            eprintln!("reveal script: {e}");
+            let console = cx.global::<AppShell>().console_channel.clone();
+            console.warn(format!("在 Finder 中显示脚本失败：{e}"));
         }
     }
 
     fn confirm_delete(&mut self, file_name: String, cx: &mut Context<Self>) {
         if let Err(e) = script_store::delete_script(&self.scripts_dir, &file_name) {
-            eprintln!("delete: {e}");
+            let console = cx.global::<AppShell>().console_channel.clone();
+            console.error(format!("删除脚本失败：{e}"));
         }
         self.scripts.retain(|s| s.file_name != file_name);
         if self.selected_file.as_deref() == Some(file_name.as_str()) {

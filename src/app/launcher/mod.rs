@@ -43,8 +43,7 @@ use super::{keywords, usage};
 use gpui_kit::*;
 
 use super::shell::AppShell;
-use crate::modules::pin::clipboard::{peek_paste, read_paste_content};
-use crate::ui::clipboard::{PasteContent, PendingPaste};
+use crate::ui::clipboard::{PasteContent, PendingPaste, peek_paste, read_paste_content};
 
 gpui_kit::actions!(bolt_launcher, [ToggleActions]);
 

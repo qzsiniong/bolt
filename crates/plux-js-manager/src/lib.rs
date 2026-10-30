@@ -25,6 +25,7 @@ mod test_support;
 pub use cancel::CancelToken;
 pub use env::{EmptyEnv, HostModuleSpec, JsEnv, LogLevel, Scope};
 pub use error::JsError;
+pub use loader::{forwarding_module_source, resolve_file};
 pub use manager::JsManager;
 pub use manifest::{
     MANIFEST_FILE, PLUGIN_FORMAT, PluginCommand, PluginManifest, PluginPackage, UI_ENTRY,

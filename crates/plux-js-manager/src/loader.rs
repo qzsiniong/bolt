@@ -84,20 +84,7 @@ impl Loader for PluginLoader {
         //    求值了——一次性解构会把当时的 undefined 固化进 const 绑定，插件里
         //    `import { confirm } from 'bolt'` 永远拿到 undefined。
         if let Some(exports) = self.host_modules.get(name) {
-            let source = if exports.is_empty() {
-                "// empty host module".to_string()
-            } else {
-                let forwards = exports
-                    .iter()
-                    .map(|export| {
-                        format!(
-                            "export function {export}(...args) {{ return globalThis.__{name}.{export}(...args); }}"
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                format!("{forwards}\n")
-            };
+            let source = forwarding_module_source(name, exports);
             return Module::declare(ctx.clone(), name, source);
         }
 
@@ -119,8 +106,36 @@ impl Loader for PluginLoader {
     }
 }
 
+/// 生成宿主模块的转发模块源码：每个导出名是一个**转发函数**，每次调用都
+/// 从 `globalThis.__<name>` 上现取。
+///
+/// 不能用 `const { a, b } = globalThis.__x` 一次性解构：宿主的导出可能分批
+/// 安装（bolt 的基础函数在 `install_base`、交互 API 在每轮命令前的
+/// `install_scope`），解构会把求值时刻的 `undefined` 固化进 const 绑定，
+/// 后装的函数在 `import` 命名空间里永远是 undefined。
+///
+/// 宿主（bolt）的普通脚本 loader 复用同一份生成逻辑，保证两条链路行为
+/// 一致。
+pub fn forwarding_module_source(name: &str, exports: &[String]) -> String {
+    if exports.is_empty() {
+        return "// empty host module".to_string();
+    }
+    let forwards = exports
+        .iter()
+        .map(|export| {
+            format!("export function {export}(...args) {{ return globalThis.__{name}.{export}(...args); }}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{forwards}\n")
+}
+
 /// 把一个说明符解析到磁盘文件；相对说明符以 `base` 所在目录为基准。
-fn resolve_file(root: &Path, base: &str, name: &str) -> Option<PathBuf> {
+///
+/// 顺序尝试 `<path>` / `<path>.js` / `<path>.ts` / `<path>/index.js` /
+/// `<path>/index.ts`。宿主的单文件脚本 loader 复用这一份（`base` 传空串，
+/// 相对说明符即以 `root` 为基准）。
+pub fn resolve_file(root: &Path, base: &str, name: &str) -> Option<PathBuf> {
     let joined = if name.starts_with('.') {
         let base_dir = Path::new(base)
             .parent()

@@ -342,7 +342,9 @@ scripts/
 
 **QuickJS-JIT 签名要求**：`entitlements.plist` 里声明了 `com.apple.security.cs.allow-unsigned-executable-memory`，因为 QuickJS-JIT 在进程内动态生成机器码。没有这个 entitlement，签名后的 App 一跑脚本就会 `SIGKILL`。
 
-应用启动时会依次完成：创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：**先建 Console 通道**（第一时间创建，启动期任何失败都进 Console 面板而不是 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+
+`eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（unbounded，面板打开前的条目会缓存下来，等用户打开管理器再补上）。
 
 > **首次构建**：UI 命令的运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
 >
@@ -721,11 +723,11 @@ ctx.globals().set("console", console)?;
 | --- | --- |
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
 | [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；搜索框是宿主外部 `Input`——`Command::searchable(false)` 关掉内置搜索，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 面板） |
-| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 负责剪贴板内容识别——Cmd+V 识别链与类型过滤的数据源）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
-| [src/ui/](src/ui) | 跨模块共享 UI：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作） |
+| [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
+| [src/ui/](src/ui) | 跨模块共享 UI 与纯前端逻辑：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`clipboard`（NSPasteboard 读取与内容识别：文本 / JSON / URL / 文件路径 / 图片的分类，`read_paste_content` 供 Launcher Cmd+V 与 pin 共用） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 执行链路：`runner`（普通脚本的 QuickJS 运行 + 插件命令的 `run_plugin`）、`interaction`（宿主交互桥）、`run_service`（应用级运行服务，`RunTask` 分脚本与插件两种）、`ts_transform`（swc 类型擦除） |
-| [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）与内置模块 `modules/{bolt,typer,qr}` |
+| [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`；模块转发源码与文件解析复用 `plux-js-manager` 的导出，与插件侧同一份实现）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
 | [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS）、`store`（跨线程执行入口）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
@@ -740,5 +742,5 @@ ctx.globals().set("console", console)?;
 - **三套运行时，一个引擎**：普通脚本在 worker 线程上跑一次性 rquickjs（可中断、可取消、可并发 await）；插件脚本命令在**每插件一条**的常驻线程上跑（`PluginStore::invoke` 同步调用，超时/取消靠 interrupt handler）；UI 命令在 GPUI 主线程上由 gpui-shell 执行并原生渲染。三者最终共用同一个 QuickJS（quickjs-jit），由 `[patch.crates-io] rquickjs` 保证。UI 命令的 `console` 与错误经 `tracing` 转到同一个 Console 面板。
 - **插件生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 懒加载 / 读元数据」；真正的命令执行交给 `PluginStore`（`Arc` 可跨线程），因此打开 Launcher 扫描插件不会卡住 UI，命令也不会阻塞主线程。
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，以保证从 Finder 启动时也能找到 `node`。
-- **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。
+- **模块加载**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；插件侧由 `PluginResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才会落到正确目录。两侧的「说明符 → 磁盘文件」与「宿主模块转发源码生成」是**同一份实现**（`plux_js_manager::{resolve_file, forwarding_module_source}`），不再各写一遍。转发模块是**转发函数**而不是一次性解构——宿主 API 分两批安装（加载时装基础函数、每轮命令前装交互 API），解构会把加载时的 `undefined` 固化进 const 绑定。
 - **补全修正**：`typescript-language-server` 返回的候选带全量列表且无 `text_edit`，provider 侧按光标前缀过滤，并补齐 `text_edit` 范围，避免成员访问时点号被替换吞掉。

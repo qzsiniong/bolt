@@ -22,28 +22,33 @@ use crate::modules::scripts::state::ScriptsState;
 use crate::runtime::run_service::RunService;
 
 pub(crate) fn run() {
+    // Console channel 先于一切创建：启动期错误（目录准备、播种、项目文件）
+    // 也进 Console 面板——打包成 .app 后 stderr 用户根本看不到。channel 是
+    // unbounded 的，面板打开前产生的条目会缓存，打开后一并显示。
+    let (console_channel, console_rx) = ConsoleChannel::new();
+
     let scripts_dir = script_store::scripts_dir();
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {
-        eprintln!("ensure scripts dir: {e}");
+        console_channel.error(format!("创建脚本目录失败：{e}"));
     }
     // 插件根：`extensions/`。debug 构建直接用仓库目录，改完重启即生效；
     // release 构建用数据目录，并把仓库插件播种进去（只补缺失，不覆盖用户改动）。
     let extensions_dir = extension::active_extensions_dir();
     if let Err(e) = extension::ensure_dir(&extensions_dir) {
-        eprintln!("ensure extensions dir: {e}");
+        console_channel.error(format!("创建扩展目录失败：{e}"));
     }
     if extension::uses_bundled_extensions() {
         // 仓库目录就是工作树：不往里写示例，也没有「同步」这回事。
-        eprintln!("extensions dir: {}", extensions_dir.display());
+        console_channel.info(format!("扩展目录：{}", extensions_dir.display()));
     } else {
         // 首次启动给一个能直接跑的示例插件（已存在则不动）。
         if let Err(e) = extension::ensure_demo_plugin(&extensions_dir) {
-            eprintln!("ensure demo plugin: {e}");
+            console_channel.warn(format!("生成示例插件失败：{e}"));
         }
         match extension::ensure_bundled_extensions(&extensions_dir) {
-            Ok(n) if n > 0 => eprintln!("synced {n} bundled plugin(s)"),
+            Ok(n) if n > 0 => console_channel.info(format!("已同步 {n} 个仓库插件")),
             Ok(_) => {}
-            Err(e) => eprintln!("ensure bundled plugins: {e}"),
+            Err(e) => console_channel.warn(format!("同步仓库插件失败：{e}")),
         }
     }
 
@@ -52,7 +57,7 @@ pub(crate) fn run() {
     let mut registry = HostRegistry::new();
     crate::host::modules::register_all(&mut registry);
     if let Err(e) = project_gen::generate_project_files(&scripts_dir, &registry) {
-        eprintln!("generate project files: {e}");
+        console_channel.warn(format!("生成项目文件失败：{e}"));
     }
     let registry = Arc::new(registry);
 
@@ -62,11 +67,8 @@ pub(crate) fn run() {
 
     // Spawn the language server before the UI so the editor gets diagnostics,
     // completions and hover from the start. Failure reason is surfaced in the
-    // Console; the editor degrades to highlighting-only.
+    // Console below; the editor degrades to highlighting-only.
     let lsp_client = crate::lsp::LspClient::spawn(&scripts_dir).map(Arc::new);
-    if let Err(reason) = &lsp_client {
-        eprintln!("LSP init failed: {reason}");
-    }
 
     // UI 扩展的 `svg("icons/x.svg")` 相对扩展目录解析，而进程只有一个全局
     // AssetSource：用复合资源源在内置 Lucide 图标之前先查已打开的扩展目录。
@@ -81,15 +83,9 @@ pub(crate) fn run() {
             // 托盘：Accessory 策略隐藏 Dock 图标（.app 的 LSUIElement 已覆盖
             // 打包场景，这里对齐 cargo run 行为）+ 菜单栏常驻图标。命令经
             // channel 回到下方 app tick 执行，ObjC 回调不直接碰 gpui。
-            tray::set_accessory_policy();
+            tray::set_accessory_policy(&console_channel);
             let tray_rx = tray::command_channel();
-            tray::init();
-
-            // One console channel for the whole app: the run service (and any
-            // host side) pushes lines in; the manager window's Console panel
-            // drains it while open. Output produced with no manager open stays
-            // buffered and shows up when one opens.
-            let (console_channel, console_rx) = ConsoleChannel::new();
+            tray::init(&console_channel);
 
             // UI 命令（gpui-shell）的诊断全部走 tracing：脚本的 console 输出、
             // 加载失败、热重载结果。没有 subscriber 这些事件会被静默丢弃，

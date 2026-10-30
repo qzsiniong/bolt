@@ -68,7 +68,7 @@ impl LspClient {
             tsserver.is_file().then_some(tsserver)
         });
         client.initialize(scripts_dir, tsserver.as_deref())?;
-        eprintln!("LSP: ready ({})", server.display());
+        // 就绪与否由 boot 侧统一经 ConsoleChannel 上报（stderr 打包后不可见）。
         Ok(client)
     }
 

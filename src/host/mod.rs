@@ -149,31 +149,17 @@ impl Loader for HostLoader {
         _attrs: Option<ImportAttributes<'js>>,
     ) -> Result<Module<'js>> {
         // 1. Registered host module → forward to the global namespace.
-        //    转发函数每次调用都现取 `globalThis.__<name>`：宿主的交互 API
-        //    （typeStr / confirm …）可能在模块求值之后才被装上，一次性解构会把
-        //    当时的 undefined 固化进 const 绑定。
+        //    转发源码由 plux-js-manager 统一生成（转发函数每次调用都现取
+        //    `globalThis.__<name>`，插件与脚本两条链路行为一致）。
         if let Some(module) = self.registry.modules.get(name) {
-            let source = if module.exports.is_empty() {
-                "// empty host module".to_string()
-            } else {
-                let forwards = module
-                    .exports
-                    .iter()
-                    .map(|export| {
-                        format!(
-                            "export function {export}(...args) {{ return globalThis.__{}.{export}(...args); }}",
-                            module.name
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                format!("{forwards}\n")
-            };
+            let source = plux_js_manager::forwarding_module_source(&module.name, &module.exports);
             return Module::declare(ctx.clone(), name, source);
         }
 
         // 2. File-based module (relative path or bare path).
-        let path = resolve_file(&self.scripts_dir, name)
+        //    单文件脚本没有"导入方"概念，`base` 传空串：相对说明符以脚本
+        //    目录为基准。解析逻辑与插件运行时共用同一份。
+        let path = plux_js_manager::resolve_file(&self.scripts_dir, "", name)
             .ok_or_else(|| Error::new_loading_message(name, "module not found"))?;
         let source = std::fs::read_to_string(&path)
             .map_err(|e| Error::new_loading_message(name, e.to_string()))?;
@@ -199,34 +185,4 @@ impl Resolver for HostResolver {
     ) -> Result<String> {
         Ok(name.into())
     }
-}
-
-/// Try to resolve a module specifier to a file on disk.
-fn resolve_file(scripts_dir: &Path, name: &str) -> Option<PathBuf> {
-    // Absolute or rooted relative path.
-    let p = Path::new(name);
-    let candidates: Vec<PathBuf> = if p.is_absolute() || name.starts_with('.') {
-        let base = if name.starts_with('.') {
-            scripts_dir.to_path_buf()
-        } else {
-            PathBuf::new()
-        };
-        let joined = base.join(name.trim_start_matches("./"));
-        vec![
-            joined.clone(),
-            joined.with_extension("js"),
-            joined.with_extension("ts"),
-            joined.join("index.js"),
-            joined.join("index.ts"),
-        ]
-    } else {
-        // Bare path relative to scripts dir.
-        let joined = scripts_dir.join(name);
-        vec![
-            joined.clone(),
-            joined.with_extension("js"),
-            joined.with_extension("ts"),
-        ]
-    };
-    candidates.into_iter().find(|c| c.is_file())
 }

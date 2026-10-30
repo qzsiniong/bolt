@@ -19,6 +19,8 @@ use crossbeam_channel::{Receiver, Sender};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{class, msg_send};
 
+use crate::console_channel::ConsoleChannel;
+
 /// 托盘菜单点击后要执行的命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrayCommand {
@@ -46,13 +48,13 @@ fn post(cmd: TrayCommand) {
 }
 
 /// 在主线程创建托盘图标与菜单。应在 gpui `.run()` 回调内调用（此时 NSApp
-/// 已就绪）。
+/// 已就绪）。初始化失败经 Console 上报——打包成 .app 后 stderr 不可见。
 #[cfg(target_os = "macos")]
-pub(crate) fn init() {
+pub(crate) fn init(console: &ConsoleChannel) {
     // handler 类只注册一次。
     let handler_class = ensure_handler_class();
     let Some(handler_class) = handler_class else {
-        eprintln!("[tray] 注册 handler 类失败，托盘不可用");
+        console.error("托盘初始化失败：注册 handler 类失败，托盘不可用");
         return;
     };
 
@@ -64,7 +66,7 @@ pub(crate) fn init() {
         let status_bar: *mut AnyObject = msg_send![class!(NSStatusBar), systemStatusBar];
         let item: *mut AnyObject = msg_send![status_bar, statusItemWithLength: -1.0_f64];
         if item.is_null() {
-            eprintln!("[tray] 创建 NSStatusItem 失败");
+            console.error("托盘初始化失败：创建 NSStatusItem 失败");
             return;
         }
         // `statusItemWithLength:` 返回 autoreleased 对象；gpui run 回调所在的
@@ -109,7 +111,7 @@ pub(crate) fn init() {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn init() {}
+pub(crate) fn init(_console: &ConsoleChannel) {}
 
 /// 追加一个菜单项。`key` 是 (显示字符, NSEventModifierFlags)。
 #[cfg(target_os = "macos")]
@@ -269,18 +271,18 @@ fn make_bolt_image() -> *mut AnyObject {
 /// .app 打包后 `LSUIElement=true` 已生效，这里是为了 `cargo run` 直接跑
 /// 二进制时行为一致。必须在 NSApp 就绪后（gpui `.run()` 回调内）调用。
 #[cfg(target_os = "macos")]
-pub(crate) fn set_accessory_policy() {
+pub(crate) fn set_accessory_policy(console: &ConsoleChannel) {
     unsafe {
         let app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
         if !app.is_null() {
             // NSApplicationActivationPolicyAccessory = 1；返回值是 BOOL。
             let ok: bool = msg_send![app, setActivationPolicy: 1_isize];
             if !ok {
-                eprintln!("[tray] setActivationPolicy(Accessory) 被拒绝");
+                console.warn("托盘：setActivationPolicy(Accessory) 被拒绝");
             }
         }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn set_accessory_policy() {}
+pub(crate) fn set_accessory_policy(_console: &ConsoleChannel) {}

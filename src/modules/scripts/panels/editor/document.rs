@@ -8,6 +8,7 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::*;
 
 use super::{EditorPanel, RunRequested};
+use crate::app::shell::AppShell;
 use crate::lsp::path_to_uri;
 use crate::lsp::providers::DocHandle;
 use crate::model::script::Script;
@@ -229,7 +230,8 @@ impl EditorPanel {
         };
         let content = self.editor.read(cx).value().to_string();
         if let Err(e) = script_store::save_script(&self.scripts_dir, &script.file_name, &content) {
-            eprintln!("save: {e}");
+            let console = cx.global::<AppShell>().console_channel.clone();
+            console.error(format!("保存脚本失败：{e}"));
             return;
         }
         // Reflect the saved content back into the cached Script.
