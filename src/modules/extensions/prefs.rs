@@ -1,11 +1,11 @@
-//! 插件的启用 / 禁用偏好：`extensions-disabled.json`。
+//! 扩展的启用 / 禁用偏好：`extensions-disabled.json`。
 //!
-//! 记录的是插件 **id**，不是目录名：Launcher 的 item id `ext.<id>.<cmd>` 本来
-//! 就不含版本，用户心智里"禁用的就是这个插件"；同 id 装了多个版本时应当一起
+//! 记录的是扩展 **id**，不是目录名：Launcher 的 item id `ext.<id>.<cmd>` 本来
+//! 就不含版本，用户心智里"禁用的就是这个扩展"；同 id 装了多个版本时应当一起
 //! 停用，否则升一次版本号就悄悄复活了。
 //!
 //! 文件坏了、读不到，一律按"全部启用"处理并把原因交给调用方去 Console 说一声
-//! —— 偏好丢了比插件集体消失好得多。
+//! —— 偏好丢了比扩展集体消失好得多。
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

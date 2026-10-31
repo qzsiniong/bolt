@@ -1,8 +1,8 @@
-//! plux 插件宿主：`Loader`（生命周期/元数据）+ `PluginStore`（执行）。
+//! plux 扩展宿主：`Loader`（生命周期/元数据）+ `ExtensionStore`（执行）。
 //!
-//! **`Loader` 必须先 `Box` 再注册插件，之后永不移动。** plux 的 `Plugin` 里存的是
+//! **`Loader` 必须先 `Box` 再注册扩展，之后永不移动。** plux 的 `Plugin` 里存的是
 //! 指向 `loader.managers` Vec 槽位的裸指针（`Ptr`），在栈上建好 Loader 再 move 进
-//! 结构体会让它立刻悬空。同理，manager 只在插件注册之前注册——之后不再往
+//! 结构体会让它立刻悬空。同理，manager 只在扩展注册之前注册——之后不再往
 //! `managers` 里 push，Vec 不会 realloc，指针一直有效。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use plux_js_manager::{
-    JsEnv, JsManager, PluginMeta, PluginStore, RuntimeState, UiSpec, dir_fingerprint,
+    ExtensionMeta, ExtensionStore, JsEnv, JsManager, RuntimeState, UiSpec, dir_fingerprint,
 };
 use plux_rs::function::FunctionOutput;
 use plux_rs::utils::{RegisterPluginError, UnloadPluginError, UnregisterPluginError};
@@ -20,18 +20,18 @@ use plux_rs::{Bundle, Info, Loader};
 use super::manifest;
 use super::prefs;
 
-pub(crate) type ExtensionsLoader = Loader<'static, FunctionOutput, PluginMeta>;
+pub(crate) type ExtensionsLoader = Loader<'static, FunctionOutput, ExtensionMeta>;
 
-/// 重建运行时的冷却期：坏插件被连点时不该每次都起一条新线程再失败一次。
+/// 重建运行时的冷却期：坏扩展被连点时不该每次都起一条新线程再失败一次。
 const REBUILD_COOLDOWN: Duration = Duration::from_secs(3);
 
 /// Launcher 里的一条命令（已脱离 `Loader` 的借用，可 move 进 `on_confirm`）。
 #[derive(Clone, Debug)]
 pub(crate) struct CommandTarget {
     pub(crate) bundle: Bundle,
-    pub(crate) plugin_id: String,
-    pub(crate) plugin_name: String,
-    /// 插件目录：UI 命令用它做 gpui-shell 的应用根。
+    pub(crate) extension_id: String,
+    pub(crate) extension_name: String,
+    /// 扩展目录：UI 命令用它做 gpui-shell 的应用根。
     pub(crate) root: PathBuf,
     pub(crate) command_id: String,
     pub(crate) title: String,
@@ -41,9 +41,9 @@ pub(crate) struct CommandTarget {
 }
 
 impl CommandTarget {
-    /// Launcher item 的 id：`ext.<plugin-id>.<command-id>`。
+    /// Launcher item 的 id：`ext.<extension-id>.<command-id>`。
     pub fn item_id(&self) -> String {
-        format!("ext.{}.{}", self.plugin_id, self.command_id)
+        format!("ext.{}.{}", self.extension_id, self.command_id)
     }
 
     pub(crate) fn is_ui(&self) -> bool {
@@ -53,8 +53,8 @@ impl CommandTarget {
 
 /// 一次 [`ExtensionsHost::refresh`] 的结果。
 ///
-/// 分两档：`errors` 是「插件坏了」（清单写坏、注册失败、重载被拒），`notices` 是
-/// 「插件没坏，只是你改了内容却没升版本号」。都塞进 errors 会让开发期的正常迭代
+/// 分两档：`errors` 是「扩展坏了」（清单写坏、注册失败、重载被拒），`notices` 是
+/// 「扩展没坏，只是你改了内容却没升版本号」。都塞进 errors 会让开发期的正常迭代
 /// 看起来像故障，作者很快就会学会忽略控制台里的红字。
 #[derive(Debug, Default)]
 pub(crate) struct RefreshReport {
@@ -65,40 +65,40 @@ pub(crate) struct RefreshReport {
 pub(crate) struct ExtensionsHost {
     /// 见模块头部：必须钉在 Box 里。
     loader: Box<ExtensionsLoader>,
-    store: Arc<PluginStore>,
+    store: Arc<ExtensionStore>,
     extensions_dir: PathBuf,
     /// 注册 manager 失败的原因。此时宿主仍然可构造，但所有命令都不可用，
     /// 由 `refresh` 把这条错误报给 Console。
     init_error: Option<String>,
-    /// 本次扫描时磁盘上真实存在的插件。
+    /// 本次扫描时磁盘上真实存在的扩展。
     ///
-    /// 由目录名解析得出，**与注册成败无关**：清单写坏的插件也算存在，否则作者
-    /// 保存一次坏清单就会把正在用的插件判成"已删除"，连带杀掉它的运行时。
+    /// 由目录名解析得出，**与注册成败无关**：清单写坏的扩展也算存在，否则作者
+    /// 保存一次坏清单就会把正在用的扩展判成"已删除"，连带杀掉它的运行时。
     /// `None` = 还没成功扫描过，此时不做任何过滤。
     live: Option<HashSet<Bundle>>,
-    /// 每个插件上次重建运行时的时刻，用来给重建加冷却。
+    /// 每个扩展上次重建运行时的时刻，用来给重建加冷却。
     rebuilt_at: HashMap<Bundle, Instant>,
-    /// 上次扫描时各插件目录的内容指纹。
+    /// 上次扫描时各扩展目录的内容指纹。
     ///
-    /// plux 的插件身份只有 `(id, version)`：同 id 同版本再注册只会回
+    /// plux 的扩展身份只有 `(id, version)`：同 id 同版本再注册只会回
     /// `AlreadyExistsIDAndVersion`，元数据与运行时都留在旧内容上。开发期改完代码
     /// 忘了升版本号是常事，指纹就是"磁盘变了"的唯一证据。
     fingerprints: HashMap<Bundle, u64>,
     /// 禁用列表文件的位置（`extensions-disabled.json`）。测试传临时路径，
     /// 免得读到开发机上真实的偏好。
     disabled_path: PathBuf,
-    /// 被用户禁用的插件 id。`refresh` 每轮从磁盘重读，这样手改文件也能生效。
+    /// 被用户禁用的扩展 id。`refresh` 每轮从磁盘重读，这样手改文件也能生效。
     disabled: BTreeSet<String>,
-    /// 每个插件目录的绝对路径（按 bundle 键）。清单写坏的目录不在
+    /// 每个扩展目录的绝对路径（按 bundle 键）。清单写坏的目录不在
     /// `loader` 里，[`ExtensionsHost::inventory`] 只能靠它把行补全。
     roots: HashMap<Bundle, PathBuf>,
 }
 
-/// 扩展管理窗口的一行：一个插件目录（含清单写坏的）。
+/// 扩展管理窗口的一行：一个扩展目录（含清单写坏的）。
 ///
 /// 全是快照值：拿到之后不再借用 `Loader`，可以放心 move 进 UI。
 #[derive(Clone, Debug)]
-pub(crate) struct PluginEntry {
+pub(crate) struct ExtensionEntry {
     pub(crate) bundle: Bundle,
     pub(crate) root: PathBuf,
     pub(crate) name: String,
@@ -111,7 +111,7 @@ pub(crate) struct PluginEntry {
     pub(crate) registered: bool,
     /// 同 id 有更高版本：注册保留（给依赖解析），但命令与运行时让位。
     pub(crate) shadowed: bool,
-    /// 声明依赖它的已注册插件。
+    /// 声明依赖它的已注册扩展。
     pub(crate) dependents: Vec<Bundle>,
     pub(crate) runtime: Option<RuntimeState>,
     pub(crate) last_error: Option<String>,
@@ -130,7 +130,7 @@ impl ExtensionsHost {
         let init_error = loader
             .context(|mut ctx| ctx.register_manager(manager))
             .err()
-            .map(|e| format!("注册 JS 插件管理器失败：{e}"));
+            .map(|e| format!("注册 JS 扩展管理器失败：{e}"));
 
         // 先读一次：首轮 refresh 之前 `commands()` 就该知道谁被禁用。
         let (disabled, _) = prefs::load(disabled_path);
@@ -149,7 +149,7 @@ impl ExtensionsHost {
         }
     }
 
-    /// 重新扫描磁盘、注册新插件、并让内容变过的插件重新生效。
+    /// 重新扫描磁盘、注册新扩展、并让内容变过的扩展重新生效。
     pub(crate) fn refresh(&mut self) -> RefreshReport {
         let mut report = RefreshReport::default();
         if let Some(error) = &self.init_error {
@@ -177,7 +177,7 @@ impl ExtensionsHost {
             let Some(path) = dir.to_str() else {
                 report
                     .errors
-                    .push(format!("插件路径不是合法 UTF-8：{}", dir.display()));
+                    .push(format!("扩展路径不是合法 UTF-8：{}", dir.display()));
                 continue;
             };
             // 目录名不合规时 register_plugin 会报一条统一的错，这里不重复判断。
@@ -187,7 +187,7 @@ impl ExtensionsHost {
                 roots.insert(bundle.clone(), dir.clone());
             }
 
-            // 被禁用的插件：不注册、已注册的注销（连带卸运行时）。
+            // 被禁用的扩展：不注册、已注册的注销（连带卸运行时）。
             // 指纹仍要记基线，否则重新启用时会被误判成"内容变更"。
             if let Some(bundle) = &bundle
                 && self.disabled.contains(&bundle.id)
@@ -221,7 +221,7 @@ impl ExtensionsHost {
         }
 
         self.live = Some(live);
-        // 磁盘上已经消失的插件不必再留指纹/冷却记录；它若回来，本来也该重新建基准。
+        // 磁盘上已经消失的扩展不必再留指纹/冷却记录；它若回来，本来也该重新建基准。
         if let Some(live) = &self.live {
             self.rebuilt_at.retain(|bundle, _| live.contains(bundle));
             self.fingerprints.retain(|bundle, _| live.contains(bundle));
@@ -232,36 +232,36 @@ impl ExtensionsHost {
         report
     }
 
-    /// 把一个被禁用的插件从注册表摘掉（连带卸运行时）。
+    /// 把一个被禁用的扩展从注册表摘掉（连带卸运行时）。
     ///
-    /// 被已加载的插件依赖时 plux 拒绝卸载：不强拆，只把事实报出来。此时
+    /// 被已加载的扩展依赖时 plux 拒绝卸载：不强拆，只把事实报出来。此时
     /// `commands()` 的禁用过滤仍然让它从 Launcher 里消失，重启后不再注册。
     fn disable_bundle(&mut self, bundle: &Bundle, report: &mut RefreshReport) {
         match self.loader.unregister_plugin_by_bundle(bundle) {
             // 本来就没注册（首轮扫描、或上次清单写坏）：无事可做。
             Ok(()) | Err(UnregisterPluginError::NotFound) => {}
             Err(UnregisterPluginError::UnloadError(UnloadPluginError::CurrentlyUsesDepend {
-                plugin,
+                plugin: extension,
                 ..
             })) => report.notices.push(format!(
-                "插件 {} 已禁用，但被 {} v{} 依赖，本次运行仍会加载；重启后不再加载",
-                bundle.id, plugin.id, plugin.version
+                "扩展 {} 已禁用，但被 {} v{} 依赖，本次运行仍会加载；重启后不再加载",
+                bundle.id, extension.id, extension.version
             )),
             Err(error) => report
                 .errors
-                .push(format!("插件 {} 禁用失败：{error}", bundle.id)),
+                .push(format!("扩展 {} 禁用失败：{error}", bundle.id)),
         }
     }
 
-    /// 插件的清单与状态快照，供扩展管理窗口渲染。
+    /// 扩展的清单与状态快照，供扩展管理窗口渲染。
     ///
     /// **纯内存、不扫盘**：数据来自上一次 `refresh` / `reload` 的结果，所以窗口
     /// 可以每帧调。想反映磁盘现状就先 `refresh`（窗口打开时一次、每次操作后一次）。
-    pub(crate) fn inventory(&self) -> Vec<PluginEntry> {
+    pub(crate) fn inventory(&self) -> Vec<ExtensionEntry> {
         // 最高版本口径与 `commands()` / `drop_shadowed` 一致。
         let mut highest: HashMap<&str, &Bundle> = HashMap::new();
-        for plugin in self.loader.get_plugins() {
-            let bundle = &plugin.info().bundle;
+        for extension in self.loader.get_plugins() {
+            let bundle = &extension.info().bundle;
             match highest.get(bundle.id.as_str()) {
                 Some(kept) if kept.version >= bundle.version => {}
                 _ => {
@@ -272,12 +272,12 @@ impl ExtensionsHost {
 
         let mut entries = Vec::new();
         let mut registered: HashSet<Bundle> = HashSet::new();
-        for plugin in self.loader.get_plugins() {
-            let info = plugin.info();
+        for extension in self.loader.get_plugins() {
+            let info = extension.info();
             let bundle = &info.bundle;
             let meta = &info.info;
             registered.insert(bundle.clone());
-            entries.push(PluginEntry {
+            entries.push(ExtensionEntry {
                 shadowed: highest
                     .get(bundle.id.as_str())
                     .is_some_and(|kept| kept.version > bundle.version),
@@ -316,7 +316,7 @@ impl ExtensionsHost {
                 let manifest_error = plux_js_manager::manifest::read(&root)
                     .err()
                     .unwrap_or_else(|| "未注册（原因见 Console）".to_string());
-                entries.push(PluginEntry {
+                entries.push(ExtensionEntry {
                     shadowed: highest
                         .get(bundle.id.as_str())
                         .is_some_and(|kept| kept.version > bundle.version),
@@ -346,14 +346,14 @@ impl ExtensionsHost {
         entries
     }
 
-    /// 谁声明依赖 `bundle`（只看已注册的插件）。
+    /// 谁声明依赖 `bundle`（只看已注册的扩展）。
     ///
     /// plux 只在目标**已加载**时才拦 `unregister`；不加载时它会静默摘下，依赖方
     /// 下次加载失败才发现。所以确认框要能提前说出这句话。
     fn dependents_of(&self, bundle: &Bundle) -> Vec<Bundle> {
         let mut dependents = Vec::new();
-        for plugin in self.loader.get_plugins() {
-            let info = plugin.info();
+        for extension in self.loader.get_plugins() {
+            let info = extension.info();
             let meta = &info.info;
             let depends = meta.depends().iter().chain(meta.optional_depends().iter());
             let hit = depends
@@ -369,24 +369,24 @@ impl ExtensionsHost {
     /// 重新读取清单并重建运行时。UI 窗口由调用方先关掉（`ops::reload`）。
     pub(crate) fn reload(&mut self, bundle: &Bundle) -> Result<RefreshReport, String> {
         if self.disabled.contains(&bundle.id) {
-            return Err(format!("插件 {} 已被禁用，先启用再重载", bundle.id));
+            return Err(format!("扩展 {} 已被禁用，先启用再重载", bundle.id));
         }
         let root = self
             .root_of(bundle)
-            .ok_or_else(|| format!("找不到插件目录：{} v{}", bundle.id, bundle.version))?;
+            .ok_or_else(|| format!("找不到扩展目录：{} v{}", bundle.id, bundle.version))?;
 
         match self.loader.unregister_plugin_by_bundle(bundle) {
             Ok(()) | Err(UnregisterPluginError::NotFound) => {}
             Err(UnregisterPluginError::UnloadError(UnloadPluginError::CurrentlyUsesDepend {
-                plugin,
+                plugin: extension,
                 ..
             })) => {
                 return Err(format!(
-                    "插件 {} 被 {} v{} 依赖，无法重载",
-                    bundle.id, plugin.id, plugin.version
+                    "扩展 {} 被 {} v{} 依赖，无法重载",
+                    bundle.id, extension.id, extension.version
                 ));
             }
-            Err(error) => return Err(format!("注销插件 {} 失败：{error}", bundle.id)),
+            Err(error) => return Err(format!("注销扩展 {} 失败：{error}", bundle.id)),
         }
 
         // 冷却与指纹都是"旧运行时"的账，重载后要重新记。
@@ -394,7 +394,7 @@ impl ExtensionsHost {
         self.fingerprints.remove(bundle);
 
         let Some(path) = root.to_str() else {
-            return Err(format!("插件路径不是合法 UTF-8：{}", root.display()));
+            return Err(format!("扩展路径不是合法 UTF-8：{}", root.display()));
         };
         let mut report = RefreshReport::default();
         match self.loader.register_plugin(path) {
@@ -416,15 +416,15 @@ impl ExtensionsHost {
         match self.loader.unregister_plugin_by_bundle(bundle) {
             Ok(()) | Err(UnregisterPluginError::NotFound) => {}
             Err(UnregisterPluginError::UnloadError(UnloadPluginError::CurrentlyUsesDepend {
-                plugin,
+                plugin: extension,
                 ..
             })) => {
                 return Err(format!(
-                    "插件 {} 被 {} v{} 依赖，先卸载依赖方",
-                    bundle.id, plugin.id, plugin.version
+                    "扩展 {} 被 {} v{} 依赖，先卸载依赖方",
+                    bundle.id, extension.id, extension.version
                 ));
             }
-            Err(error) => return Err(format!("注销插件 {} 失败：{error}", bundle.id)),
+            Err(error) => return Err(format!("注销扩展 {} 失败：{error}", bundle.id)),
         }
         // plux 的 unregister 会先 unload；这里兜一次底，防止某条路径漏了。
         self.store.unload(bundle);
@@ -441,11 +441,11 @@ impl ExtensionsHost {
         self.roots.get(bundle).cloned().or_else(|| {
             self.loader
                 .get_plugin_by_bundle(bundle)
-                .map(|plugin| plugin.info().info.root.clone())
+                .map(|extension| extension.info().info.root.clone())
         })
     }
 
-    /// 启用 / 禁用某个插件 id，立即生效并落盘。
+    /// 启用 / 禁用某个扩展 id，立即生效并落盘。
     ///
     /// 先写盘再改内存：`refresh` 每轮都会重读文件，内存里"只改了一半"的状态
     /// 下一轮就会被磁盘覆盖，反而更难排查。写盘失败 = 操作整体失败（不改内存）。
@@ -485,13 +485,13 @@ impl ExtensionsHost {
             // 上次注册就失败了（清单当时写坏）：没有旧条目可摘，直接重新注册。
             Err(UnregisterPluginError::NotFound) => {}
             Ok(()) => report.notices.push(format!(
-                "插件 {} v{} 的内容已变更，已重新加载（版本号未变，发布前记得升版本）",
+                "扩展 {} v{} 的内容已变更，已重新加载（版本号未变，发布前记得升版本）",
                 bundle.id, bundle.version
             )),
-            // 还被别的已加载插件依赖着：不能强拆，只能报出来让作者升版本号。
+            // 还被别的已加载扩展依赖着：不能强拆，只能报出来让作者升版本号。
             Err(error) => {
                 report.errors.push(format!(
-                    "插件 {} v{} 的内容已变更，但无法重新加载：{error}",
+                    "扩展 {} v{} 的内容已变更，但无法重新加载：{error}",
                     bundle.id, bundle.version
                 ));
                 return false;
@@ -500,7 +500,7 @@ impl ExtensionsHost {
         true
     }
 
-    /// 磁盘上已经消失的插件：连注册一起摘掉，Launcher 里自然不再出现。
+    /// 磁盘上已经消失的扩展：连注册一起摘掉，Launcher 里自然不再出现。
     fn drop_stale(&mut self, errors: &mut Vec<String>) {
         let Some(live) = self.live.as_ref() else {
             return;
@@ -509,7 +509,7 @@ impl ExtensionsHost {
             .loader
             .get_plugins()
             .iter()
-            .map(|plugin| plugin.info().bundle.clone())
+            .map(|extension| extension.info().bundle.clone())
             .filter(|bundle| !live.contains(bundle))
             .collect();
 
@@ -518,14 +518,14 @@ impl ExtensionsHost {
                 Ok(()) => {}
                 // 已经不在表里：目标状态已达成。
                 Err(UnregisterPluginError::NotFound) => {}
-                // 还被别的已加载插件依赖：plux 拒绝卸载。不强行杀运行时（那会让
+                // 还被别的已加载扩展依赖：plux 拒绝卸载。不强行杀运行时（那会让
                 // 依赖方静默失效），只是不再出现在 Launcher（`commands` 按 live 过滤），
                 // 下次启动彻底消失。
                 Err(UnregisterPluginError::UnloadError(
                     UnloadPluginError::CurrentlyUsesDepend { .. },
                 )) => {}
                 Err(error) => errors.push(format!(
-                    "插件卸载失败 {} v{}：{error}",
+                    "扩展卸载失败 {} v{}：{error}",
                     bundle.id, bundle.version
                 )),
             }
@@ -534,13 +534,13 @@ impl ExtensionsHost {
 
     /// 同 id 多版本：只留最高版本的运行时。
     ///
-    /// 两套引擎会让插件顶层副作用跑两遍，而 item id（`ext.<id>.<command>`）不含
+    /// 两套引擎会让扩展顶层副作用跑两遍，而 item id（`ext.<id>.<command>`）不含
     /// 版本，Launcher 里必然重复。**注册保留**——plux 的依赖解析仍可能按版本区间
     /// 挑到低版本，注册表要留给它。
     fn drop_shadowed(&mut self) {
         let mut highest: HashMap<&str, &Bundle> = HashMap::new();
-        for plugin in self.loader.get_plugins() {
-            let bundle = &plugin.info().bundle;
+        for extension in self.loader.get_plugins() {
+            let bundle = &extension.info().bundle;
             match highest.get(bundle.id.as_str()) {
                 Some(kept) if kept.version >= bundle.version => {}
                 _ => {
@@ -553,7 +553,7 @@ impl ExtensionsHost {
             .loader
             .get_plugins()
             .iter()
-            .map(|plugin| plugin.info().bundle.clone())
+            .map(|extension| extension.info().bundle.clone())
             .filter(|bundle| {
                 highest
                     .get(bundle.id.as_str())
@@ -566,15 +566,15 @@ impl ExtensionsHost {
         }
     }
 
-    /// 当前所有插件贡献的命令，按注册顺序（即插件目录名排序）。
+    /// 当前所有扩展贡献的命令，按注册顺序（即扩展目录名排序）。
     ///
-    /// 两层过滤：磁盘上已不存在的插件不展示（plux 无 unregister 失败的兜底），
+    /// 两层过滤：磁盘上已不存在的扩展不展示（plux 无 unregister 失败的兜底），
     /// 同 id 只展示最高版本（item id 不含版本，双份必然重复；口径与 plux 依赖
     /// 解析一致——它也挑最高匹配版本）。
     pub(crate) fn commands(&self) -> Vec<CommandTarget> {
         let mut highest: HashMap<&str, &Bundle> = HashMap::new();
-        for plugin in self.loader.get_plugins() {
-            let bundle = &plugin.info().bundle;
+        for extension in self.loader.get_plugins() {
+            let bundle = &extension.info().bundle;
             match highest.get(bundle.id.as_str()) {
                 Some(kept) if kept.version >= bundle.version => {}
                 _ => {
@@ -584,10 +584,10 @@ impl ExtensionsHost {
         }
 
         let mut targets = Vec::new();
-        for plugin in self.loader.get_plugins() {
-            let info = plugin.info();
+        for extension in self.loader.get_plugins() {
+            let info = extension.info();
             let bundle = &info.bundle;
-            // 禁用的插件不出现在任何地方：即使因为「被依赖不能卸」还留在注册表里。
+            // 禁用的扩展不出现在任何地方：即使因为「被依赖不能卸」还留在注册表里。
             if self.disabled.contains(&bundle.id) {
                 continue;
             }
@@ -615,8 +615,8 @@ impl ExtensionsHost {
                 });
                 targets.push(CommandTarget {
                     bundle: info.bundle.clone(),
-                    plugin_id: meta.id().to_string(),
-                    plugin_name: meta.display_name().to_string(),
+                    extension_id: meta.id().to_string(),
+                    extension_name: meta.display_name().to_string(),
                     root: meta.root.clone(),
                     command_id: command.id.clone(),
                     title: command.title.clone(),
@@ -628,20 +628,20 @@ impl ExtensionsHost {
         targets
     }
 
-    /// 懒加载：第一次执行命令时才安排加载（立即返回，引擎在插件线程里建）。
+    /// 懒加载：第一次执行命令时才安排加载（立即返回，引擎在扩展线程里建）。
     ///
     /// 运行时已死（加载失败 / 线程退出）时先复位 plux 的 `is_load` 再重新安排——
     /// 否则 `load_plugin_by_bundle` 会因为 `is_load == true` 直接 Ok，什么都不重建。
     pub(crate) fn ensure_loaded(&mut self, target: &CommandTarget) -> Result<(), String> {
         let bundle = &target.bundle;
-        // 兜底：残留 item、RunService 直接投递都不该把被禁用的插件拉起来。
+        // 兜底：残留 item、RunService 直接投递都不该把被禁用的扩展拉起来。
         if self.disabled.contains(&bundle.id) {
-            return Err(format!("插件 {} 已被禁用", bundle.id));
+            return Err(format!("扩展 {} 已被禁用", bundle.id));
         }
         let registered = self
             .loader
             .get_plugin_by_bundle(bundle)
-            .map(|plugin| plugin.is_load())
+            .map(|extension| extension.is_load())
             .unwrap_or(false);
 
         if registered {
@@ -658,14 +658,14 @@ impl ExtensionsHost {
                             .map(|error| error.to_string())
                             .unwrap_or_default();
                         return Err(format!(
-                            "插件运行时已退出（{reason}），{:.1}s 后可重新执行重试",
+                            "扩展运行时已退出（{reason}），{:.1}s 后可重新执行重试",
                             (REBUILD_COOLDOWN - at.elapsed()).as_secs_f32()
                         ));
                     }
                     self.rebuilt_at.insert(bundle.clone(), Instant::now());
-                    // 必须先卸载：load_plugin_by_bundle 对已加载插件是 no-op。
+                    // 必须先卸载：load_plugin_by_bundle 对已加载扩展是 no-op。
                     if let Err(error) = self.loader.unload_plugin_by_bundle(bundle) {
-                        return Err(format!("插件运行时已退出，且无法重建（{error}）"));
+                        return Err(format!("扩展运行时已退出，且无法重建（{error}）"));
                     }
                 }
                 // plux 说已加载、表里却没有运行时（曾被直接 unload）：同样走重建。
@@ -679,7 +679,7 @@ impl ExtensionsHost {
     }
 
     /// 执行入口的 `Arc` 副本（RunService 需要它才能在工作线程里调命令）。
-    pub(crate) fn store(&self) -> Arc<PluginStore> {
+    pub(crate) fn store(&self) -> Arc<ExtensionStore> {
         self.store.clone()
     }
 }
@@ -689,9 +689,9 @@ fn describe(error: &RegisterPluginError) -> String {
         // plux 的外层 Display 只有"manager 报错"，真正原因在里层。
         RegisterPluginError::RegisterPluginByManager(inner) => inner.to_string(),
         RegisterPluginError::BundleFromFailed(inner) => inner.to_string(),
-        RegisterPluginError::NotFound => "插件目录不存在".to_string(),
+        RegisterPluginError::NotFound => "扩展目录不存在".to_string(),
         RegisterPluginError::UnknownManagerFormat(format) => {
-            format!("未知插件格式 `{format}`（目录名必须以 `.js` 结尾）")
+            format!("未知扩展格式 `{format}`（目录名必须以 `.js` 结尾）")
         }
         RegisterPluginError::AlreadyExistsIDAndVersion(id, version) => {
             format!("同 id 同版本已注册：{id} v{version}")
@@ -720,12 +720,12 @@ mod tests {
         ExtensionsHost::new(&tmp.0, env, &tmp.0.join("extensions-disabled.json"))
     }
 
-    /// 测试里的插件身份：`(id, version)` 由 bundle 一处说清。
+    /// 测试里的扩展身份：`(id, version)` 由 bundle 一处说清。
     fn bundle(id: &str, version: &str) -> Bundle {
         Bundle::from_filename(format!("{id}-v{version}.js").as_str()).expect("valid bundle")
     }
 
-    fn write_plugin(tmp: &TempDir, dir: &str, manifest: &str, entry: &str) {
+    fn write_extension(tmp: &TempDir, dir: &str, manifest: &str, entry: &str) {
         let root = tmp.0.join(dir);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join(MANIFEST_FILE), manifest).unwrap();
@@ -733,9 +733,9 @@ mod tests {
     }
 
     #[test]
-    fn demo_plugin_contributes_script_and_ui_commands() {
+    fn demo_extension_contributes_script_and_ui_commands() {
         let tmp = TempDir::new("host-demo");
-        manifest::ensure_demo_plugin(&tmp.0).expect("write demo plugin");
+        manifest::ensure_demo_extension(&tmp.0).expect("write demo extension");
 
         let mut host = host(&tmp);
         let report = host.refresh();
@@ -773,9 +773,9 @@ mod tests {
     }
 
     #[test]
-    fn plugins_can_import_host_modules() {
+    fn extensions_can_import_host_modules() {
         let tmp = TempDir::new("host-modules");
-        write_plugin(
+        write_extension(
             &tmp,
             "probe-v1.0.0.js",
             r#"{ "id": "probe", "version": "1.0.0", "permissions": ["env"], "commands": [{ "id": "home", "title": "Home" }] }"#,
@@ -801,7 +801,7 @@ mod tests {
     fn undeclared_permissions_throw_at_call_time() {
         // fail-closed：清单没声明 fs，import 不炸，调用 writeFile 抛出点名报错。
         let tmp = TempDir::new("host-perm-denied");
-        write_plugin(
+        write_extension(
             &tmp,
             "guard-v1.0.0.js",
             r#"{ "id": "guard", "version": "1.0.0", "commands": [{ "id": "write", "title": "Write" }] }"#,
@@ -830,15 +830,15 @@ mod tests {
     }
 
     #[test]
-    fn broken_plugin_is_reported_without_blocking_the_others() {
+    fn broken_extension_is_reported_without_blocking_the_others() {
         let tmp = TempDir::new("host-broken");
-        write_plugin(
+        write_extension(
             &tmp,
             "bad-v1.0.0.js",
             r#"{ "id": "bad", "version": "1.0.0", "commands": "nope" }"#,
             "",
         );
-        write_plugin(
+        write_extension(
             &tmp,
             "good-v1.0.0.js",
             r#"{ "id": "good", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -856,13 +856,13 @@ mod tests {
 
         let commands = host.commands();
         assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].plugin_id, "good");
+        assert_eq!(commands[0].extension_id, "good");
     }
 
     #[test]
     fn refresh_is_idempotent() {
         let tmp = TempDir::new("host-refresh");
-        write_plugin(
+        write_extension(
             &tmp,
             "one-v1.0.0.js",
             r#"{ "id": "one", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -871,12 +871,12 @@ mod tests {
 
         let mut host = host(&tmp);
         assert!(host.refresh().errors.is_empty());
-        // 第二次扫描不该把已注册的插件当成错误报出来。
+        // 第二次扫描不该把已注册的扩展当成错误报出来。
         assert!(host.refresh().errors.is_empty());
         assert_eq!(host.commands().len(), 1);
     }
 
-    fn wait_state(store: &PluginStore, bundle: &Bundle, want: RuntimeState) {
+    fn wait_state(store: &ExtensionStore, bundle: &Bundle, want: RuntimeState) {
         for _ in 0..500 {
             if store.state(bundle) == Some(want) {
                 return;
@@ -890,10 +890,10 @@ mod tests {
     }
 
     #[test]
-    fn refresh_unregisters_plugins_deleted_from_disk() {
+    fn refresh_unregisters_extension_deleted_from_disk() {
         let tmp = TempDir::new("host-stale");
         for id in ["one", "two"] {
-            write_plugin(
+            write_extension(
                 &tmp,
                 &format!("{id}-v1.0.0.js"),
                 &format!(
@@ -910,10 +910,10 @@ mod tests {
         std::fs::remove_dir_all(tmp.0.join("two-v1.0.0.js")).unwrap();
         assert!(
             host.refresh().errors.is_empty(),
-            "deleting a plugin is not an error"
+            "deleting a extension is not an error"
         );
         assert_eq!(host.commands().len(), 1);
-        assert_eq!(host.commands()[0].plugin_id, "one");
+        assert_eq!(host.commands()[0].extension_id, "one");
 
         // 摘掉之后要幂等：下一轮扫描不该再报 NotFound。
         assert!(host.refresh().errors.is_empty());
@@ -923,7 +923,7 @@ mod tests {
     #[test]
     fn commands_keep_only_the_highest_version() {
         let tmp = TempDir::new("host-versions");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
@@ -936,7 +936,7 @@ mod tests {
         host.ensure_loaded(&older).expect("v1 loads");
 
         // 升级：两个版本目录并存。
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.1.0.js",
             r#"{ "id": "demo", "version": "1.1.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
@@ -957,9 +957,9 @@ mod tests {
     }
 
     #[test]
-    fn broken_plugin_is_rebuilt_after_the_file_is_fixed() {
+    fn broken_extension_is_rebuilt_after_the_file_is_fixed() {
         let tmp = TempDir::new("host-rebuild");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
@@ -1003,14 +1003,14 @@ mod tests {
                 &bundle("demo", "1.0.0"),
                 InvokeRequest::new("hello", CancelToken::new()),
             )
-            .expect("rebuilt plugin runs");
+            .expect("rebuilt extension runs");
         assert_eq!(output.as_deref(), Some("fixed"));
     }
 
     #[test]
     fn rebuild_is_rate_limited() {
         let tmp = TempDir::new("host-rebuild-cooldown");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
@@ -1034,7 +1034,7 @@ mod tests {
         assert!(error.contains("后可重新执行"), "{error}");
     }
 
-    fn invoke(store: &PluginStore, id: &str, version: &str, command: &str) -> Option<String> {
+    fn invoke(store: &ExtensionStore, id: &str, version: &str, command: &str) -> Option<String> {
         store
             .invoke(
                 &bundle(id, version),
@@ -1046,7 +1046,7 @@ mod tests {
     #[test]
     fn same_version_content_change_reloads_and_notifies() {
         let tmp = TempDir::new("host-content-change");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "hello", "title": "Hello" }] }"#,
@@ -1096,7 +1096,7 @@ mod tests {
                 r#"{{ "id": "demo", "version": "1.0.0", "commands": [{{ "id": "hello", "title": "{title}" }}] }}"#
             )
         };
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             &manifest("Hello"),
@@ -1115,7 +1115,7 @@ mod tests {
         let report = host.refresh();
         assert!(report.errors.is_empty(), "{:?}", report.errors);
         assert_eq!(report.notices.len(), 1, "{:?}", report.notices);
-        // 元数据必须重新读：注册表里的旧 PluginMeta 不能继续用。
+        // 元数据必须重新读：注册表里的旧 ExtensionMeta 不能继续用。
         assert_eq!(host.commands()[0].title, "Hi there");
     }
 
@@ -1123,7 +1123,7 @@ mod tests {
     fn refresh_keeps_the_runtime_when_nothing_changed() {
         // 计数存在模块状态里：运行时一旦被重建，它会从 1 重来。
         let tmp = TempDir::new("host-runtime-kept");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "bump", "title": "Bump" }] }"#,
@@ -1157,15 +1157,15 @@ mod tests {
     }
 
     #[test]
-    fn content_change_is_reported_when_a_loaded_plugin_depends_on_it() {
+    fn content_change_is_reported_when_a_loaded_extension_depends_on_it() {
         let tmp = TempDir::new("host-content-dependent");
-        write_plugin(
+        write_extension(
             &tmp,
             "base-v1.0.0.js",
             r#"{ "id": "base", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
             "export function go() { return 'base'; }",
         );
-        write_plugin(
+        write_extension(
             &tmp,
             "app-v1.0.0.js",
             r#"{ "id": "app", "version": "1.0.0", "depends": ["base@*"], "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1180,7 +1180,7 @@ mod tests {
         let base_target = host
             .commands()
             .into_iter()
-            .find(|command| command.plugin_id == "base")
+            .find(|command| command.extension_id == "base")
             .expect("base command");
         host.ensure_loaded(&base_target).expect("base loads");
 
@@ -1190,7 +1190,7 @@ mod tests {
         )
         .unwrap();
 
-        // 被已加载的插件依赖着，plux 拒绝卸载：只能报出来让作者升版本号。
+        // 被已加载的扩展依赖着，plux 拒绝卸载：只能报出来让作者升版本号。
         let report = host.refresh();
         assert_eq!(report.errors.len(), 1, "{:?}", report.errors);
         assert!(
@@ -1201,9 +1201,9 @@ mod tests {
     }
 
     #[test]
-    fn disabled_plugin_is_never_registered() {
+    fn disabled_extension_is_never_registered() {
         let tmp = TempDir::new("host-disabled");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1218,14 +1218,14 @@ mod tests {
             host.loader
                 .get_plugin_by_bundle(&bundle("demo", "1.0.0"))
                 .is_none(),
-            "disabled plugin must not be registered"
+            "disabled extension must not be registered"
         );
     }
 
     #[test]
-    fn disabling_a_loaded_plugin_unloads_its_runtime() {
+    fn disabling_a_loaded_extension_unloads_its_runtime() {
         let tmp = TempDir::new("host-disable-loaded");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1251,7 +1251,7 @@ mod tests {
     #[test]
     fn re_enabling_restores_commands_without_a_reload_notice() {
         let tmp = TempDir::new("host-reenable");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1271,15 +1271,15 @@ mod tests {
     }
 
     #[test]
-    fn disabled_plugin_with_a_loaded_dependent_is_hidden_and_reported() {
+    fn disabled_extension_with_a_loaded_dependent_is_hidden_and_reported() {
         let tmp = TempDir::new("host-disable-dependent");
-        write_plugin(
+        write_extension(
             &tmp,
             "base-v1.0.0.js",
             r#"{ "id": "base", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
             "export function go() { return 'base'; }",
         );
-        write_plugin(
+        write_extension(
             &tmp,
             "app-v1.0.0.js",
             r#"{ "id": "app", "version": "1.0.0", "depends": ["base@*"], "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1300,7 +1300,7 @@ mod tests {
         let ids: Vec<String> = host
             .commands()
             .into_iter()
-            .map(|command| command.plugin_id)
+            .map(|command| command.extension_id)
             .collect();
         assert_eq!(ids, vec!["app".to_string()]);
 
@@ -1309,7 +1309,7 @@ mod tests {
         let ids: Vec<String> = host
             .commands()
             .into_iter()
-            .map(|command| command.plugin_id)
+            .map(|command| command.extension_id)
             .collect();
         assert_eq!(ids, vec!["app".to_string(), "base".to_string()]);
     }
@@ -1317,7 +1317,7 @@ mod tests {
     #[test]
     fn inventory_lists_broken_manifests() {
         let tmp = TempDir::new("host-inventory-broken");
-        write_plugin(
+        write_extension(
             &tmp,
             "bad-v1.0.0.js",
             r#"{ "id": "bad", "version": "1.0.0", "commands": "nope" }"#,
@@ -1344,19 +1344,19 @@ mod tests {
     #[test]
     fn inventory_marks_shadowed_versions_and_dependents() {
         let tmp = TempDir::new("host-inventory");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
             "export function go() { return 'v1'; }",
         );
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v2.0.0.js",
             r#"{ "id": "demo", "version": "2.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
             "export function go() { return 'v2'; }",
         );
-        write_plugin(
+        write_extension(
             &tmp,
             "app-v1.0.0.js",
             r#"{ "id": "app", "version": "1.0.0", "depends": ["demo@*"], "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1389,7 +1389,7 @@ mod tests {
     #[test]
     fn reload_after_manifest_edit_updates_metadata() {
         let tmp = TempDir::new("host-reload");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Old" }] }"#,
@@ -1414,7 +1414,7 @@ mod tests {
     #[test]
     fn reload_is_refused_while_disabled() {
         let tmp = TempDir::new("host-reload-disabled");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1433,7 +1433,7 @@ mod tests {
     #[test]
     fn forget_unregisters_without_touching_the_disk() {
         let tmp = TempDir::new("host-forget");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1456,9 +1456,9 @@ mod tests {
     }
 
     #[test]
-    fn ensure_loaded_refuses_a_disabled_plugin() {
+    fn ensure_loaded_refuses_a_disabled_extension() {
         let tmp = TempDir::new("host-disabled-load");
-        write_plugin(
+        write_extension(
             &tmp,
             "demo-v1.0.0.js",
             r#"{ "id": "demo", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -1470,7 +1470,7 @@ mod tests {
         let mut target = host.commands().into_iter().next().expect("one command");
         host.set_enabled("demo", false).expect("disable");
 
-        // 模拟"残留 item"：拿被禁用插件的历史 target 直接要求加载。
+        // 模拟"残留 item"：拿被禁用扩展的历史 target 直接要求加载。
         target.bundle = bundle("demo", "1.0.0");
         let error = host.ensure_loaded(&target).expect_err("must refuse");
         assert!(error.contains("已被禁用"), "{error}");

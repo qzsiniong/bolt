@@ -3,7 +3,7 @@
 //! 从 [`super::run_service::RunService`] 拆出来的纯 UI 侧状态机：每个运行
 //! 回合由 `begin_run` 注入新的 bridge / 请求流 / 取消令牌，`drain` 每个
 //! tick 被调一次，负责消化脚本侧请求、开关窗口、回填 reply 通道。它不关心
-//! 「现在跑的是什么」——脚本与插件命令共用同一套。
+//! 「现在跑的是什么」——脚本与扩展命令共用同一套。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

@@ -6,7 +6,7 @@
 //! 后，位于其下方的通知整体上移补位（NSWindow setFrameTopLeftPoint 平移）。
 //!
 //! 窗口用 `kind: PopUp`（NonactivatingPanel）：App 非激活时也能显示且不抢焦点；
-//! 透明背景 + 框架层 `cx.open_window` 裸开（绕开 gpui-kit Root 的垫白插件），
+//! 透明背景 + 框架层 `cx.open_window` 裸开（绕开 gpui-kit Root 的垫白扩展），
 //! 卡片圆角由 div 自绘。
 
 use std::cell::Cell;

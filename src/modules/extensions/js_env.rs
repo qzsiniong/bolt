@@ -2,8 +2,8 @@
 //!
 //! `plux-js-manager` 不认识 bolt，它只要求实现 [`JsEnv`]：
 //!
-//! - `install_base` 在插件加载时调用一次（console / 定时器 / `import "bolt"`）；
-//! - `install_scope` 在**每条命令前**调用：插件运行时是常驻的，而交互 bridge 每轮
+//! - `install_base` 在扩展加载时调用一次（console / 定时器 / `import "bolt"`）；
+//! - `install_scope` 在**每条命令前**调用：扩展运行时是常驻的，而交互 bridge 每轮
 //!   新建，所以这里要覆盖上一轮装进去的 `__bolt.confirm` 等函数。
 
 use std::any::Any;
@@ -37,7 +37,7 @@ impl JsEnv for BoltJsEnv {
     }
 
     fn install_scope<'js>(&self, ctx: &Ctx<'js>, scope: &dyn Scope) -> rquickjs::Result<()> {
-        let Some(run) = scope.as_any().downcast_ref::<PluginRunScope>() else {
+        let Some(run) = scope.as_any().downcast_ref::<ExtensionRunScope>() else {
             return Ok(());
         };
         // Interaction APIs（typeStr / requestFocus / confirm / pickPath / scanQr）
@@ -75,7 +75,7 @@ impl JsEnv for BoltJsEnv {
         }
     }
 
-    /// 插件命令里的 `exit(code)` 与脚本路径同义：抛哨兵正常结束，不是失败。
+    /// 扩展命令里的 `exit(code)` 与脚本路径同义：抛哨兵正常结束，不是失败。
     /// 哨兵格式由 bolt 自己定义，解析也只在这一处。
     fn classify_error(&self, message: &str) -> Option<JsError> {
         bolt::exit_code(message).map(JsError::Exit)
@@ -84,11 +84,11 @@ impl JsEnv for BoltJsEnv {
 
 /// 一轮命令调用的交互上下文：RunService 每轮新建的 bridge。
 #[derive(Clone)]
-pub(crate) struct PluginRunScope {
+pub(crate) struct ExtensionRunScope {
     pub(crate) bridge: InteractionBridge,
 }
 
-impl Scope for PluginRunScope {
+impl Scope for ExtensionRunScope {
     fn as_any(&self) -> &dyn Any {
         self
     }

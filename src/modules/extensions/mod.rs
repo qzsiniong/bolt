@@ -1,12 +1,12 @@
-//! Extensions 模块：把 `extensions/` 下的 plux 插件变成 Launcher item。
+//! Extensions 模块：把 `extensions/` 下的 plux 扩展变成 Launcher item。
 //!
-//! 一个插件贡献若干命令，一条命令一条 item：
+//! 一个扩展贡献若干命令，一条命令一条 item：
 //!
 //! - 带 `ui` 块的命令 → gpui-shell 原生窗口；
-//! - 其余命令 → 插件常驻运行时里的同名 JS 函数。
+//! - 其余命令 → 扩展常驻运行时里的同名 JS 函数。
 //!
 //! 磁盘内容每次打开 Launcher 都会重新扫描（作者改完清单不用重启），但已注册的
-//! 插件不会重复注册、也不会被卸载——插件运行时的状态要跨命令保留。例外是目录
+//! 扩展不会重复注册、也不会被卸载——扩展运行时的状态要跨命令保留。例外是目录
 //! 内容变了而版本号没变：那时注册表里的元数据与跑着的引擎都停在旧内容上，宿主
 //! 主动注销并按新内容重新注册（见 `host::ExtensionsHost::refresh`）。
 
@@ -38,7 +38,7 @@ use actions::{ActionSubject, extension_actions};
 use host::{CommandTarget, RefreshReport};
 use state::ExtensionsState;
 
-/// Extensions 模块：扫描插件根，把每条命令变成一条 launcher item。
+/// Extensions 模块：扫描扩展根，把每条命令变成一条 launcher item。
 pub(crate) struct ExtensionsModule;
 
 impl Module for ExtensionsModule {
@@ -49,7 +49,7 @@ impl Module for ExtensionsModule {
     fn collect_items(&self, cx: &App) -> Vec<LauncherItem> {
         let (targets, report) = {
             let state = cx.global::<ExtensionsState>();
-            // `collect_items` 只拿到 `&App`，而注册插件要 `&mut Loader`：
+            // `collect_items` 只拿到 `&App`，而注册扩展要 `&mut Loader`：
             // 宿主因此放在 RefCell 里（GPUI 是单线程的，不存在并发借用）。
             let mut host = state.host.borrow_mut();
             let report = host.refresh();
@@ -66,7 +66,7 @@ impl Module for ExtensionsModule {
     }
 }
 
-/// 不依赖任何插件的内置入口：管理窗口、新建扩展。
+/// 不依赖任何扩展的内置入口：管理窗口、新建扩展。
 fn builtin_items() -> Vec<LauncherItem> {
     vec![
         LauncherItem {
@@ -83,7 +83,7 @@ fn builtin_items() -> Vec<LauncherItem> {
         LauncherItem {
             id: "extensions.new".to_string(),
             title: "新建扩展".to_string(),
-            subtitle: Some("生成插件目录、清单与类型声明".to_string()),
+            subtitle: Some("生成扩展目录、清单与类型声明".to_string()),
             icon: IconName::FilePlus.into(),
             group: "内置".to_string(),
             keywords: vec!["extensions".to_string(), "new".to_string()],
@@ -94,7 +94,7 @@ fn builtin_items() -> Vec<LauncherItem> {
     ]
 }
 
-/// 把一次扫描的结论写进 Console：`errors` 是插件坏了，`notices` 是"没坏，只是
+/// 把一次扫描的结论写进 Console：`errors` 是扩展坏了，`notices` 是"没坏，只是
 /// 你可能想升个版本号"。
 pub(crate) fn report_to_console(cx: &App, report: &RefreshReport) {
     let console = cx.global::<AppShell>().console_channel.clone();
@@ -114,12 +114,12 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
             let ui = target.is_ui();
             let captured = target.clone();
             let on_confirm: LauncherAction = if ui {
-                Arc::new(move |cx| ui_window::open_plugin_ui(cx, captured.clone()))
+                Arc::new(move |cx| ui_window::open_extension_ui(cx, captured.clone()))
             } else {
                 Arc::new(move |cx| exec::run_command(cx, captured.clone()))
             };
 
-            // 主操作放第一条（回车等价），插件级管理动作跟在后面：这样
+            // 主操作放第一条（回车等价），扩展级管理动作跟在后面：这样
             // `actions_for` 不再补默认「打开」，用户也不用背两套入口。
             let mut actions: Vec<ItemAction> = vec![ItemAction {
                 title: if ui { "打开窗口" } else { "运行" }.to_string(),
@@ -132,17 +132,19 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
             LauncherItem {
                 id: target.item_id(),
                 title: target.title.clone(),
-                subtitle: target
-                    .description
-                    .clone()
-                    .or_else(|| Some(format!("{} v{}", target.plugin_name, target.bundle.version))),
+                subtitle: target.description.clone().or_else(|| {
+                    Some(format!(
+                        "{} v{}",
+                        target.extension_name, target.bundle.version
+                    ))
+                }),
                 icon: if ui {
                     IconName::AppWindow.into()
                 } else {
                     IconName::Puzzle.into()
                 },
                 group: "扩展".to_string(),
-                keywords: vec![target.plugin_id.clone(), target.command_id.clone()],
+                keywords: vec![target.extension_id.clone(), target.command_id.clone()],
                 on_confirm,
                 actions,
                 paste: None,
@@ -154,15 +156,15 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plux_js_manager::{PluginManifest, UiCapabilities, UiSpec};
+    use plux_js_manager::{ExtensionManifest, UiCapabilities, UiSpec};
     use plux_rs::Bundle;
     use std::path::PathBuf;
 
     fn target(command: &str, ui: Option<UiSpec>) -> CommandTarget {
         CommandTarget {
             bundle: Bundle::from_filename("demo-v1.0.0.js").expect("valid bundle"),
-            plugin_id: "demo".to_string(),
-            plugin_name: "演示插件".to_string(),
+            extension_id: "demo".to_string(),
+            extension_name: "演示扩展".to_string(),
             root: PathBuf::from("/tmp/demo-v1.0.0.js"),
             command_id: command.to_string(),
             title: format!("命令 {command}"),
@@ -194,8 +196,8 @@ mod tests {
         assert_eq!(items[0].id, "ext.demo.hello");
         assert_eq!(items[0].title, "命令 hello");
         assert_eq!(items[0].group, "扩展");
-        // 没写 description 时退回 "插件名 v版本"。
-        assert_eq!(items[0].subtitle.as_deref(), Some("演示插件 v1.0.0"));
+        // 没写 description 时退回 "扩展名 v版本"。
+        assert_eq!(items[0].subtitle.as_deref(), Some("演示扩展 v1.0.0"));
         assert!(matches!(
             items[0].icon,
             crate::app::launcher::LauncherIcon::Named(IconName::Puzzle)
@@ -209,7 +211,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_plugin_yields_no_items() {
+    fn empty_extension_yields_no_items() {
         assert!(items_in(&[]).is_empty());
     }
 
@@ -224,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn items_carry_plugin_actions_and_keep_the_defaults() {
+    fn items_carry_extension_actions_and_keep_the_defaults() {
         let items = items_in(&[target("hello", None)]);
         let titles: Vec<&str> = items[0]
             .actions
@@ -236,10 +238,10 @@ mod tests {
             vec![
                 "运行",
                 "重新加载",
-                "禁用插件",
+                "禁用扩展",
                 "在 Finder 中显示",
                 "打开数据目录",
-                "卸载插件…",
+                "卸载扩展…",
             ]
         );
 
@@ -253,7 +255,7 @@ mod tests {
     #[test]
     fn manifest_with_no_commands_still_has_one_after_validation() {
         // 校验阶段会补一条 run 命令，这里确认命令 id 与 item id 的拼装规则。
-        let manifest = PluginManifest {
+        let manifest = ExtensionManifest {
             id: "demo".into(),
             name: String::new(),
             description: None,

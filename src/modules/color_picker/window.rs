@@ -383,7 +383,7 @@ pub(crate) fn open(cx: &mut App) {
             ..Default::default()
         };
         // 用框架层 App::open_window 而非 gpui_kit::open_window：后者把内容包进
-        // base::Root 并挂上 gpui-component 的 WindowState 插件，其 style 回调给每个
+        // base::Root 并挂上 gpui-component 的 WindowState 扩展，其 style 回调给每个
         // 窗口强制垫 theme().background（不透明），透明覆盖窗会被整体垫白。
         // 取色浮窗不依赖 Root 的组件能力（tooltip/toast/dialog 等），直接裸开。
         match cx.open_window(options, |window, cx| {

@@ -262,7 +262,7 @@ fn env_var(key: String) -> Result<Option<String>> {
 }
 
 /// `exit(code)` 的哨兵格式。**单一事实来源**：脚本路径（`runner::report_outcome`）
-/// 与插件路径（`JsEnv::classify_error`）都从这里解析，避免前缀各写一遍。
+/// 与扩展路径（`JsEnv::classify_error`）都从这里解析，避免前缀各写一遍。
 pub(crate) fn exit_code(message: &str) -> Option<i32> {
     message
         .strip_prefix("__bolt_exit_")?

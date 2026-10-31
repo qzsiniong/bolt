@@ -1,9 +1,9 @@
-//! 模块解析：插件目录里的文件 + 宿主模块的转发模块。
+//! 模块解析：扩展目录里的文件 + 宿主模块的转发模块。
 //!
-//! 关键在 [`PluginResolver::resolve`] 把相对路径解析成**绝对路径作为模块名**：
+//! 关键在 [`ExtensionResolver::resolve`] 把相对路径解析成**绝对路径作为模块名**：
 //! rquickjs 只把 `resolve` 的结果当模块名传给 `load`，如果原样透传
-//! `"./parsers.js"`，`load` 就失去了"是谁 import 的"这一信息，插件里
-//! `lib/a.js` 再 `import "./b.js"` 会解析到插件根而不是 `lib/`。把绝对路径当
+//! `"./parsers.js"`，`load` 就失去了"是谁 import 的"这一信息，扩展里
+//! `lib/a.js` 再 `import "./b.js"` 会解析到扩展根而不是 `lib/`。把绝对路径当
 //! 模块名既解决了这个问题，也让模块缓存天然正确。
 
 use std::collections::HashMap;
@@ -16,18 +16,18 @@ use rquickjs::{Ctx, Error, Module, Result};
 use crate::env::{HostModuleSpec, JsEnv};
 
 /// 恒等 resolver 的替代品：见模块头部说明，它会把相对说明符变成绝对路径。
-pub struct PluginResolver {
+pub struct ExtensionResolver {
     root: PathBuf,
     host_modules: Vec<String>,
 }
 
-impl PluginResolver {
+impl ExtensionResolver {
     pub fn new(root: PathBuf, host_modules: Vec<String>) -> Self {
         Self { root, host_modules }
     }
 }
 
-impl Resolver for PluginResolver {
+impl Resolver for ExtensionResolver {
     fn resolve<'js>(
         &mut self,
         _ctx: &Ctx<'js>,
@@ -48,15 +48,15 @@ impl Resolver for PluginResolver {
 }
 
 /// 按模块名加载源码；名字是绝对路径（resolver 的产物）或宿主模块名。
-pub struct PluginLoader {
+pub struct ExtensionLoader {
     root: PathBuf,
     env: Arc<dyn JsEnv>,
-    /// 宿主模块名 → 按本插件权限过滤后的导出（exports + denied 两半）。
+    /// 宿主模块名 → 按本扩展权限过滤后的导出（exports + denied 两半）。
     host_modules: HashMap<String, HostModuleSpec>,
 }
 
-impl PluginLoader {
-    /// `permissions` 是插件清单里声明的权限（缺省为空 = 全关）。
+impl ExtensionLoader {
+    /// `permissions` 是扩展清单里声明的权限（缺省为空 = 全关）。
     pub fn new(root: PathBuf, env: Arc<dyn JsEnv>, permissions: &[String]) -> Self {
         let host_modules = env
             .host_modules(permissions)
@@ -71,7 +71,7 @@ impl PluginLoader {
     }
 }
 
-impl Loader for PluginLoader {
+impl Loader for ExtensionLoader {
     fn load<'js>(
         &mut self,
         ctx: &Ctx<'js>,
@@ -82,14 +82,14 @@ impl Loader for PluginLoader {
         //    不能用 `const { a, b } = globalThis.__x` 解构：宿主模块的导出分两批
         //    安装（install_base 装基础函数，install_scope 在每轮命令前装交互
         //    API），而入口模块在 install_base 之后、第一次 install_scope 之前就
-        //    求值了——一次性解构会把当时的 undefined 固化进 const 绑定，插件里
+        //    求值了——一次性解构会把当时的 undefined 固化进 const 绑定，扩展里
         //    `import { confirm } from 'bolt'` 永远拿到 undefined。
         if let Some(spec) = self.host_modules.get(name) {
             let source = forwarding_module_source(name, &spec.exports, &spec.denied);
             return Module::declare(ctx.clone(), name, source);
         }
 
-        // 2. 插件目录里的文件。resolver 已经给了绝对路径；给出裸名时按根解析。
+        // 2. 扩展目录里的文件。resolver 已经给了绝对路径；给出裸名时按根解析。
         let path = Path::new(name);
         let path = if path.is_absolute() {
             path.to_path_buf()
@@ -136,7 +136,7 @@ pub fn forwarding_module_source(
         })
         .chain(denied.iter().map(|(export, permission)| {
             format!(
-                "export function {export}(...args) {{ throw new Error('插件未声明权限 \"{permission}\"：请在 extension.json 的 permissions 中加入 \"{permission}\"'); }}"
+                "export function {export}(...args) {{ throw new Error('扩展未声明权限 \"{permission}\"：请在 extension.json 的 permissions 中加入 \"{permission}\"'); }}"
             )
         }))
         .collect::<Vec<_>>()
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn bare_specifiers_resolve_under_the_plugin_root() {
+    fn bare_specifiers_resolve_under_the_extension_root() {
         let tmp = TempDir::new("loader-bare");
         tmp.write("index.js", "");
         tmp.write("pkg/index.js", "");
@@ -222,7 +222,7 @@ mod tests {
             "allowed export must forward: {source}"
         );
         assert!(
-            source.contains("throw new Error('插件未声明权限 \"fs\""),
+            source.contains("throw new Error('扩展未声明权限 \"fs\""),
             "denied export must throw with the permission name: {source}"
         );
     }

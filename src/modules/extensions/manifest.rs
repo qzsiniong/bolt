@@ -1,9 +1,9 @@
-//! 插件目录的定位、播种与扫描。
+//! 扩展目录的定位、播种与扫描。
 //!
 //! 目录约定（plux 的 bundle 命名）：`<extensions>/<id>-v<version>.js/`，
 //! 目录里放 `extension.json` 与入口脚本。清单本身的解析与校验在
 //! `plux_js_manager::manifest` 里，本模块只管"文件在哪、怎么播种、哪些目录
-//! 看起来是插件但已经不可用"。
+//! 看起来是扩展但已经不可用"。
 //!
 //! 没有 `extension.json` 的目录一律忽略——作者的草稿不该刷一屏错误。
 
@@ -16,7 +16,7 @@ pub use plux_js_manager::{
 /// gpui-shell 自己的清单名。同时存在会让 gpui-shell 走严格清单路径，故禁止。
 pub const SHELL_MANIFEST_FILE: &str = "gpui-shell.json";
 
-/// 首次启动时生成的示例插件目录（脚本命令 + UI 命令各一条）。
+/// 首次启动时生成的示例扩展目录（脚本命令 + UI 命令各一条）。
 pub const DEMO_DIR: &str = "demo-v1.0.0.js";
 
 /// `~/Library/Application Support/bolt/extensions/`。
@@ -51,7 +51,7 @@ pub fn uses_bundled_extensions() -> bool {
 
 /// 实际生效的扩展目录。
 ///
-/// debug 构建下只要找得到仓库 `extensions/` 就直接用它：改仓库里的插件文件
+/// debug 构建下只要找得到仓库 `extensions/` 就直接用它：改仓库里的扩展文件
 /// 重启即生效，省掉「先同步一份到数据目录」这一步。release 构建、或找不到
 /// 仓库目录时用数据目录。
 pub fn active_extensions_dir() -> PathBuf {
@@ -67,18 +67,18 @@ pub fn ensure_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))
 }
 
-/// 把清单的 JSON Schema 摆在扩展根目录（与插件目录同级）。
+/// 把清单的 JSON Schema 摆在扩展根目录（与扩展目录同级）。
 ///
-/// 放根上而不是每个插件里：所有插件的清单都用同一个相对路径
+/// 放根上而不是每个扩展里：所有扩展的清单都用同一个相对路径
 /// `../extension.schema.json` 引用它，schema 升级时也就只有这一份要换。宿主
 /// 每次启动重写（内容没变则不动），所以 user 目录里的副本不会停在旧版本。
 ///
-/// 它只是个编辑器提示文件：`scan` 只看目录，插件加载完全不读它。
+/// 它只是个编辑器提示文件：`scan` 只看目录，扩展加载完全不读它。
 pub fn ensure_schema(dir: &Path) -> Result<(), String> {
     crate::model::project_gen::write_if_changed(&dir.join(SCHEMA_FILE), EXTENSION_SCHEMA)
 }
 
-/// 扫描扩展根，返回可注册的插件目录与错误消息。
+/// 扫描扩展根，返回可注册的扩展目录与错误消息。
 ///
 /// - 有 `extension.json` → 收集（是否合法交给 plux manager 判断）。
 /// - 没有 → 忽略（作者的草稿目录不该刷一屏错误）。
@@ -126,23 +126,23 @@ fn inspect(dir: &Path, found: &mut Vec<PathBuf>, errors: &mut Vec<String>) {
     found.push(dir.to_path_buf());
 }
 
-/// 把仓库 `extensions/` 下的插件目录播种到数据目录，返回复制个数。
+/// 把仓库 `extensions/` 下的扩展目录播种到数据目录，返回复制个数。
 /// 已存在的目录一律不动：数据目录里的内容是用户的，不覆盖。
 pub fn ensure_bundled_extensions(target: &Path) -> Result<usize, String> {
     match bundled_extensions_dir() {
-        Some(source) => sync_plugins(&source, target),
+        Some(source) => sync_extensions(&source, target),
         None => Ok(0),
     }
 }
 
-fn sync_plugins(source: &Path, target: &Path) -> Result<usize, String> {
+fn sync_extensions(source: &Path, target: &Path) -> Result<usize, String> {
     ensure_dir(target)?;
     let entries = std::fs::read_dir(source)
-        .map_err(|e| format!("read bundled plugins {}: {e}", source.display()))?;
+        .map_err(|e| format!("read bundled extensions {}: {e}", source.display()))?;
     let mut count = 0;
     for entry in entries.flatten() {
         let src = entry.path();
-        // 只播种看起来是插件的目录：有清单才算，草稿与杂项留在仓库里。
+        // 只播种看起来是扩展的目录：有清单才算，草稿与杂项留在仓库里。
         if !src.is_dir() || !src.join(MANIFEST_FILE).is_file() {
             continue;
         }
@@ -192,7 +192,7 @@ pub fn ensure_extension_data_dir(id: &str) -> Result<PathBuf, String> {
 pub(super) const DEMO_MANIFEST: &str = r#"{
   "$schema": "../extension.schema.json",
   "id": "demo",
-  "name": "演示插件",
+  "name": "演示扩展",
   "description": "同时演示脚本命令与 UI 命令",
   "version": "1.0.0",
   "entry": "index.js",
@@ -212,9 +212,9 @@ const DEMO_INDEX: &str = r#"// 脚本命令示例。
 //
 // 命令 id 就是入口模块里要导出的函数名；宿主按
 // 「具名导出 → `export default` 对象 → `globalThis.plux.commands`」三档查找。
-// 每条命令都在插件自己的常驻运行时里执行，模块级状态会保留到下次调用。
+// 每条命令都在扩展自己的常驻运行时里执行，模块级状态会保留到下次调用。
 export function hello(ctx) {
-  const { id, version } = ctx.plugin;
+  const { id, version } = ctx.extension;
   return `你好，这是 ${id} v${version} 的 ${ctx.command} 命令`;
 }
 "#;
@@ -297,9 +297,9 @@ export default class DemoPanel extends View {
 }
 "##;
 
-/// First-run convenience: write the `demo` plugin when its directory is absent.
+/// First-run convenience: write the `demo` extension when its directory is absent.
 /// An existing directory is left untouched (作者的改动不该被覆盖).
-pub fn ensure_demo_plugin(extensions: &Path) -> Result<(), String> {
+pub fn ensure_demo_extension(extensions: &Path) -> Result<(), String> {
     let root = extensions.join(DEMO_DIR);
     if root.exists() {
         return Ok(());
@@ -321,21 +321,21 @@ mod tests {
     #[test]
     fn missing_dir_yields_nothing() {
         let tmp = TempDir::new("ext-scan-missing");
-        let (plugins, errors) = scan(&tmp.0.join("nope"));
-        assert!(plugins.is_empty());
+        let (extensions, errors) = scan(&tmp.0.join("nope"));
+        assert!(extensions.is_empty());
         assert!(errors.is_empty());
     }
 
     #[test]
-    fn scans_plugin_dirs_and_skips_drafts() {
+    fn scans_extension_dirs_and_skips_drafts() {
         let tmp = TempDir::new("ext-scan-ok");
         tmp.write(&format!("demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
         tmp.write("scratch/notes.txt", "draft");
 
-        let (plugins, errors) = scan(&tmp.0);
+        let (extensions, errors) = scan(&tmp.0);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(plugins.len(), 1);
-        assert!(plugins[0].ends_with(DEMO_DIR));
+        assert_eq!(extensions.len(), 1);
+        assert!(extensions[0].ends_with(DEMO_DIR));
     }
 
     #[test]
@@ -344,16 +344,16 @@ mod tests {
         tmp.write(&format!("demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
         tmp.write(&format!("demo-v1.0.0.js/{SHELL_MANIFEST_FILE}"), "{}");
 
-        let (plugins, errors) = scan(&tmp.0);
-        assert!(plugins.is_empty());
+        let (extensions, errors) = scan(&tmp.0);
+        assert!(extensions.is_empty());
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains(SHELL_MANIFEST_FILE), "{errors:?}");
     }
 
     #[test]
-    fn demo_plugin_is_written_once() {
+    fn demo_extension_is_written_once() {
         let tmp = TempDir::new("ext-demo");
-        ensure_demo_plugin(&tmp.0).expect("demo should be created");
+        ensure_demo_extension(&tmp.0).expect("demo should be created");
         let manifest = tmp.0.join(DEMO_DIR).join(MANIFEST_FILE);
         assert!(manifest.is_file());
         assert!(tmp.0.join(DEMO_DIR).join("index.js").is_file());
@@ -361,19 +361,19 @@ mod tests {
 
         let custom = r#"{ "id": "demo", "version": "1.0.0" }"#;
         std::fs::write(&manifest, custom).unwrap();
-        ensure_demo_plugin(&tmp.0).expect("second call should be a no-op");
+        ensure_demo_extension(&tmp.0).expect("second call should be a no-op");
         assert_eq!(std::fs::read_to_string(&manifest).unwrap(), custom);
     }
 
     #[test]
-    fn bundled_plugins_copy_only_missing() {
+    fn bundled_extension_copy_only_missing() {
         let source = TempDir::new("ext-bundled-src");
         source.write(&format!("a-v1.0.0.js/{MANIFEST_FILE}"), "{}");
         source.write("a-v1.0.0.js/index.js", "export function run() {}");
         source.write(&format!("b-v1.0.0.js/{MANIFEST_FILE}"), "{}");
 
         let target = TempDir::new("ext-bundled-dst");
-        let copied = sync_plugins(&source.0, &target.0).expect("first sync");
+        let copied = sync_extensions(&source.0, &target.0).expect("first sync");
         assert_eq!(copied, 2);
         assert!(target.0.join("a-v1.0.0.js/index.js").is_file());
 
@@ -382,7 +382,7 @@ mod tests {
             "export function run() { /* local */ }",
         )
         .unwrap();
-        let copied = sync_plugins(&source.0, &target.0).expect("second sync");
+        let copied = sync_extensions(&source.0, &target.0).expect("second sync");
         assert_eq!(copied, 0);
         assert!(
             std::fs::read_to_string(target.0.join("a-v1.0.0.js/index.js"))

@@ -30,7 +30,7 @@
 //!
 //! 一律用 [`button_with_tooltip`]：它包一层 gpui 原生 tooltip，与窗口根视图类型
 //! 无关。**不要**用 gpui-component 的 `Button::tooltip`——它依赖注册在
-//! `gpui_base::Root` 上的组件插件，根视图是 `gpui_shell::ShellRoot` 的插件 UI
+//! `gpui_base::Root` 上的组件扩展，根视图是 `gpui_shell::ShellRoot` 的扩展 UI
 //! 窗口里会静默不显示（细节见 `tooltip.rs` 的模块文档）。
 
 mod level;

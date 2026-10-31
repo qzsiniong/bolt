@@ -14,7 +14,7 @@ use rquickjs::Ctx;
 /// 模块本体由宿主在 `install_base` 里挂到 `globalThis.__<name>` 上；loader 只负责
 /// 生成一个转发模块，把 `exports` 里的名字重新导出。
 ///
-/// `exports` 与 `denied` 是同一份宿主导出清单按插件权限过滤后的两半：`exports`
+/// `exports` 与 `denied` 是同一份宿主导出清单按扩展权限过滤后的两半：`exports`
 /// 允许调用，`denied` 里的 `(导出名, 权限名)` 会生成调用即抛错的占位函数——
 /// `import` 不炸，但一调用就能看到"清单缺什么权限"的明确报错。
 #[derive(Clone, Debug)]
@@ -42,17 +42,17 @@ pub trait Scope: Send + Sync + 'static {
 
 /// 宿主环境。
 pub trait JsEnv: Send + Sync + 'static {
-    /// 插件加载时调用一次：装 console、定时器、宿主模块的全局对象。
+    /// 扩展加载时调用一次：装 console、定时器、宿主模块的全局对象。
     fn install_base<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<()>;
 
     /// 每条命令执行前调用：把本轮的交互 API（confirm / pickPath / progress /
-    /// typeStr）挂到扩展上下文上。实现应当**覆盖**上一次安装的函数——插件运行时
+    /// typeStr）挂到扩展上下文上。实现应当**覆盖**上一次安装的函数——扩展运行时
     /// 是常驻的，而交互 bridge 是每轮新建的。
     fn install_scope<'js>(&self, ctx: &Ctx<'js>, scope: &dyn Scope) -> rquickjs::Result<()>;
 
     /// 脚本可以 `import` 的宿主模块清单。
     ///
-    /// `permissions` 是当前插件清单里声明的权限（`extension.json` 的
+    /// `permissions` 是当前扩展清单里声明的权限（`extension.json` 的
     /// `permissions`）。实现应当按它过滤每个模块的导出：需要未声明权限的导出
     /// 名放进 `HostModuleSpec::denied`（带上所需权限名），其余放进 `exports`。
     /// 哪个导出需要哪个权限由宿主自己定义。
@@ -69,7 +69,7 @@ pub trait JsEnv: Send + Sync + 'static {
         None
     }
 
-    /// 插件自己 `console.log` 的输出。
+    /// 扩展自己 `console.log` 的输出。
     fn log(&self, level: LogLevel, message: &str);
 }
 

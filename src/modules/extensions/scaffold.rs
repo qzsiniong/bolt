@@ -15,7 +15,7 @@ use super::manifest::{MANIFEST_FILE, active_extensions_dir};
 use crate::host::HostRegistry;
 use crate::model::project_gen::write_if_changed;
 
-/// 生成哪些命令。纯 UI 插件不需要 `index.js`，所以模板不只是"文件多少"。
+/// 生成哪些命令。纯 UI 扩展不需要 `index.js`，所以模板不只是"文件多少"。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Template {
     Script,
@@ -177,7 +177,7 @@ pub(crate) fn validate(spec: &ExtensionSpec) -> Result<Bundle, Vec<SpecError>> {
 /// 目标目录（[`active_extensions_dir`] 下）。
 ///
 /// 必须跟着**实际生效**的目录走：debug 构建下宿主扫的是仓库 `extensions/`，
-/// 若写到用户数据目录，插件建完永远不会被扫描到（Launcher 里也没有命令）。
+/// 若写到用户数据目录，扩展建完永远不会被扫描到（Launcher 里也没有命令）。
 pub(crate) fn target_dir(spec: &ExtensionSpec) -> PathBuf {
     active_extensions_dir().join(spec.dir_name())
 }
@@ -217,7 +217,7 @@ pub(crate) fn shadow_warning(spec: &ExtensionSpec) -> Option<String> {
     })
 }
 
-/// 要写进插件目录的文件（相对路径 + 内容）。纯函数，方便单测比对。
+/// 要写进扩展目录的文件（相对路径 + 内容）。纯函数，方便单测比对。
 pub(crate) fn files(spec: &ExtensionSpec) -> Vec<(&'static str, String)> {
     let mut files = vec![(MANIFEST_FILE, manifest_json(spec))];
     if spec.template.has_script() {
@@ -258,7 +258,7 @@ fn manifest_json(spec: &ExtensionSpec) -> String {
         "permissions": spec.permissions,
         "commands": commands,
     });
-    // 纯 UI 插件没有脚本入口：不写 entry，免得留下一个指向不存在文件的字段。
+    // 纯 UI 扩展没有脚本入口：不写 entry，免得留下一个指向不存在文件的字段。
     if spec.template.has_script() {
         manifest["entry"] = serde_json::json!("index.js");
     }
@@ -280,7 +280,7 @@ fn script_entry() -> String {
 // 宿主注入的模块见同目录的 `bolt.d.ts`（编辑器里能直接补全）。
 
 /**
- * @typedef {{ plugin: { id: string, version: string }, command: string }} CommandContext
+ * @typedef {{ extension: { id: string, version: string }, command: string }} CommandContext
  */
 
 /**
@@ -288,7 +288,7 @@ fn script_entry() -> String {
  * @returns {string}
  */
 export function run(ctx) {
-  return `你好，这是 ${ctx.plugin.id} v${ctx.plugin.version} 的 ${ctx.command} 命令`;
+  return `你好，这是 ${ctx.extension.id} v${ctx.extension.version} 的 ${ctx.command} 命令`;
 }
 "#
     .to_string()
@@ -373,7 +373,7 @@ pub(crate) struct ScaffoldOutcome {
 /// 真正落盘：校验 → 查冲突 → 建目录 → 写文件 → 写声明。
 ///
 /// 顺序有讲究：`jsconfig.json` 不被 `dir_fingerprint` 忽略，必须和清单、入口
-/// 一次性写完，否则第一次 refresh 就会把新插件判成"内容已变更"。
+/// 一次性写完，否则第一次 refresh 就会把新扩展判成"内容已变更"。
 ///
 /// 写盘失败会把刚建的目录整个删掉：否则半成品一直占着这个 `<id>-v<ver>.js`，
 /// 用户修好问题再点「创建」只会得到「目录已存在」，再也无法重试。
@@ -442,11 +442,11 @@ mod tests {
     }
 
     #[test]
-    fn script_template_is_a_valid_plugin() {
+    fn script_template_is_a_valid_extension() {
         let tmp = TempDir::new("scaffold-script");
         let outcome = scaffold_into(&tmp, &spec("hello", Template::Script));
 
-        // 最有价值的一条：生成物本身就是 plux 能读的插件。
+        // 最有价值的一条：生成物本身就是 plux 能读的扩展。
         let package = plux_js_manager::manifest::read(&outcome.root).expect("valid manifest");
         assert_eq!(package.manifest.id, "hello");
         assert_eq!(package.manifest.commands.len(), 1);
@@ -461,7 +461,7 @@ mod tests {
         let outcome = scaffold_into(&tmp, &spec("panel", Template::Ui));
 
         let package = plux_js_manager::manifest::read(&outcome.root).expect("valid manifest");
-        assert!(package.entry.is_none(), "纯 UI 插件不该有脚本入口");
+        assert!(package.entry.is_none(), "纯 UI 扩展不该有脚本入口");
         assert!(package.main.is_some());
         assert!(outcome.root.join("main.js").is_file());
         assert!(outcome.root.join("gpui-kit.d.ts").is_file());

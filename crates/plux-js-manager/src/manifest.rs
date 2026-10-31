@@ -1,4 +1,4 @@
-//! `extension.json` — 插件清单元数据、校验与目录名约定。
+//! `extension.json` — 扩展清单元数据、校验与目录名约定。
 //!
 //! 目录名必须是 plux 的 bundle 约定 `{id}-v{version}.{format}`（本 crate 只认
 //! `format = "js"`），因为 plux 的 [`Bundle`] 完全从目录名解析出来——`Loader`
@@ -7,7 +7,7 @@
 //! 写了就必须一致，不允许两边漂移。
 //!
 //! 命令分两类：带 `ui` 块的命令由 gpui-shell 打开原生窗口（入口固定
-//! [`UI_ENTRY`]），不带的在插件常驻运行时里执行同名 JS 函数。
+//! [`UI_ENTRY`]），不带的在扩展常驻运行时里执行同名 JS 函数。
 
 use std::path::{Path, PathBuf};
 
@@ -15,10 +15,10 @@ use plux_rs::{Bundle, Depend};
 use semver::{Version, VersionReq};
 use serde::Deserialize;
 
-/// 每个插件目录一份的清单文件名。
+/// 每个扩展目录一份的清单文件名。
 pub const MANIFEST_FILE: &str = "extension.json";
-/// 清单的 JSON Schema 文件名。宿主把它放在**扩展根目录**（与插件目录同级），
-/// 于是每个插件里的清单都能用同一个相对路径 `../extension.schema.json` 引用。
+/// 清单的 JSON Schema 文件名。宿主把它放在**扩展根目录**（与扩展目录同级），
+/// 于是每个扩展里的清单都能用同一个相对路径 `../extension.schema.json` 引用。
 pub const SCHEMA_FILE: &str = "extension.schema.json";
 /// Schema 正文。唯一来源是仓库根的 `schemas/extension.schema.json`，编译期嵌入：
 /// 宿主写盘与测试都用这一份，避免运行时找不到文件。
@@ -29,7 +29,7 @@ pub const DEFAULT_ENTRY: &str = "index.js";
 /// 故不可自定义。
 pub const UI_ENTRY: &str = "main.js";
 /// 本 manager 认的 bundle 格式（目录名后缀）。
-pub const PLUGIN_FORMAT: &str = "js";
+pub const EXTENSION_FORMAT: &str = "js";
 
 /// 脚本命令可声明的权限名。缺省（不写 `permissions`）一个都不给：fail-closed。
 ///
@@ -45,9 +45,9 @@ pub const PLUGIN_FORMAT: &str = "js";
 /// 开关，与这里的权限名互不相干。
 pub const PERMISSIONS: &[&str] = &["fs", "net", "exec", "env", "typeStr"];
 
-/// 一个插件目录的清单。宽松解析（忽略未知字段）。
+/// 一个扩展目录的清单。宽松解析（忽略未知字段）。
 #[derive(Clone, Debug, Deserialize)]
-pub struct PluginManifest {
+pub struct ExtensionManifest {
     /// 可省略：目录名里已经写着。写了必须与目录名一致。解析后**始终**是目录名
     /// 里的 id（[`read`] 会回填），下游不必再处理"没写"的情况。
     #[serde(default)]
@@ -70,14 +70,14 @@ pub struct PluginManifest {
     #[serde(default)]
     pub permissions: Vec<String>,
     #[serde(default)]
-    pub commands: Vec<PluginCommand>,
+    pub commands: Vec<ExtensionCommand>,
 }
 
 fn default_entry() -> String {
     DEFAULT_ENTRY.to_string()
 }
 
-impl PluginManifest {
+impl ExtensionManifest {
     /// 展示名：`name` 为空时退回 `id`。
     pub fn display_name(&self) -> &str {
         if self.name.is_empty() {
@@ -90,7 +90,7 @@ impl PluginManifest {
 
 /// 清单里声明的一条命令 = Launcher 里的一条 item。
 #[derive(Clone, Debug, Deserialize)]
-pub struct PluginCommand {
+pub struct ExtensionCommand {
     pub id: String,
     pub title: String,
     #[serde(default)]
@@ -100,7 +100,7 @@ pub struct PluginCommand {
     pub ui: Option<UiSpec>,
 }
 
-impl PluginCommand {
+impl ExtensionCommand {
     pub fn is_ui(&self) -> bool {
         self.ui.is_some()
     }
@@ -149,21 +149,21 @@ impl UiSpec {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UiBuiltin {
-    /// 重新加载插件（与扩展管理里的「重载」同一条路径：会关闭该插件的
+    /// 重新加载扩展（与扩展管理里的「重载」同一条路径：会关闭该扩展的
     /// 所有 UI 窗口——包括按钮所在的这个——重开命令即用新代码）。
     Reload,
-    /// 在访达中打开插件的私有数据目录。
+    /// 在访达中打开扩展的私有数据目录。
     OpenDataDir,
-    /// 在访达中显示（选中）插件目录。
-    OpenPluginDir,
+    /// 在访达中显示（选中）扩展目录。
+    OpenExtensionDir,
     /// 关闭当前窗口。
     CloseWindow,
 }
 
 /// 标题栏右侧的自定义按钮：`builtin`（宿主内建动作）与 `command`（点击执行
 /// 本清单里的一条**脚本**命令）二选一，校验强制。注意 `command` 型按钮走
-/// 插件运行时执行，结果与错误都进 Console——它**无法**回写当前 gpui-shell
-/// 窗口的 UI（gpui-shell 尚未提供宿主→插件的事件通道）。
+/// 扩展运行时执行，结果与错误都进 Console——它**无法**回写当前 gpui-shell
+/// 窗口的 UI（gpui-shell 尚未提供宿主→扩展的事件通道）。
 ///
 /// `icon` / `tooltip` 可选，缺省时按动作取宿主默认值（builtin 用内置图标与
 /// 中文提示，command 用 ▶ 图标与命令标题）。
@@ -172,7 +172,7 @@ pub enum UiBuiltin {
 pub struct UiAction {
     pub builtin: Option<UiBuiltin>,
     pub command: Option<String>,
-    /// 图标：Lucide 名（`refresh-cw`）或插件目录内的资产路径（`icons/zap.svg`）。
+    /// 图标：Lucide 名（`refresh-cw`）或扩展目录内的资产路径（`icons/zap.svg`）。
     pub icon: Option<String>,
     /// 悬停提示文案。
     pub tooltip: Option<String>,
@@ -199,7 +199,7 @@ impl UiAction {
 
     /// 按钮图标的资产路径；`None` = 用动作的默认图标。
     ///
-    /// 带 `/` 或以 `.svg` 结尾的值当成资产路径（相对插件目录，插件根已登记进
+    /// 带 `/` 或以 `.svg` 结尾的值当成资产路径（相对扩展目录，扩展根已登记进
     /// 复合资产源），其余当成 Lucide 图标名补成 `icons/<name>.svg`。
     pub fn icon_path(&self) -> Option<String> {
         let icon = self.icon.as_deref().map(str::trim)?;
@@ -233,16 +233,16 @@ pub struct UiCapabilities {
     pub clipboard: bool,
 }
 
-/// 校验通过的插件目录：清单 + 从目录名解析出的 bundle + 绝对路径。
+/// 校验通过的扩展目录：清单 + 从目录名解析出的 bundle + 绝对路径。
 ///
-/// 名字避开 `plux_rs::Plugin`（那是已注册的插件实例）。
+/// 名字避开 `plux_rs::Plugin`（那是已注册的扩展实例）。
 #[derive(Clone, Debug)]
-pub struct PluginPackage {
-    pub manifest: PluginManifest,
+pub struct ExtensionPackage {
+    pub manifest: ExtensionManifest,
     pub bundle: Bundle,
-    /// 插件目录（绝对路径）。
+    /// 扩展目录（绝对路径）。
     pub root: PathBuf,
-    /// 脚本入口的绝对路径。纯 UI 插件（没有脚本命令）为 `None`——这种插件
+    /// 脚本入口的绝对路径。纯 UI 扩展（没有脚本命令）为 `None`——这种扩展
     /// 根本不需要运行时，也就不该被迫在目录里放一个 `index.js`。
     pub entry: Option<PathBuf>,
     /// UI 入口（有 `ui` 命令时才存在）。
@@ -251,7 +251,7 @@ pub struct PluginPackage {
     pub optional_depends: Vec<Depend>,
 }
 
-impl PluginPackage {
+impl ExtensionPackage {
     pub fn id(&self) -> &str {
         &self.manifest.id
     }
@@ -261,34 +261,34 @@ impl PluginPackage {
     }
 }
 
-/// 从插件目录名解析 bundle：`{id}-v{version}.{format}`。
+/// 从扩展目录名解析 bundle：`{id}-v{version}.{format}`。
 pub fn bundle_from_dir(dir: &Path) -> Result<Bundle, String> {
     let name = dir
         .file_name()
-        .ok_or_else(|| format!("非法的插件目录名：{}", dir.display()))?;
+        .ok_or_else(|| format!("非法的扩展目录名：{}", dir.display()))?;
     let bundle = Bundle::from_filename(name).map_err(|e| {
         format!(
-            "插件目录名必须是 `<id>-v<version>.{PLUGIN_FORMAT}>`（如 `demo-v1.0.0.js`）：{}（{e}）",
+            "扩展目录名必须是 `<id>-v<version>.{EXTENSION_FORMAT}>`（如 `demo-v1.0.0.js`）：{}（{e}）",
             dir.display()
         )
     })?;
-    if bundle.format != PLUGIN_FORMAT {
+    if bundle.format != EXTENSION_FORMAT {
         return Err(format!(
-            "插件目录名的格式后缀必须是 `.{PLUGIN_FORMAT}`：{}",
+            "扩展目录名的格式后缀必须是 `.{EXTENSION_FORMAT}`：{}",
             dir.display()
         ));
     }
     Ok(bundle)
 }
 
-/// 读取并校验一个插件目录。
-pub fn read(dir: &Path) -> Result<PluginPackage, String> {
+/// 读取并校验一个扩展目录。
+pub fn read(dir: &Path) -> Result<ExtensionPackage, String> {
     let bundle = bundle_from_dir(dir)?;
 
     let manifest_path = dir.join(MANIFEST_FILE);
     let raw = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("读取 {MANIFEST_FILE} 失败：{e}"))?;
-    let mut manifest: PluginManifest =
+    let mut manifest: ExtensionManifest =
         serde_json::from_str(&raw).map_err(|e| format!("解析 {MANIFEST_FILE} 失败：{e}"))?;
 
     // 目录名是唯一事实来源：id / version 写了就严格比对（漂移是作者最容易踩的
@@ -319,7 +319,7 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
     manifest.version = bundle.version.to_string();
 
     if manifest.commands.is_empty() {
-        manifest.commands.push(PluginCommand {
+        manifest.commands.push(ExtensionCommand {
             id: "run".to_string(),
             title: manifest.display_name().to_string(),
             description: manifest.description.clone(),
@@ -379,7 +379,7 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
     let has_script = manifest.commands.iter().any(|c| !c.is_ui());
     let has_ui = manifest.commands.iter().any(|c| c.is_ui());
 
-    // 脚本入口只在真的要用时校验：纯 UI 插件没有入口这个概念。
+    // 脚本入口只在真的要用时校验：纯 UI 扩展没有入口这个概念。
     let entry = if has_script {
         let entry = dir.join(&manifest.entry);
         if !entry.is_file() {
@@ -400,7 +400,7 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
     let main = dir.join(UI_ENTRY);
     if has_ui && !main.is_file() {
         return Err(format!(
-            "有 `ui` 命令的插件必须提供 {UI_ENTRY}：{}",
+            "有 `ui` 命令的扩展必须提供 {UI_ENTRY}：{}",
             main.display()
         ));
     }
@@ -419,7 +419,7 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
         }
     }
 
-    Ok(PluginPackage {
+    Ok(ExtensionPackage {
         manifest,
         bundle,
         root: dir.to_path_buf(),
@@ -440,7 +440,7 @@ fn parse_depends(specs: &[String]) -> Result<Vec<Depend>, String> {
                 None => (spec.trim(), "*"),
             };
             if id.is_empty() {
-                return Err(format!("依赖声明缺少插件 id：`{spec}`"));
+                return Err(format!("依赖声明缺少扩展 id：`{spec}`"));
             }
             let req = VersionReq::parse(req)
                 .map_err(|e| format!("依赖 `{spec}` 的版本要求不合法：{e}"))?;
@@ -458,12 +458,12 @@ mod tests {
     use crate::test_support::TempDir;
 
     const OK_MANIFEST: &str = r#"{
-        "id": "demo", "name": "演示插件", "version": "1.0.0",
+        "id": "demo", "name": "演示扩展", "version": "1.0.0",
         "entry": "index.js",
         "commands": [{ "id": "hello", "title": "打招呼" }]
     }"#;
 
-    fn write_plugin(tmp: &TempDir, dir: &str, manifest: &str, files: &[&str]) {
+    fn write_extension(tmp: &TempDir, dir: &str, manifest: &str, files: &[&str]) {
         tmp.write(&format!("{dir}/{MANIFEST_FILE}"), manifest);
         for file in files {
             tmp.write(&format!("{dir}/{file}"), "");
@@ -471,31 +471,31 @@ mod tests {
     }
 
     #[test]
-    fn reads_valid_plugin() {
+    fn reads_valid_extension() {
         let tmp = TempDir::new("manifest-ok");
-        write_plugin(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
 
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         assert_eq!(package.bundle.id, "demo");
         assert_eq!(package.bundle.version.to_string(), "1.0.0");
         assert_eq!(package.bundle.format, "js");
-        assert_eq!(package.display_name(), "演示插件");
+        assert_eq!(package.display_name(), "演示扩展");
         assert!(package.entry.is_some_and(|e| e.ends_with("index.js")));
         assert!(package.main.is_none());
         assert_eq!(package.manifest.commands.len(), 1);
     }
 
     #[test]
-    fn ui_only_plugin_needs_no_script_entry() {
+    fn ui_only_extension_needs_no_script_entry() {
         let tmp = TempDir::new("manifest-ui-only");
         let manifest = r#"{
             "id": "demo", "version": "1.0.0",
             "commands": [{ "id": "panel", "title": "面板", "ui": {} }]
         }"#;
-        // 没有 index.js：纯 UI 插件不该被迫放一个。
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["main.js"]);
+        // 没有 index.js：纯 UI 扩展不该被迫放一个。
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["main.js"]);
 
-        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("ui-only plugin should load");
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("ui-only extension should load");
         assert!(package.entry.is_none());
         assert!(package.main.is_some());
     }
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn dir_name_must_carry_id_and_version() {
         let tmp = TempDir::new("manifest-baddir");
-        write_plugin(&tmp, "demo", OK_MANIFEST, &["index.js"]);
+        write_extension(&tmp, "demo", OK_MANIFEST, &["index.js"]);
 
         let err = read(&tmp.0.join("demo")).expect_err("bare dir name must fail");
         assert!(err.contains("demo-v1.0.0.js"), "unexpected message: {err}");
@@ -512,7 +512,7 @@ mod tests {
     #[test]
     fn format_suffix_must_be_js() {
         let tmp = TempDir::new("manifest-badformat");
-        write_plugin(&tmp, "demo-v1.0.0.lua", OK_MANIFEST, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.lua", OK_MANIFEST, &["index.js"]);
 
         let err = read(&tmp.0.join("demo-v1.0.0.lua")).expect_err("lua must fail");
         assert!(err.contains(".js"), "unexpected message: {err}");
@@ -521,14 +521,14 @@ mod tests {
     #[test]
     fn id_and_version_must_match_dir_name() {
         let tmp = TempDir::new("manifest-mismatch");
-        write_plugin(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
         let renamed = tmp.0.join("other-v1.0.0.js");
         std::fs::rename(tmp.0.join("demo-v1.0.0.js"), &renamed).unwrap();
         let err = read(&renamed).expect_err("id mismatch must fail");
         assert!(err.contains("不一致"), "unexpected message: {err}");
 
         let tmp = TempDir::new("manifest-version-mismatch");
-        write_plugin(&tmp, "demo-v2.0.0.js", OK_MANIFEST, &["index.js"]);
+        write_extension(&tmp, "demo-v2.0.0.js", OK_MANIFEST, &["index.js"]);
         let err = read(&tmp.0.join("demo-v2.0.0.js")).expect_err("version mismatch must fail");
         assert!(err.contains("不一致"), "unexpected message: {err}");
     }
@@ -536,13 +536,13 @@ mod tests {
     #[test]
     fn entry_must_exist_and_be_javascript() {
         let tmp = TempDir::new("manifest-noentry");
-        write_plugin(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &[]);
+        write_extension(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &[]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("missing entry must fail");
         assert!(err.contains("入口文件不存在"), "unexpected message: {err}");
 
         let tmp = TempDir::new("manifest-badext");
         let manifest = r#"{ "id": "demo", "version": "1.0.0", "entry": "run.py" }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["run.py"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["run.py"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("python entry must fail");
         assert!(
             err.contains("必须是 .js 或 .ts"),
@@ -554,7 +554,7 @@ mod tests {
     fn empty_commands_synthesize_a_run_command() {
         let tmp = TempDir::new("manifest-nocommands");
         let manifest = r#"{ "id": "demo", "name": "Demo", "version": "1.0.0" }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
 
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         assert_eq!(package.manifest.commands.len(), 1);
@@ -569,7 +569,7 @@ mod tests {
             "id": "demo", "version": "1.0.0",
             "commands": [{ "id": "panel", "title": "面板", "ui": {} }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("missing main.js must fail");
         assert!(err.contains("main.js"), "unexpected message: {err}");
 
@@ -578,7 +578,7 @@ mod tests {
             "id": "demo", "version": "1.0.0",
             "commands": [{ "id": "panel", "title": "面板", "ui": { "width": 0 } }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("zero width must fail");
         assert!(err.contains("窗口尺寸"), "unexpected message: {err}");
     }
@@ -590,7 +590,7 @@ mod tests {
             "id": "demo", "version": "1.0.0",
             "commands": [{ "id": "panel", "title": "面板", "ui": { "capabilities": { "clipboard": true } } }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
 
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         let command = &package.manifest.commands[0];
@@ -630,7 +630,7 @@ mod tests {
                     "ui": { "actions": [
                         { "builtin": "reload" },
                         { "builtin": "open_data_dir" },
-                        { "builtin": "open_plugin_dir" },
+                        { "builtin": "open_extension_dir" },
                         { "builtin": "close_window" },
                         { "command": "export" }
                     ] }
@@ -638,7 +638,7 @@ mod tests {
                 { "id": "export", "title": "导出" }
             ]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
 
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         let ui = package.manifest.commands[0].ui.as_ref().expect("ui block");
@@ -652,7 +652,7 @@ mod tests {
             vec![
                 UiActionKind::Builtin(UiBuiltin::Reload),
                 UiActionKind::Builtin(UiBuiltin::OpenDataDir),
-                UiActionKind::Builtin(UiBuiltin::OpenPluginDir),
+                UiActionKind::Builtin(UiBuiltin::OpenExtensionDir),
                 UiActionKind::Builtin(UiBuiltin::CloseWindow),
                 UiActionKind::Command("export".to_string()),
             ]
@@ -668,7 +668,7 @@ mod tests {
                 { "builtin": "reload", "command": "run" }
             ] } }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("both fields");
         assert!(error.contains("只能写一个"), "{error}");
     }
@@ -683,7 +683,7 @@ mod tests {
                 { "command": "missing" }
             ] } }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("missing command");
         assert!(error.contains("不存在于本清单"), "{error}");
 
@@ -695,7 +695,7 @@ mod tests {
                 { "id": "other-ui", "title": "另一个窗口", "ui": {} }
             ]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("ui command target");
         assert!(error.contains("只能触发脚本命令"), "{error}");
     }
@@ -708,11 +708,11 @@ mod tests {
             "commands": [{ "id": "panel", "title": "面板", "ui": { "actions": [
                 { "builtin": "reload", "icon": "zap", "tooltip": "重载并重开" },
                 { "builtin": "open_data_dir", "icon": "icons/folder.svg" },
-                { "builtin": "open_plugin_dir", "icon": "  ", "tooltip": "   " },
+                { "builtin": "open_extension_dir", "icon": "  ", "tooltip": "   " },
                 { "builtin": "close_window" }
             ] } }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         let actions = &package.manifest.commands[0]
             .ui
@@ -741,7 +741,7 @@ mod tests {
                 { "builtin": "reload", "icon": "../../etc/passwd.svg" }
             ] } }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("traversal icon");
         assert!(error.contains("不能包含 `..`"), "{error}");
     }
@@ -753,7 +753,7 @@ mod tests {
             "id": "demo", "version": "1.0.0",
             "commands": [{ "id": "a", "title": "A" }, { "id": "a", "title": "B" }]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
 
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("duplicate ids must fail");
         assert!(err.contains("重复"), "unexpected message: {err}");
@@ -767,7 +767,7 @@ mod tests {
             "depends": ["base@^1.0"],
             "optional_depends": ["extra"]
         }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
 
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         assert_eq!(package.depends.len(), 1);
@@ -777,7 +777,7 @@ mod tests {
 
         let bad = r#"{ "id": "demo", "version": "1.0.0", "depends": ["base@??"] }"#;
         let tmp = TempDir::new("manifest-baddepends");
-        write_plugin(&tmp, "demo-v1.0.0.js", bad, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", bad, &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("bad req must fail");
         assert!(err.contains("版本要求"), "unexpected message: {err}");
     }
@@ -786,21 +786,21 @@ mod tests {
     fn permissions_default_to_empty_and_validate_names() {
         // 缺省全关：没写 permissions 的清单解析为空列表。
         let tmp = TempDir::new("manifest-perm-default");
-        write_plugin(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", OK_MANIFEST, &["index.js"]);
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         assert!(package.manifest.permissions.is_empty());
 
         // 声明合法权限原样保留。
         let tmp = TempDir::new("manifest-perm-ok");
         let manifest = r#"{ "id": "demo", "version": "1.0.0", "permissions": ["fs", "net"] }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         assert_eq!(package.manifest.permissions, ["fs", "net"]);
 
         // 拼错的权限名必须报错，否则作者会以为已经拿到能力。
         let tmp = TempDir::new("manifest-perm-typo");
         let manifest = r#"{ "id": "demo", "version": "1.0.0", "permissions": ["fss"] }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("typo must fail");
         assert!(
             err.contains("未知权限") && err.contains("fs, net, exec, env, typeStr"),
@@ -813,14 +813,14 @@ mod tests {
         // 目录名已经是唯一事实来源：清单里重复一遍 id/version 没有信息量。
         let tmp = TempDir::new("manifest-derive");
         let manifest = r#"{ "name": "演示", "commands": [{ "id": "go", "title": "Go" }] }"#;
-        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
 
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("dir name fills the gap");
         assert_eq!(package.manifest.id, "demo");
         assert_eq!(package.manifest.version, "1.0.0");
 
         // 空串等同没写：空 id 本来也没有意义。
-        write_plugin(
+        write_extension(
             &tmp,
             "other-v2.1.0.js",
             r#"{ "id": "", "version": "" }"#,
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(package.manifest.version, "2.1.0");
 
         // 补出来的命令标题取自展示名 → 退回 id，所以回填必须在补命令之前发生。
-        write_plugin(&tmp, "bare-v1.0.0.js", "{ }", &["index.js"]);
+        write_extension(&tmp, "bare-v1.0.0.js", "{ }", &["index.js"]);
         let package =
             read(&tmp.0.join("bare-v1.0.0.js")).expect("empty object is a valid manifest");
         assert_eq!(package.manifest.commands.len(), 1);
@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn broken_json_is_reported() {
         let tmp = TempDir::new("manifest-badjson");
-        write_plugin(&tmp, "demo-v1.0.0.js", "{ not json", &["index.js"]);
+        write_extension(&tmp, "demo-v1.0.0.js", "{ not json", &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("bad json must fail");
         assert!(err.contains("解析"), "unexpected message: {err}");
     }
@@ -875,7 +875,12 @@ mod tests {
             .collect();
         assert_eq!(
             values,
-            ["reload", "open_data_dir", "open_plugin_dir", "close_window"]
+            [
+                "reload",
+                "open_data_dir",
+                "open_extension_dir",
+                "close_window"
+            ]
         );
 
         // snake_case 是清单里的写法，别在 schema 里抄成 Rust 的变体名。
@@ -896,7 +901,7 @@ mod tests {
             .map(String::as_str)
             .collect();
         manifest_fields.sort_unstable();
-        // PluginManifest 的字段 + `$schema` 自己（宿主忽略，只给编辑器）。
+        // ExtensionManifest 的字段 + `$schema` 自己（宿主忽略，只给编辑器）。
         let mut expected = [
             "$schema",
             "commands",
@@ -928,7 +933,7 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(
             r#"{
                 "$schema": "../extension.schema.json",
-                "id": "demo", "name": "演示插件", "description": "同时演示脚本命令与 UI 命令",
+                "id": "demo", "name": "演示扩展", "description": "同时演示脚本命令与 UI 命令",
                 "version": "1.0.0", "entry": "index.js",
                 "depends": ["other@^1.0"], "optional_depends": ["extra"],
                 "permissions": ["fs", "net"],

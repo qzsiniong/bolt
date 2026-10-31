@@ -65,7 +65,7 @@ pub fn run_with_registry(
         console: channel.clone(),
         cancel: cancel.clone(),
         interaction: InteractionBridge::new(cancel).0,
-        plugins: None,
+        extensions: None,
     };
     run_script(code, Language::JavaScript, "test.js", env);
     channel

@@ -17,6 +17,6 @@ thiserror = "2"
 tracing = "0.1"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
-# 宿主模块的定时器 / 异步宿主函数依赖 tokio 反应堆：每个插件工人线程自带一个
+# 宿主模块的定时器 / 异步宿主函数依赖 tokio 反应堆：每个扩展工人线程自带一个
 # current-thread 运行时并把引擎跑在里面。
 tokio = { version = "1", features = ["rt", "time", "process", "macros"] }

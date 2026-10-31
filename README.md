@@ -6,12 +6,12 @@
 
 ## 特性
 
-- **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、插件命令或打开管理器。
+- **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
 - **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
-- **插件化扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个插件，清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
-- **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在插件自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
-- **fail-closed 插件权限**：脚本命令要用的危险 API（文件读写、网络、exec、env、输入注入）必须在清单 `permissions` 里声明，缺省一个都不给；普通脚本全权（等同自己写的代码）。详见[信任模型](docs/trust-model.md)。
-- **扩展管理与新建**：管理窗口一个列表看全插件（版本、状态徽标、声明权限、被谁依赖、清单/运行错误），每个插件可重载 / 禁用（**真不加载**）/ 在 Finder 中显示 / 打开数据目录 / 卸载（移到废纸篓）；「新建扩展」选模板（脚本 / UI / 两者）即生成带 `bolt.d.ts`、`gpui-kit.d.ts` 的可运行插件目录，IDE 直接补全。
+- **扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个扩展，清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
+- **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在扩展自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
+- **fail-closed 扩展权限**：脚本命令要用的危险 API（文件读写、网络、exec、env、输入注入）必须在清单 `permissions` 里声明，缺省一个都不给；普通脚本全权（等同自己写的代码）。详见[信任模型](docs/trust-model.md)。
+- **扩展管理与新建**：管理窗口一个列表看全扩展（版本、状态徽标、声明权限、被谁依赖、清单/运行错误），每个扩展可重载 / 禁用（**真不加载**）/ 在 Finder 中显示 / 打开数据目录 / 卸载（移到废纸篓）；「新建扩展」选模板（脚本 / UI / 两者）即生成带 `bolt.d.ts`、`gpui-kit.d.ts` 的可运行扩展目录，IDE 直接补全。
 - **Dock 布局管理器**：左侧脚本列表、右上代码编辑器、右下 Console 输出面板，面板可拖拽重排。
 - **内置编辑器**：Tree-sitter 语法高亮、行号、代码折叠、括号匹配。
 - **完整 LSP 能力**：诊断、补全、悬停、跳转定义、Code Action，由 `typescript-language-server` 子进程驱动。
@@ -41,7 +41,7 @@ cargo test --workspace               # 全部测试
 | 文档 | 内容 |
 | --- | --- |
 | [Launcher 与扩展](docs/launcher.md) | Launcher 行为、Cmd+V 粘贴识别、应用启动器、Console、统一窗口壳、内置 JSON 编辑器 |
-| [扩展（插件系统）](docs/extensions.md) | `extension.json` 清单字段、脚本命令与 UI 命令、`ui.actions` 自定义按钮、JSON Schema、扩展管理与新建扩展 |
+| [扩展（扩展系统）](docs/extensions.md) | `extension.json` 清单字段、脚本命令与 UI 命令、`ui.actions` 自定义按钮、JSON Schema、扩展管理与新建扩展 |
 | [脚本 API](docs/script-api.md) | 普通脚本可用的运行时能力：`console`、定时器、`bolt` 内置模块、宿主交互 API |
 | [脚本目录与快捷键](docs/scripts.md) | 磁盘布局与自动生成的类型声明；编辑器快捷键与多光标列选 |
 | [在 Rust 侧扩展 JS 能力](docs/host-modules.md) | `HostModule` 框架：注册 Rust 模块供脚本 `import`，`.d.ts` 自动生成 |
@@ -49,4 +49,4 @@ cargo test --workspace               # 全部测试
 | [环境要求与构建](docs/build.md) | 依赖、构建命令、打包 `.app`、菜单栏托盘、首次构建注意事项 |
 | [信任模型](docs/trust-model.md) | 哪些代码默认拿什么权限、边界在哪 |
 
-脚本存放在 `~/Library/Application Support/bolt/scripts/`，插件在同级 `extensions/` 下——两者都会在首次启动自动创建，详见[脚本目录与快捷键](docs/scripts.md)。
+脚本存放在 `~/Library/Application Support/bolt/scripts/`，扩展在同级 `extensions/` 下——两者都会在首次启动自动创建，详见[脚本目录与快捷键](docs/scripts.md)。

@@ -256,17 +256,17 @@ mod tests {
     fn move_to_trash_moves_and_suffixes_on_conflict() {
         let tmp = TempDir::new("mac-ffi-trash");
         let trash = tmp.0.join("Trash");
-        let plugin = tmp.0.join("demo-v1.0.0.js");
-        std::fs::create_dir_all(&plugin).unwrap();
-        std::fs::write(plugin.join("extension.json"), "{}").unwrap();
+        let extension = tmp.0.join("demo-v1.0.0.js");
+        std::fs::create_dir_all(&extension).unwrap();
+        std::fs::write(extension.join("extension.json"), "{}").unwrap();
 
-        let target = move_to_trash(&plugin, &trash).expect("first move");
-        assert!(!plugin.exists());
+        let target = move_to_trash(&extension, &trash).expect("first move");
+        assert!(!extension.exists());
         assert!(target.join("extension.json").is_file());
 
         // 同名再进来一次：不能覆盖废纸篓里已有的，要加后缀。
-        std::fs::create_dir_all(&plugin).unwrap();
-        let second = move_to_trash(&plugin, &trash).expect("second move");
+        std::fs::create_dir_all(&extension).unwrap();
+        let second = move_to_trash(&extension, &trash).expect("second move");
         assert_ne!(second, target);
         assert!(second.is_dir());
         assert!(target.join("extension.json").is_file());

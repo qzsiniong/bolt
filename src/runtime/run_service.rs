@@ -21,7 +21,7 @@ use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
 use crate::model::script::Language;
 use crate::ui::interaction_window::{InteractionEvent, InteractionWindow};
-use plux_js_manager::PluginStore;
+use plux_js_manager::ExtensionStore;
 use plux_rs::Bundle;
 
 /// A single script run currently in flight.
@@ -35,21 +35,21 @@ struct RunState {
 /// editor toolbar can follow the service without owning it.
 pub struct RunStateChanged(pub bool);
 
-/// 本轮要执行的东西：一个脚本文件，或一条插件命令。
+/// 本轮要执行的东西：一个脚本文件，或一条扩展命令。
 ///
 /// 两者共用同一条链路（工作线程 / 取消 / 交互窗口 / Console），区别只在工作
-/// 线程里调谁：普通脚本走一次性 rquickjs 运行时，插件命令走插件自己的常驻
-/// 运行时（`PluginStore`）。
+/// 线程里调谁：普通脚本走一次性 rquickjs 运行时，扩展命令走扩展自己的常驻
+/// 运行时（`ExtensionStore`）。
 pub enum RunTask {
     Script {
         content: String,
         language: Language,
         file_name: String,
     },
-    Plugin {
+    Extension {
         bundle: Bundle,
         command: String,
-        /// Console 里显示的名字（`插件名 · 命令标题`）。
+        /// Console 里显示的名字（`扩展名 · 命令标题`）。
         label: String,
     },
 }
@@ -58,7 +58,7 @@ impl RunTask {
     fn label(&self) -> &str {
         match self {
             Self::Script { file_name, .. } => file_name,
-            Self::Plugin { label, .. } => label,
+            Self::Extension { label, .. } => label,
         }
     }
 }
@@ -66,9 +66,9 @@ impl RunTask {
 pub struct RunService {
     scripts_dir: PathBuf,
     registry: Arc<HostRegistry>,
-    /// 插件命令的执行入口。脚本运行用不到，但两者共用同一条取消/交互链路，
+    /// 扩展命令的执行入口。脚本运行用不到，但两者共用同一条取消/交互链路，
     /// 所以放在同一个服务里。
-    plugins: Arc<PluginStore>,
+    extensions: Arc<ExtensionStore>,
     /// Cloneable handle so the runner can push output to the Console panel
     /// from a worker thread.
     console_channel: ConsoleChannel,
@@ -93,12 +93,12 @@ impl RunService {
         scripts_dir: PathBuf,
         registry: Arc<HostRegistry>,
         console_channel: ConsoleChannel,
-        plugins: Arc<PluginStore>,
+        extensions: Arc<ExtensionStore>,
     ) -> Self {
         Self {
             scripts_dir,
             registry,
-            plugins,
+            extensions,
             manager: InteractionWindowManager::new(console_channel.clone()),
             console_channel,
             running: None,
@@ -131,8 +131,8 @@ impl RunService {
         );
     }
 
-    /// 执行一条插件命令（插件必须已加载）。
-    pub fn start_plugin(
+    /// 执行一条扩展命令（扩展必须已加载）。
+    pub fn start_extension(
         &mut self,
         bundle: Bundle,
         command: String,
@@ -140,7 +140,7 @@ impl RunService {
         cx: &mut Context<Self>,
     ) {
         self.start(
-            RunTask::Plugin {
+            RunTask::Extension {
                 bundle,
                 command,
                 label,
@@ -167,8 +167,8 @@ impl RunService {
         cx.emit(RunStateChanged(true));
 
         // Fresh interaction bridge per run: the script side talks to the UI
-        // through it (progress, confirm, pickPath, requestFocus). 插件命令也用它
-        // ——每轮覆盖到插件常驻上下文上。
+        // through it (progress, confirm, pickPath, requestFocus). 扩展命令也用它
+        // ——每轮覆盖到扩展常驻上下文上。
         let (interaction, interaction_rx) = InteractionBridge::new(cancel.clone());
         self.manager
             .begin_run(interaction.clone(), interaction_rx, cancel.clone());
@@ -176,14 +176,14 @@ impl RunService {
         let console = self.console_channel.clone();
         let scripts_dir = self.scripts_dir.clone();
         let registry = self.registry.clone();
-        let plugins = self.plugins.clone();
+        let extensions = self.extensions.clone();
         let env = RunEnv {
             scripts_dir,
             registry,
             console,
             cancel,
             interaction,
-            plugins: Some(plugins),
+            extensions: Some(extensions),
         };
         std::thread::spawn(move || {
             match task {
@@ -192,11 +192,11 @@ impl RunService {
                     language,
                     file_name,
                 } => super::runner::run_script(&content, language, &file_name, env),
-                RunTask::Plugin {
+                RunTask::Extension {
                     bundle,
                     command,
                     label,
-                } => super::runner::run_plugin(bundle, &command, &label, env),
+                } => super::runner::run_extension(bundle, &command, &label, env),
             }
             done.store(true, Ordering::SeqCst);
         });

@@ -1,19 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "bolt 扩展清单（extension.json）",
-  "description": "插件目录里的清单。目录名 `<id>-v<version>.js` 是 plux bundle 的唯一事实来源：id / version 可以整行省略（省略即取目录名），写了就必须与目录名逐字一致。宿主对未知字段宽容（忽略），本 schema 用 additionalProperties: false 把拼错的字段名标出来。",
+  "description": "扩展目录里的清单。目录名 `<id>-v<version>.js` 是 plux bundle 的唯一事实来源：id / version 可以整行省略（省略即取目录名），写了就必须与目录名逐字一致。宿主对未知字段宽容（忽略），本 schema 用 additionalProperties: false 把拼错的字段名标出来。",
   "type": "object",
   "additionalProperties": false,
   "properties": {
     "$schema": {
       "type": "string",
-      "description": "本 schema 的路径，只给编辑器看，宿主忽略。宿主会把 schema 写到扩展根目录（`<extensions>/extension.schema.json`），所以插件里写 `../extension.schema.json` 即可。"
+      "description": "本 schema 的路径，只给编辑器看，宿主忽略。宿主会把 schema 写到扩展根目录（`<extensions>/extension.schema.json`），所以扩展里写 `../extension.schema.json` 即可。"
     },
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "maxLength": 64,
-      "markdownDescription": "插件标识。**省略时取目录名里的 id**，写了必须一致。只能用小写字母、数字和连字符，且以字母或数字开头。"
+      "markdownDescription": "扩展标识。**省略时取目录名里的 id**，写了必须一致。只能用小写字母、数字和连字符，且以字母或数字开头。"
     },
     "version": {
       "type": "string",
@@ -27,13 +27,13 @@
     },
     "description": {
       "type": "string",
-      "description": "插件说明，显示在扩展管理里。"
+      "description": "扩展说明，显示在扩展管理里。"
     },
     "entry": {
       "type": "string",
       "pattern": "\\.(js|ts)$",
       "default": "index.js",
-      "description": "脚本命令入口，默认 index.js，只接受 .js / .ts。纯 UI 插件（没有脚本命令）不需要它，也不用在目录里放 index.js。"
+      "description": "脚本命令入口，默认 index.js，只接受 .js / .ts。纯 UI 扩展（没有脚本命令）不需要它，也不用在目录里放 index.js。"
     },
     "depends": {
       "type": "array",
@@ -42,7 +42,7 @@
       "items": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9-]*(@.+)?$",
-        "description": "依赖的插件 id，可带 @版本要求。"
+        "description": "依赖的扩展 id，可带 @版本要求。"
       }
     },
     "optional_depends": {
@@ -52,7 +52,7 @@
       "items": {
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9-]*(@.+)?$",
-        "description": "依赖的插件 id，可带 @版本要求。"
+        "description": "依赖的扩展 id，可带 @版本要求。"
       }
     },
     "permissions": {
@@ -66,7 +66,7 @@
     },
     "commands": {
       "type": "array",
-      "description": "命令数组，每条命令变成 Launcher 里的一条 item。省略时自动补一条 id 为 run、标题为插件展示名的脚本命令。",
+      "description": "命令数组，每条命令变成 Launcher 里的一条 item。省略时自动补一条 id 为 run、标题为扩展展示名的脚本命令。",
       "items": {
         "$ref": "#/$defs/command"
       }
@@ -81,7 +81,7 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "description": "命令标识，插件内唯一。脚本命令里它就是入口模块要导出的函数名（也支持 export default 对象 / globalThis.plux.commands 挂载）。"
+          "description": "命令标识，扩展内唯一。脚本命令里它就是入口模块要导出的函数名（也支持 export default 对象 / globalThis.plux.commands 挂载）。"
         },
         "title": {
           "type": "string",
@@ -90,7 +90,7 @@
         },
         "description": {
           "type": "string",
-          "description": "副标题；省略时显示「插件名 v版本」。"
+          "description": "副标题；省略时显示「扩展名 v版本」。"
         },
         "ui": {
           "$ref": "#/$defs/ui"
@@ -158,18 +158,18 @@
           "oneOf": [
             {
               "const": "reload",
-              "title": "reload — 重新加载插件",
-              "description": "与扩展管理里的「重载」同一条路径：关闭该插件的所有 UI 窗口（包括按钮所在的这个），重开命令即用新代码。"
+              "title": "reload — 重新加载扩展",
+              "description": "与扩展管理里的「重载」同一条路径：关闭该扩展的所有 UI 窗口（包括按钮所在的这个），重开命令即用新代码。"
             },
             {
               "const": "open_data_dir",
               "title": "open_data_dir — 打开数据目录",
-              "description": "在访达中打开插件的私有数据目录（extensions-data/<id>/）。"
+              "description": "在访达中打开扩展的私有数据目录（extensions-data/<id>/）。"
             },
             {
-              "const": "open_plugin_dir",
-              "title": "open_plugin_dir — 打开插件目录",
-              "description": "在访达中显示（选中）插件自己的目录。"
+              "const": "open_extension_dir",
+              "title": "open_extension_dir — 打开扩展目录",
+              "description": "在访达中显示（选中）扩展自己的目录。"
             },
             {
               "const": "close_window",
@@ -181,12 +181,12 @@
         "command": {
           "type": "string",
           "minLength": 1,
-          "markdownDescription": "点击执行**本清单里的一条脚本命令**（`commands[*].id`）。必须存在，且不能指向另一条 UI 命令，否则清单被拒绝加载。\n\n它走插件运行时，输出与错误都进 Console——但**无法回写当前窗口的 UI**：窗口里的脚本视图与脚本命令是两套运行时。"
+          "markdownDescription": "点击执行**本清单里的一条脚本命令**（`commands[*].id`）。必须存在，且不能指向另一条 UI 命令，否则清单被拒绝加载。\n\n它走扩展运行时，输出与错误都进 Console——但**无法回写当前窗口的 UI**：窗口里的脚本视图与脚本命令是两套运行时。"
         },
         "icon": {
           "type": "string",
           "pattern": "^(?!.*\\.\\.)",
-          "description": "按钮图标：Lucide 图标名（zap、refresh-cw，见 lucide.dev/icons）或插件目录内的资产路径（icons/star.svg，带 / 或以 .svg 结尾即按路径处理）。不能含 `..`（否则清单被拒）。省略时用该动作的默认图标。"
+          "description": "按钮图标：Lucide 图标名（zap、refresh-cw，见 lucide.dev/icons）或扩展目录内的资产路径（icons/star.svg，带 / 或以 .svg 结尾即按路径处理）。不能含 `..`（否则清单被拒）。省略时用该动作的默认图标。"
         },
         "tooltip": {
           "type": "string",

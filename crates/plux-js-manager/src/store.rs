@@ -1,11 +1,11 @@
-//! 插件运行时注册表：宿主拿到的唯一跨线程调用入口。
+//! 扩展运行时注册表：宿主拿到的唯一跨线程调用入口。
 //!
 //! plux 的 `Loader` 是 `&mut` 单线程的，命令却要在工作线程里跑（不能卡住 GPUI
 //! 主线程）。所以 [`crate::JsManager`] 只持有本表的 `Arc`，宿主也从这里调
-//! [`PluginStore::invoke`]：`Loader` 负责生命周期与元数据，本表负责执行。
+//! [`ExtensionStore::invoke`]：`Loader` 负责生命周期与元数据，本表负责执行。
 //!
-//! [`PluginStore::ensure_loaded`] **不阻塞**：它只把工人线程拉起来就返回，引擎构建
-//! 与入口求值发生在插件线程上；等待就绪统一压到 [`PluginStore::invoke`] 里，那里
+//! [`ExtensionStore::ensure_loaded`] **不阻塞**：它只把工人线程拉起来就返回，引擎构建
+//! 与入口求值发生在扩展线程上；等待就绪统一压到 [`ExtensionStore::invoke`] 里，那里
 //! 本来就在工作线程上，且已经有超时与取消。
 
 use std::collections::HashMap;
@@ -21,9 +21,9 @@ use semver::Version;
 use crate::cancel::CancelToken;
 use crate::env::{JsEnv, Scope};
 use crate::error::JsError;
-use crate::worker::{POLL, PluginWorker, WorkerSpec};
+use crate::worker::{ExtensionWorker, POLL, WorkerSpec};
 
-/// 命令的默认超时。插件里一个卡死的 `while(true)` 不该把应用拖住。
+/// 命令的默认超时。扩展里一个卡死的 `while(true)` 不该把应用拖住。
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 请求中断后等工人线程收尾的宽限：等它回一条（会被丢弃的）回复，确认它已经
@@ -33,7 +33,7 @@ const ABORT_GRACE: Duration = Duration::from_millis(500);
 /// 卸载时等工人线程收尾的宽限。
 ///
 /// 正常停在消息循环里的线程毫秒级退出；**加载中**的线程最多等这么久，之后放手
-/// ——删插件 / 重建运行时不该把主线程拖住 30s（QuickJS 线程不可强杀）。
+/// ——删扩展 / 重建运行时不该把主线程拖住 30s（QuickJS 线程不可强杀）。
 const UNLOAD_GRACE: Duration = Duration::from_millis(500);
 
 /// 宿主可见的运行时状态投影。
@@ -91,7 +91,7 @@ impl InvokeRequest {
     }
 }
 
-/// 运行时表的键：plux 的插件身份就是 `(id, version)`。
+/// 运行时表的键：plux 的扩展身份就是 `(id, version)`。
 ///
 /// 收 `Version` 而不是 `String`：`(id, version)` 两个裸字符串在调用点可以无声
 /// 互换（`unload("1.0.0", "demo")` 照样编译），而 `&Bundle` 把两者绑成一个
@@ -105,13 +105,13 @@ fn key_of(bundle: &Bundle) -> Key {
     (bundle.id.clone(), bundle.version.clone())
 }
 
-/// 已注册的插件运行时。可通过 `Arc` 跨线程共享。
-pub struct PluginStore {
+/// 已注册的扩展运行时。可通过 `Arc` 跨线程共享。
+pub struct ExtensionStore {
     env: Arc<dyn JsEnv>,
-    workers: Mutex<HashMap<Key, Arc<PluginWorker>>>,
+    workers: Mutex<HashMap<Key, Arc<ExtensionWorker>>>,
 }
 
-impl PluginStore {
+impl ExtensionStore {
     pub fn new(env: Arc<dyn JsEnv>) -> Arc<Self> {
         Arc::new(Self {
             env,
@@ -119,12 +119,12 @@ impl PluginStore {
         })
     }
 
-    /// 确保插件已被安排加载；**不阻塞**。
+    /// 确保扩展已被安排加载；**不阻塞**。
     ///
     /// 已有条目一律 `Ok`（无论是否就绪）：重复调用不该重启运行时。加载成败通过
     /// [`Self::state`] 暴露，并由 [`Self::invoke`] 在真正执行前等待。
     ///
-    /// `permissions` 是插件清单里声明的权限（缺省为空 = 全关），运行时据此
+    /// `permissions` 是扩展清单里声明的权限（缺省为空 = 全关），运行时据此
     /// 过滤宿主模块的导出。
     pub fn ensure_loaded(
         &self,
@@ -136,7 +136,7 @@ impl PluginStore {
         let key = key_of(bundle);
         // 查表与 spawn 在同一把锁内完成：spawn 现在只建线程（微秒级），可以持锁。
         // 这样彻底消掉了原来"锁外 spawn、锁内复查、败者回收"的路径——败者的 Drop
-        // 现在会 join 一个正在加载的线程，而且两个引擎会各跑一遍插件顶层副作用。
+        // 现在会 join 一个正在加载的线程，而且两个引擎会各跑一遍扩展顶层副作用。
         let mut workers = self.workers.lock();
         if workers.contains_key(&key) {
             return Ok(());
@@ -148,7 +148,7 @@ impl PluginStore {
             entry: entry.to_path_buf(),
             permissions: permissions.to_vec(),
         };
-        workers.insert(key, PluginWorker::spawn(spec, self.env.clone())?);
+        workers.insert(key, ExtensionWorker::spawn(spec, self.env.clone())?);
         Ok(())
     }
 
@@ -168,7 +168,7 @@ impl PluginStore {
             .and_then(|worker| worker.last_error())
     }
 
-    /// 执行一条命令。阻塞到插件返回、超时或用户取消。
+    /// 执行一条命令。阻塞到扩展返回、超时或用户取消。
     pub fn invoke(
         &self,
         bundle: &Bundle,
@@ -190,7 +190,7 @@ impl PluginStore {
         } = request;
 
         let (reply_tx, reply_rx) = bounded(1);
-        // 先等就绪再投递：加载中的插件不该收到命令，否则消息会压在一个还没建好的
+        // 先等就绪再投递：加载中的扩展不该收到命令，否则消息会压在一个还没建好的
         // 引擎前面排队，超时也只能报"线程已退出"这种含糊话。
         let started = Instant::now();
         worker.wait_ready(timeout, &cancel)?;
@@ -220,7 +220,7 @@ impl PluginStore {
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    return Err(JsError::Runtime("插件线程已退出".to_string()));
+                    return Err(JsError::Runtime("扩展线程已退出".to_string()));
                 }
             }
         }
@@ -229,7 +229,7 @@ impl PluginStore {
     /// 请求中断并短暂等工人线程回到消息循环。
     fn give_up(
         &self,
-        worker: &Arc<PluginWorker>,
+        worker: &Arc<ExtensionWorker>,
         reply_rx: &crossbeam_channel::Receiver<Result<Option<String>, JsError>>,
         error: JsError,
     ) -> JsError {
@@ -238,7 +238,7 @@ impl PluginStore {
         error
     }
 
-    /// 停止并卸载插件运行时。先摘表（此后 `invoke` 得 `NotLoaded`），再让线程收尾；
+    /// 停止并卸载扩展运行时。先摘表（此后 `invoke` 得 `NotLoaded`），再让线程收尾；
     /// 收尾有界，卡住的加载最多耽误 [`UNLOAD_GRACE`]。
     pub fn unload(&self, bundle: &Bundle) {
         let worker = self.workers.lock().remove(&key_of(bundle));
@@ -257,12 +257,12 @@ impl PluginStore {
 
     /// 测试专用：拿到工人线程句柄，用来模拟「运行时意外死亡」。
     #[cfg(test)]
-    pub(crate) fn worker_for_test(&self, bundle: &Bundle) -> Option<Arc<PluginWorker>> {
+    pub(crate) fn worker_for_test(&self, bundle: &Bundle) -> Option<Arc<ExtensionWorker>> {
         self.workers.lock().get(&key_of(bundle)).cloned()
     }
 }
 
-impl Drop for PluginStore {
+impl Drop for ExtensionStore {
     fn drop(&mut self) {
         for (_, worker) in self.workers.lock().drain() {
             let _ = worker.shutdown(UNLOAD_GRACE);
@@ -270,7 +270,7 @@ impl Drop for PluginStore {
     }
 }
 
-/// bundle → `(id, version)`，与 [`PluginStore`] 的键一致。
+/// bundle → `(id, version)`，与 [`ExtensionStore`] 的键一致。
 pub fn bundle_key(bundle: &Bundle) -> (String, Version) {
     key_of(bundle)
 }
@@ -330,14 +330,14 @@ mod tests {
         format!(r#"{{ "id": "{id}", "name": "Demo", "version": "1.0.0", "entry": "index.js" }}"#)
     }
 
-    /// 测试里唯一的插件身份。旧签名到处写 `("demo", "1.0.0")` 两个字面量，
+    /// 测试里唯一的扩展身份。旧签名到处写 `("demo", "1.0.0")` 两个字面量，
     /// 现在一个 bundle 说明全部。
     fn demo() -> Bundle {
         Bundle::from_filename("demo-v1.0.0.js").expect("valid bundle")
     }
 
-    /// 建一个 `demo-v1.0.0.js/` 插件目录并返回 `(root, entry, store)`。
-    fn plugin(entry: &str) -> (TempDir, Arc<PluginStore>, Arc<TestEnv>) {
+    /// 建一个 `demo-v1.0.0.js/` 扩展目录并返回 `(root, entry, store)`。
+    fn extension(entry: &str) -> (TempDir, Arc<ExtensionStore>, Arc<TestEnv>) {
         let tmp = TempDir::new("store");
         let dir = "demo-v1.0.0.js";
         tmp.write(&format!("{dir}/{MANIFEST_FILE}"), &manifest("demo"));
@@ -345,34 +345,34 @@ mod tests {
         tmp.write(&format!("{dir}/{UI_ENTRY}"), "");
 
         let env = Arc::new(TestEnv::default());
-        let store = PluginStore::new(env.clone());
+        let store = ExtensionStore::new(env.clone());
         let root = tmp.0.join(dir);
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
-            .expect("plugin should load");
+            .expect("extension should load");
         (tmp, store, env)
     }
 
-    fn call(store: &PluginStore, command: &str) -> Result<Option<String>, JsError> {
+    fn call(store: &ExtensionStore, command: &str) -> Result<Option<String>, JsError> {
         store.invoke(&demo(), InvokeRequest::new(command, CancelToken::new()))
     }
 
     #[test]
     fn named_export_runs_and_returns_its_value() {
-        let (_tmp, store, _env) = plugin("export function hello() { return 'hi'; }");
+        let (_tmp, store, _env) = extension("export function hello() { return 'hi'; }");
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("hi"));
     }
 
     #[test]
     fn async_export_is_awaited() {
         let (_tmp, store, _env) =
-            plugin("export async function hello() { await Promise.resolve(); return 'later'; }");
+            extension("export async function hello() { await Promise.resolve(); return 'later'; }");
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("later"));
     }
 
     #[test]
     fn default_object_fallback_works() {
-        let (_tmp, store, _env) = plugin("export default { hello() { return { ok: true }; } };");
+        let (_tmp, store, _env) = extension("export default { hello() { return { ok: true }; } };");
         assert_eq!(
             call(&store, "hello").unwrap().as_deref(),
             Some(r#"{"ok":true}"#)
@@ -382,14 +382,14 @@ mod tests {
     #[test]
     fn global_commands_fallback_works() {
         let (_tmp, store, _env) =
-            plugin("globalThis.plux = { commands: { hello() { return 'glob'; } } };");
+            extension("globalThis.plux = { commands: { hello() { return 'glob'; } } };");
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("glob"));
     }
 
     #[test]
-    fn command_receives_plugin_context() {
-        let (_tmp, store, _env) = plugin(
-            "export function who(ctx) { return `${ctx.command}|${ctx.plugin.id}|${ctx.plugin.version}`; }",
+    fn command_receives_extension_context() {
+        let (_tmp, store, _env) = extension(
+            "export function who(ctx) { return `${ctx.command}|${ctx.extension.id}|${ctx.extension.version}`; }",
         );
         assert_eq!(
             call(&store, "who").unwrap().as_deref(),
@@ -398,8 +398,8 @@ mod tests {
     }
 
     #[test]
-    fn plugin_state_survives_between_commands() {
-        let (_tmp, store, _env) = plugin(
+    fn extension_state_survives_between_commands() {
+        let (_tmp, store, _env) = extension(
             r#"
             let count = 0;
             export function bump() { count += 1; return count; }
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn module_imports_resolve_inside_the_plugin() {
+    fn module_imports_resolve_inside_the_extension() {
         let tmp = TempDir::new("store-import");
         tmp.write("demo-v1.0.0.js/extension.json", &manifest("demo"));
         tmp.write(
@@ -423,18 +423,18 @@ mod tests {
         );
 
         let env = Arc::new(TestEnv::default());
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
         let root = tmp.0.join("demo-v1.0.0.js");
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
-            .expect("plugin should load");
+            .expect("extension should load");
 
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("nested"));
     }
 
     #[test]
     fn missing_handler_is_reported() {
-        let (_tmp, store, _env) = plugin("export function hello() { return 1; }");
+        let (_tmp, store, _env) = extension("export function hello() { return 1; }");
         assert_eq!(
             call(&store, "nope").unwrap_err(),
             JsError::MissingHandler("nope".to_string())
@@ -443,7 +443,8 @@ mod tests {
 
     #[test]
     fn thrown_errors_carry_the_message() {
-        let (_tmp, store, _env) = plugin("export function boom() { throw new Error('kaboom'); }");
+        let (_tmp, store, _env) =
+            extension("export function boom() { throw new Error('kaboom'); }");
         let error = call(&store, "boom").unwrap_err();
         match error {
             JsError::Script(message) => assert!(message.contains("kaboom"), "{message}"),
@@ -453,7 +454,7 @@ mod tests {
 
     #[test]
     fn infinite_loops_time_out_and_the_runtime_stays_usable() {
-        let (_tmp, store, _env) = plugin(
+        let (_tmp, store, _env) = extension(
             r#"
             export function spin() { while (true) {} }
             export function hello() { return 'still here'; }
@@ -476,7 +477,7 @@ mod tests {
 
     #[test]
     fn cancel_token_stops_a_running_command() {
-        let (_tmp, store, _env) = plugin("export function spin() { while (true) {} }");
+        let (_tmp, store, _env) = extension("export function spin() { while (true) {} }");
 
         let cancel = CancelToken::new();
         let killer = cancel.clone();
@@ -498,7 +499,7 @@ mod tests {
 
     #[test]
     fn unload_stops_the_worker() {
-        let (_tmp, store, _env) = plugin("export function hello() { return 'hi'; }");
+        let (_tmp, store, _env) = extension("export function hello() { return 'hi'; }");
         assert!(store.is_loaded(&demo()));
         store.unload(&demo());
         assert!(!store.is_loaded(&demo()));
@@ -507,9 +508,10 @@ mod tests {
 
     #[test]
     fn console_output_reaches_the_host() {
-        let (_tmp, store, env) = plugin("export function hello() { console.log('from plugin'); }");
+        let (_tmp, store, env) =
+            extension("export function hello() { console.log('from extension'); }");
         call(&store, "hello").unwrap();
-        assert!(env.take_logs().iter().any(|line| line == "from plugin"));
+        assert!(env.take_logs().iter().any(|line| line == "from extension"));
     }
 
     /// 带宿主模块的环境：`install_base` 只装基础函数，`install_scope` 才装
@@ -587,7 +589,7 @@ mod tests {
         );
 
         let env = Arc::new(ScopedEnv::default());
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
         let root = tmp.0.join(dir);
         store
             .ensure_loaded(
@@ -596,7 +598,7 @@ mod tests {
                 &root.join("index.js"),
                 &["typeStr".to_string()],
             )
-            .expect("plugin should load");
+            .expect("extension should load");
 
         // 调用时带上 scope，install_scope 才会把 typeStr 装上。
         let request = InvokeRequest::new("hello", CancelToken::new())
@@ -619,11 +621,11 @@ mod tests {
         );
 
         let env = Arc::new(ScopedEnv::default());
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
         let root = tmp.0.join(dir);
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
-            .expect("plugin should load");
+            .expect("extension should load");
 
         let error = call(&store, "hello").unwrap_err();
         match error {
@@ -662,7 +664,7 @@ mod tests {
 
     impl JsEnv for GateEnv {
         fn install_base<'js>(&self, ctx: &Ctx<'js>) -> rquickjs::Result<()> {
-            // console 先装：插件顶层的 console.log 要能落到 logs 里。
+            // console 先装：扩展顶层的 console.log 要能落到 logs 里。
             let logs = self.logs.clone();
             let console = Object::new(ctx.clone())?;
             console.set(
@@ -696,14 +698,14 @@ mod tests {
         }
     }
 
-    /// 建一个 `demo-v1.0.0.js` 插件目录并返回根路径。
+    /// 建一个 `demo-v1.0.0.js` 扩展目录并返回根路径。
     fn write_demo(tmp: &TempDir, entry: &str) -> std::path::PathBuf {
         tmp.write("demo-v1.0.0.js/extension.json", &manifest("demo"));
         tmp.write("demo-v1.0.0.js/index.js", entry);
         tmp.0.join("demo-v1.0.0.js")
     }
 
-    fn wait_for_state(store: &PluginStore, want: RuntimeState) {
+    fn wait_for_state(store: &ExtensionStore, want: RuntimeState) {
         for _ in 0..500 {
             if store.state(&demo()) == Some(want) {
                 return;
@@ -721,7 +723,7 @@ mod tests {
         let tmp = TempDir::new("store-nonblocking");
         let root = write_demo(&tmp, "export function hello() { return 'hi'; }");
         let (env, started, release) = gate_env();
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
 
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
@@ -748,7 +750,7 @@ mod tests {
         );
         let (env, _started, release) = gate_env();
         let logs = env.logs.clone();
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
 
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
@@ -768,7 +770,7 @@ mod tests {
         // 第二次调用不该重新加载：顶层副作用只跑一遍。
         call(&store, "hello").unwrap();
         let boots = logs.lock().iter().filter(|line| *line == "boot").count();
-        assert_eq!(boots, 1, "plugin top-level must run once");
+        assert_eq!(boots, 1, "extension top-level must run once");
     }
 
     #[test]
@@ -777,7 +779,7 @@ mod tests {
         let root = write_demo(&tmp, "throw new Error('boom');");
         let (env, _started, _release) = gate_env();
         let logs = env.logs.clone();
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
 
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
@@ -808,7 +810,7 @@ mod tests {
         );
         let (env, _started, release) = gate_env();
         let logs = env.logs.clone();
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
 
         let workers: Vec<_> = (0..8)
             .map(|_| {
@@ -837,7 +839,7 @@ mod tests {
         let tmp = TempDir::new("store-unload-loading");
         let root = write_demo(&tmp, "export function hello() { return 'hi'; }");
         let (env, started, release) = gate_env();
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
 
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
@@ -863,9 +865,9 @@ mod tests {
         let tmp = TempDir::new("store-death");
         let root = write_demo(&tmp, "export function hello() { return 'hi'; }");
         let (env, _started, _release) = gate_env();
-        // 这个插件不需要门：直接放行加载。
+        // 这个扩展不需要门：直接放行加载。
         let _ = _release.send(());
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
             .unwrap();
@@ -925,7 +927,7 @@ mod tests {
             &tmp,
             "export function quit() { throw new Error('__bolt_exit_7__'); }",
         );
-        let store = PluginStore::new(Arc::new(SentryEnv));
+        let store = ExtensionStore::new(Arc::new(SentryEnv));
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
             .unwrap();
@@ -943,7 +945,7 @@ mod tests {
         );
         let (env, _started, release) = gate_env();
         let _ = release.send(());
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
             .unwrap();
@@ -965,7 +967,7 @@ mod tests {
         );
         let (env, _started, release) = gate_env();
         let _ = release.send(());
-        let store = PluginStore::new(env);
+        let store = ExtensionStore::new(env);
         store
             .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
             .unwrap();

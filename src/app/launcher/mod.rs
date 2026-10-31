@@ -425,7 +425,7 @@ impl Render for Launcher {
         };
         let visible_count = visible.len();
         self.visible_indices = visible;
-        // items 可能在面板打开期间变化（图标补齐、插件重载）：列表变短时把
+        // items 可能在面板打开期间变化（图标补齐、扩展重载）：列表变短时把
         // 选中夹回范围内，别指向不存在的一行。
         if self
             .selected

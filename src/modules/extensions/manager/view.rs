@@ -1,4 +1,4 @@
-//! 扩展管理窗口的视图：左侧列表、右侧详情、底部插件级操作。
+//! 扩展管理窗口的视图：左侧列表、右侧详情、底部扩展级操作。
 //!
 //! 渲染期**不扫盘**：`inventory()` 只是内存遍历，磁盘扫描发生在窗口打开、
 //! 点「刷新」、以及任何一次操作之后。状态变化（禁用/卸载/新建）通过
@@ -15,15 +15,15 @@ use plux_js_manager::RuntimeState;
 use plux_rs::Bundle;
 
 use super::super::actions::{ActionSubject, extension_actions};
-use super::super::host::PluginEntry;
+use super::super::host::ExtensionEntry;
 use super::super::manifest::{active_extensions_dir, extension_data_dir};
 use super::super::report_to_console;
 use super::super::state::ExtensionsState;
 use crate::app::shell::AppShell;
 use crate::ui::window::{WindowPin, WindowTitleBar};
 
-pub(crate) struct PluginManagerView {
-    entries: Vec<PluginEntry>,
+pub(crate) struct ExtensionManagerView {
+    entries: Vec<ExtensionEntry>,
     selected: Option<Bundle>,
     status: String,
     /// 标题栏右上角的置顶图钉（公共控件，读窗口真实层级）。
@@ -33,7 +33,7 @@ pub(crate) struct PluginManagerView {
     seen_revision: u64,
 }
 
-impl PluginManagerView {
+impl ExtensionManagerView {
     pub(crate) fn new(cx: &mut App) -> Self {
         let mut view = Self {
             entries: Vec::new(),
@@ -58,7 +58,7 @@ impl PluginManagerView {
         self.seen_revision = cx.global::<AppShell>().items_revision.get();
         self.sync_selection();
         let disabled = self.entries.iter().filter(|entry| !entry.enabled).count();
-        self.status = format!("共 {} 个插件，{disabled} 个已禁用", self.entries.len());
+        self.status = format!("共 {} 个扩展，{disabled} 个已禁用", self.entries.len());
     }
 
     /// 只重取内存快照（外部操作刚改过状态时用）。
@@ -82,7 +82,7 @@ impl PluginManagerView {
         }
     }
 
-    fn selected_entry(&self) -> Option<&PluginEntry> {
+    fn selected_entry(&self) -> Option<&ExtensionEntry> {
         let selected = self.selected.as_ref()?;
         self.entries.iter().find(|entry| &entry.bundle == selected)
     }
@@ -140,7 +140,7 @@ impl PluginManagerView {
                         .text_size(px(12.))
                         .text_color(colors.muted_foreground)
                         .child(format!(
-                            "{} 下还没有插件",
+                            "{} 下还没有扩展",
                             active_extensions_dir().display()
                         )),
                 )
@@ -207,7 +207,7 @@ impl PluginManagerView {
 
     fn badges(
         &self,
-        entry: &PluginEntry,
+        entry: &ExtensionEntry,
         muted: Hsla,
         destructive: Hsla,
         primary: Hsla,
@@ -238,7 +238,7 @@ impl PluginManagerView {
                 .p(px(20.))
                 .text_size(px(12.))
                 .text_color(colors.muted_foreground)
-                .child("选一个插件查看详情")
+                .child("选一个扩展查看详情")
                 .into_any_element();
         };
 
@@ -309,7 +309,7 @@ impl PluginManagerView {
                 colors.foreground,
             ))
             .child(field_row(
-                "插件目录",
+                "扩展目录",
                 &entry.root.display().to_string(),
                 colors.muted_foreground,
                 colors.foreground,
@@ -386,13 +386,13 @@ impl PluginManagerView {
                 div()
                     .text_size(px(10.))
                     .text_color(colors.muted_foreground)
-                    .child("禁用/卸载会立即释放运行时（加载中的插件最多等 0.5s）"),
+                    .child("禁用/卸载会立即释放运行时（加载中的扩展最多等 0.5s）"),
             )
             .into_any_element()
     }
 }
 
-impl Render for PluginManagerView {
+impl Render for ExtensionManagerView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_revision(cx);
         let colors = cx.theme().colors;

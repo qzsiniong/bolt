@@ -1,11 +1,11 @@
-//! 插件目录指纹：判断「同一 id、同一版本」的目录内容有没有被改过。
+//! 扩展目录指纹：判断「同一 id、同一版本」的目录内容有没有被改过。
 //!
-//! plux 的插件身份只有 `(id, version)`：对已存在的键，`register_plugin` 直接回
+//! plux 的扩展身份只有 `(id, version)`：对已存在的键，`register_plugin` 直接回
 //! `AlreadyExistsIDAndVersion`，既不重读清单、也不碰运行时。而开发期最常见的
 //! 动作恰恰是「改完代码忘了升版本号」——磁盘变了，注册表里的元数据和跑着的引擎
 //! 却都停在旧内容上，宿主还以为一切正常。指纹就是让宿主自己发现这件事的依据。
 //!
-//! 取 `(相对路径, 大小, mtime)` 的哈希而不是文件内容哈希：插件目录里可能躺着
+//! 取 `(相对路径, 大小, mtime)` 的哈希而不是文件内容哈希：扩展目录里可能躺着
 //! 整包前端资源，逐字节读会把"打开一次 Launcher"变成一次全目录 IO。代价是
 //! 「大小不变、且 mtime 落在同一时间粒度内」的改动识别不到；编辑器保存一次就
 //! 会刷新 mtime，实际不会踩到。
@@ -15,10 +15,10 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// 不参与指纹的目录：依赖包与版本库的变动跟插件代码无关。
+/// 不参与指纹的目录：依赖包与版本库的变动跟扩展代码无关。
 const SKIPPED_DIRS: &[&str] = &["node_modules", ".git"];
 
-/// 遍历上限。插件目录正常只有几十个文件；真有人塞了几千个，也没必要为了
+/// 遍历上限。扩展目录正常只有几十个文件；真有人塞了几千个，也没必要为了
 /// 指纹把目录完整走一遍。
 const MAX_ENTRIES: usize = 4096;
 
@@ -54,7 +54,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, u64, u128)>) -> Option<
         let name = name.to_string_lossy();
         let Ok(meta) = entry.metadata() else { continue };
 
-        // 符号链接不跟随：指向目录时可能成环，指向外面时内容又不属于本插件。
+        // 符号链接不跟随：指向目录时可能成环，指向外面时内容又不属于本扩展。
         if meta.is_symlink() {
             continue;
         }
@@ -65,7 +65,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(PathBuf, u64, u128)>) -> Option<
             walk(root, &path, out);
             continue;
         }
-        // 声明文件是工具生成的（`gpui-kit.d.ts`），重生成不该让插件重载。
+        // 声明文件是工具生成的（`gpui-kit.d.ts`），重生成不该让扩展重载。
         if name.ends_with(".d.ts") || !meta.is_file() {
             continue;
         }
@@ -98,7 +98,7 @@ mod tests {
     use super::*;
     use crate::test_support::TempDir;
 
-    fn plugin_dir(tmp: &TempDir) -> PathBuf {
+    fn extension_dir(tmp: &TempDir) -> PathBuf {
         let root = tmp.0.join("demo-v1.0.0.js");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("extension.json"), "{}").unwrap();
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn same_content_gives_the_same_fingerprint() {
         let tmp = TempDir::new("fingerprint-stable");
-        let root = plugin_dir(&tmp);
+        let root = extension_dir(&tmp);
         let first = dir_fingerprint(&root).expect("readable dir");
         let second = dir_fingerprint(&root).expect("readable dir");
         assert_eq!(first, second);
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn editing_a_file_changes_the_fingerprint() {
         let tmp = TempDir::new("fingerprint-edit");
-        let root = plugin_dir(&tmp);
+        let root = extension_dir(&tmp);
         let before = dir_fingerprint(&root).unwrap();
 
         std::fs::write(root.join("index.js"), "export function a() { return 1; }").unwrap();
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn same_size_edit_is_still_detected() {
         let tmp = TempDir::new("fingerprint-samesize");
-        let root = plugin_dir(&tmp);
+        let root = extension_dir(&tmp);
         std::fs::write(root.join("index.js"), "return 'aaaaaaaa'").unwrap();
         let before = dir_fingerprint(&root).unwrap();
 
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn adding_a_file_changes_the_fingerprint() {
         let tmp = TempDir::new("fingerprint-add");
-        let root = plugin_dir(&tmp);
+        let root = extension_dir(&tmp);
         let before = dir_fingerprint(&root).unwrap();
 
         std::fs::create_dir_all(root.join("lib")).unwrap();
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn generated_declarations_and_dependency_dirs_are_ignored() {
         let tmp = TempDir::new("fingerprint-ignored");
-        let root = plugin_dir(&tmp);
+        let root = extension_dir(&tmp);
         let before = dir_fingerprint(&root).unwrap();
 
         std::fs::write(root.join("gpui-kit.d.ts"), "declare const x: number;").unwrap();

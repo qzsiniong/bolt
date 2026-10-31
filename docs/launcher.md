@@ -1,7 +1,7 @@
 # Launcher 与扩展
 
 > Bolt 的交互入口与各内容窗口：Launcher 行为、粘贴识别、应用启动器、Console、
-> 统一窗口壳、内置 JSON 编辑器。插件机制细节见[扩展](extensions.md)，
+> 统一窗口壳、内置 JSON 编辑器。扩展机制细节见[扩展](extensions.md)，
 > 返回总览见 [README](../README.md)。
 
 应用启动后**不打开任何窗口**，仅注册全局热键后台待命。
@@ -14,11 +14,11 @@
 | `↑ / ↓` | 移动选择 |
 | `Esc` | 清空搜索；搜索为空时关闭 Launcher |
 
-Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 扩展管理 / 新建扩展 / Console / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条插件命令一条：带 `ui` 的开窗口，其余的在插件运行时里执行。
+Launcher 失焦后自动关闭。所有模块贡献的命令按「近期使用 + 使用次数」的衰减分数**全局平铺**（Raycast 风格，不分段），行尾带类型徽章：**内置**（脚本管理 / 新建脚本 / 扩展管理 / 新建扩展 / Console / 内置工具）、**应用**（本机安装的 macOS 应用）、**脚本**（每个脚本一条命令，选中即运行）、**扩展**（每条扩展命令一条：带 `ui` 的开窗口，其余的在扩展运行时里执行。
 
 - **脚本管理**：打开脚本管理器窗口（单例，重复调用仅激活已有窗口）。
 - **新建脚本**：打开管理器并直接进入新建流程。
-- **扩展管理 / 新建扩展**：见[管理、禁用与卸载](extensions.md#管理禁用与卸载)与[新建扩展](extensions.md#新建扩展)；插件级动作（重载 / 禁用 / 卸载等）在每条扩展命令的 Cmd+K 面板里也有一份。
+- **扩展管理 / 新建扩展**：见[管理、禁用与卸载](extensions.md#管理禁用与卸载)与[新建扩展](extensions.md#新建扩展)；扩展级动作（重载 / 禁用 / 卸载等）在每条扩展命令的 Cmd+K 面板里也有一份。
 - **Console**：打开独立的 Console 窗口（单例），见 [Console](#console)。
 - 脚本运行由应用级 RunService 执行，与管理器窗口无关——管理器关闭后从 Launcher 运行脚本，进度 / 确认浮窗与 Console 输出照常工作（输出会进共享缓冲，打开 Console 窗口或管理器即可查看）。
 
@@ -58,7 +58,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 ## Console
 
-输出只有一条链路：所有来源——脚本的 `console.*`、插件命令与插件运行时的输出、UI 扩展的 `tracing`、宿主自己的启动/操作/错误日志——都写进 `ConsoleChannel`，落到**一份共享缓冲**（最近 1000 条，溢出丢最旧）。`Error` 级条目另外滚动写入 `~/Library/Application Support/bolt/bolt.log`（保留 500 行），打包成 `.app` 后这是唯一的落盘线索。
+输出只有一条链路：所有来源——脚本的 `console.*`、扩展命令与扩展运行时的输出、UI 扩展的 `tracing`、宿主自己的启动/操作/错误日志——都写进 `ConsoleChannel`，落到**一份共享缓冲**（最近 1000 条，溢出丢最旧）。`Error` 级条目另外滚动写入 `~/Library/Application Support/bolt/bolt.log`（保留 500 行），打包成 `.app` 后这是唯一的落盘线索。
 
 **读者各持游标**：脚本管理器右下角的 Console 面板与独立的 Console 窗口读同一份缓冲，各自记住「读到哪儿」。两个可以同时开着、各自滚动、各看各的等级筛选，谁也不抢谁的输出。
 
@@ -88,19 +88,19 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 | Console | **是** | 调试时的常驻仪表盘 |
 | 脚本管理器 | 否 | 主窗口，置顶会挡别的应用 |
 | JSON 编辑器 / 扩展管理 / 新建扩展 | 否 | 普通内容窗口 |
-| 扩展 UI 窗口 | `ui.always_on_top`（默认否） | 插件清单决定 |
+| 扩展 UI 窗口 | `ui.always_on_top`（默认否） | 扩展清单决定 |
 
 **不参与统一壳的窗口**（各有结构性理由，别顺手改造）：Launcher（无边框 Floating 面板、toggle 语义）、通知与取色（PopUp + FFI 改 styleMask 的特殊窗口）、交互提示浮窗（PopUp 非激活面板，系统标题栏）、便签（borderless，保留黑底圆形按钮视觉，但置顶状态共用同一份层级真相）。
 
-## 扩展（插件系统）
+## 扩展（扩展系统）
 
-插件存放在与 `scripts` 同级的 `extensions/` 目录，目录名就是 bundle 标识（`<id>-v<version>.js`），清单是 `extension.json`。命令分两类：**脚本命令**在每插件一条的常驻 QuickJS 线程里执行（受清单 `permissions` 约束，fail-closed），**UI 命令**由 gpui-shell 在 GPUI 主线程渲染成原生窗口（入口固定 `main.js`，无 WebView）。宿主每次唤出 Launcher 都重新扫描磁盘——新增、内容变更、删除都会被识别，禁用与卸载在扩展管理窗口或 Cmd+K 面板里完成，卸载走系统废纸篓。
+扩展存放在与 `scripts` 同级的 `extensions/` 目录，目录名就是 bundle 标识（`<id>-v<version>.js`），清单是 `extension.json`。命令分两类：**脚本命令**在每扩展一条的常驻 QuickJS 线程里执行（受清单 `permissions` 约束，fail-closed），**UI 命令**由 gpui-shell 在 GPUI 主线程渲染成原生窗口（入口固定 `main.js`，无 WebView）。宿主每次唤出 Launcher 都重新扫描磁盘——新增、内容变更、删除都会被识别，禁用与卸载在扩展管理窗口或 Cmd+K 面板里完成，卸载走系统废纸篓。
 
 完整的清单字段参考、`ui.actions` 自定义按钮（图标 / tooltip）、JSON Schema 编辑器提示、脚本命令执行模型、错误隔离与生效时机、扩展管理与新建扩展窗口、UI 命令（gpui-shell）开发指南，见 **[docs/extensions.md](extensions.md)**。
 
 ## 内置 JSON 编辑器
 
-仓库自带一个用插件机制实现的 JSON 编辑器，位于 [`extensions/json-editor-v1.0.0.js`](../extensions/json-editor-v1.0.0.js)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
+仓库自带一个用扩展机制实现的 JSON 编辑器，位于 [`extensions/json-editor-v1.0.0.js`](../extensions/json-editor-v1.0.0.js)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
 
 - **置顶可运行时切换**：清单默认 `ui.always_on_top: true`；点宿主标题栏右上角的图钉即可切换，窗口不关闭、内容不丢失。
 - **粘贴自动格式化**：向编辑器粘贴一段 ≥8 字符的文本时自动解析并格式化（行号 / 语法高亮由只读结果面板的 Markdown 承担）。

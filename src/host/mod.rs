@@ -30,7 +30,7 @@ pub struct HostModule {
     declaration: String,
     exports: Vec<String>,
     /// 导出名 → 所需权限（见 `plux_js_manager::PERMISSIONS`）。没登记的导出
-    /// 不需要声明。插件运行时用它把导出拆成"允许 / 拒绝"两半；普通脚本链路
+    /// 不需要声明。扩展运行时用它把导出拆成"允许 / 拒绝"两半；普通脚本链路
     /// 不看它（脚本 = 用户自己写的代码，全权）。
     required: HashMap<String, String>,
     installer: Installer,
@@ -59,7 +59,7 @@ impl HostModule {
         self
     }
 
-    /// Add an exported name guarded by a permission: 插件清单不声明该权限时，
+    /// Add an exported name guarded by a permission: 扩展清单不声明该权限时，
     /// 运行时里这个导出是调用即抛错的占位函数。
     pub fn export_guarded(mut self, name: impl Into<String>, permission: &str) -> Self {
         let name = name.into();
@@ -174,7 +174,7 @@ impl Loader for HostLoader {
     ) -> Result<Module<'js>> {
         // 1. Registered host module → forward to the global namespace.
         //    转发源码由 plux-js-manager 统一生成（转发函数每次调用都现取
-        //    `globalThis.__<name>`，插件与脚本两条链路行为一致）。脚本链路
+        //    `globalThis.__<name>`，扩展与脚本两条链路行为一致）。脚本链路
         //    是用户自己写的代码，全权：denied 恒为空。
         if let Some(module) = self.registry.modules.get(name) {
             let source =
@@ -184,7 +184,7 @@ impl Loader for HostLoader {
 
         // 2. File-based module (relative path or bare path).
         //    单文件脚本没有"导入方"概念，`base` 传空串：相对说明符以脚本
-        //    目录为基准。解析逻辑与插件运行时共用同一份。
+        //    目录为基准。解析逻辑与扩展运行时共用同一份。
         let path = plux_js_manager::resolve_file(&self.scripts_dir, "", name)
             .ok_or_else(|| Error::new_loading_message(name, "module not found"))?;
         let source = std::fs::read_to_string(&path)

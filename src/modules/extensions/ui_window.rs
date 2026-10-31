@@ -1,6 +1,6 @@
 //! UI 命令（gpui-shell）窗口。
 //!
-//! 一条带 `ui` 块的命令 = 一个原生窗口：插件目录下的 `main.js`
+//! 一条带 `ui` 块的命令 = 一个原生窗口：扩展目录下的 `main.js`
 //! `export default class extends View`，宿主在同进程 GPUI 主线程把它渲染成真实
 //! 元素（没有 WebView）。
 //!
@@ -59,14 +59,14 @@ fn chrome_min_width(actions: usize) -> f32 {
     CHROME_LEADING_WIDTH + (actions + 1) as f32 * CHROME_CONTROL_WIDTH
 }
 
-/// 扩展窗口的宿主外壳：宿主自绘标题栏（窗口标题 + 插件名 + 自定义动作按钮 +
+/// 扩展窗口的宿主外壳：宿主自绘标题栏（窗口标题 + 扩展名 + 自定义动作按钮 +
 /// 置顶图钉）+ 脚本视图。
 struct ExtensionChrome {
     shell_root: Entity<gpui_shell::ShellRoot>,
     /// 主标题：清单 `ui.title`，没写时回退到命令标题。
     title: SharedString,
-    /// 副标题：插件名，一眼看出这个窗口是谁开的。
-    plugin: SharedString,
+    /// 副标题：扩展名，一眼看出这个窗口是谁开的。
+    extension: SharedString,
     pin: Entity<WindowPin>,
     /// 清单 `ui.actions` 解析出的按钮，声明顺序即渲染顺序（图钉固定最右）。
     actions: Vec<ChromeAction>,
@@ -91,7 +91,7 @@ enum ChromeKind {
 }
 
 /// 任意资产路径的图标：内置 Lucide 图标也是这条路（`icons/<name>.svg`），
-/// 插件自己提供的 `icons/x.svg` 由复合资产源按已登记的插件根解析。
+/// 扩展自己提供的 `icons/x.svg` 由复合资产源按已登记的扩展根解析。
 #[derive(Clone, Debug)]
 struct AssetIcon(SharedString);
 
@@ -104,9 +104,9 @@ impl IconNamed for AssetIcon {
 /// builtin 动作的默认图标与提示（清单没写 `icon` / `tooltip` 时用）。
 fn builtin_presentation(builtin: UiBuiltin) -> (IconName, &'static str) {
     match builtin {
-        UiBuiltin::Reload => (IconName::RefreshCw, "重新加载插件"),
+        UiBuiltin::Reload => (IconName::RefreshCw, "重新加载扩展"),
         UiBuiltin::OpenDataDir => (IconName::FolderOpen, "打开数据目录"),
-        UiBuiltin::OpenPluginDir => (IconName::Folder, "打开插件目录"),
+        UiBuiltin::OpenExtensionDir => (IconName::Folder, "打开扩展目录"),
         UiBuiltin::CloseWindow => (IconName::X, "关闭窗口"),
     }
 }
@@ -140,7 +140,7 @@ impl ExtensionChrome {
         match &self.actions[index].kind {
             ChromeKind::Builtin(UiBuiltin::Reload) => ops::reload(cx, &self.subject),
             ChromeKind::Builtin(UiBuiltin::OpenDataDir) => ops::open_data_dir(cx, &self.subject),
-            ChromeKind::Builtin(UiBuiltin::OpenPluginDir) => ops::reveal(cx, &self.subject),
+            ChromeKind::Builtin(UiBuiltin::OpenExtensionDir) => ops::reveal(cx, &self.subject),
             ChromeKind::Builtin(UiBuiltin::CloseWindow) => window.remove_window(),
             ChromeKind::Command(target) => exec::run_command(cx, (**target).clone()),
         }
@@ -151,9 +151,9 @@ impl Render for ExtensionChrome {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let actions_row = self.action_buttons(cx);
         let mut bar = WindowTitleBar::new(self.title.clone());
-        // 插件名当副标题；与主标题相同时不重复（脚手架模板默认就把它俩写成一样）。
-        if self.plugin != self.title {
-            bar = bar.subtitle(self.plugin.clone());
+        // 扩展名当副标题；与主标题相同时不重复（脚手架模板默认就把它俩写成一样）。
+        if self.extension != self.title {
+            bar = bar.subtitle(self.extension.clone());
         }
         if let Some(row) = actions_row {
             bar = bar.trailing(row);
@@ -162,9 +162,9 @@ impl Render for ExtensionChrome {
             .flex()
             .flex_col()
             .size_full()
-            // 宿主自绘标题栏：公共壳（标题 + 插件名 + 自定义动作按钮 + 置顶图钉）。
+            // 宿主自绘标题栏：公共壳（标题 + 扩展名 + 自定义动作按钮 + 置顶图钉）。
             .child(bar.pin(self.pin.clone()))
-            // flex_1：标题栏以下整块都是插件的渲染区。渲染 `content()` 而不是
+            // flex_1：标题栏以下整块都是扩展的渲染区。渲染 `content()` 而不是
             // `shell_root` 本身：窗口根已经是外层 `ShellRoot`，脚本视图直接当它的
             // content 少一层；且每帧重新读取，热重载替换 content 后立刻生效。
             .child(
@@ -176,11 +176,11 @@ impl Render for ExtensionChrome {
     }
 }
 
-/// 关掉某个插件的所有 UI 窗口，返回关掉的数量。
+/// 关掉某个扩展的所有 UI 窗口，返回关掉的数量。
 ///
 /// 重载 / 卸载前必须调：gpui-shell 的 watcher 与已加载视图都指向那个目录，
 /// 目录被替换或移走之后它们只会一路报错，比关窗难排查得多。
-pub(crate) fn close_plugin_windows(cx: &mut App, root: &std::path::Path) -> usize {
+pub(crate) fn close_extension_windows(cx: &mut App, root: &std::path::Path) -> usize {
     let handles: Vec<PathBuf> = {
         let state = cx.global::<ExtensionsState>();
         state
@@ -207,23 +207,23 @@ pub(crate) fn close_plugin_windows(cx: &mut App, root: &std::path::Path) -> usiz
 }
 
 /// 打开（或聚焦）一条 UI 命令的窗口。
-pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
+pub(crate) fn open_extension_ui(cx: &mut App, target: CommandTarget) {
     let console = cx.global::<AppShell>().console_channel.clone();
 
     let Some(ui) = target.ui.clone() else {
         console.error(format!(
             "命令 {}.{} 没有 ui 声明",
-            target.plugin_id, target.command_id
+            target.extension_id, target.command_id
         ));
         return;
     };
 
     let Some(runtime) = cx.global::<ExtensionsState>().shell_runtime.clone() else {
-        console.error("UI 运行时不可用（gpui-shell 初始化失败），无法打开插件窗口");
+        console.error("UI 运行时不可用（gpui-shell 初始化失败），无法打开扩展窗口");
         return;
     };
 
-    // 单例：同一插件只保留一个窗口；句柄失效说明窗口已经关了，重新开一个。
+    // 单例：同一扩展只保留一个窗口；句柄失效说明窗口已经关了，重新开一个。
     let existing = cx
         .global::<ExtensionsState>()
         .ui_windows
@@ -242,18 +242,18 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
             .remove(&target.root);
     }
 
-    let plugin_id = target.plugin_id.clone();
+    let extension_id = target.extension_id.clone();
     let pinned = ui.always_on_top;
     // 数据目录与授权必须在 load 之前设置：参见模块头部说明。
-    let data_dir = match ensure_extension_data_dir(&plugin_id) {
+    let data_dir = match ensure_extension_data_dir(&extension_id) {
         Ok(dir) => dir,
         Err(e) => {
-            console.warn(format!("插件 {plugin_id} 的数据目录不可用：{e}"));
-            extension_data_dir(&plugin_id)
+            console.warn(format!("扩展 {extension_id} 的数据目录不可用：{e}"));
+            extension_data_dir(&extension_id)
         }
     };
-    if let Err(e) = gpui_shell::set_bundle_id(&format!("bolt.{plugin_id}")) {
-        console.warn(format!("插件 {plugin_id} 的应用标识不可用：{e}"));
+    if let Err(e) = gpui_shell::set_bundle_id(&format!("bolt.{extension_id}")) {
+        console.warn(format!("扩展 {extension_id} 的应用标识不可用：{e}"));
     }
     // 目录里没有 gpui-shell.json：能力完全由宿主安装，清单里的开关决定剪贴板。
     let clipboard = ui.capabilities.clipboard;
@@ -268,19 +268,19 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
             .exit(true),
     );
 
-    // 插件自己的 `svg("icons/x.svg")` 相对插件根解析，需要先登记。
+    // 扩展自己的 `svg("icons/x.svg")` 相对扩展根解析，需要先登记。
     cx.global::<ExtensionsState>()
         .assets
         .register_root(target.root.clone());
 
     let root = target.root.clone();
-    let plugin = target.plugin_name.clone();
+    let extension = target.extension_name.clone();
     // 窗口标题 = 清单的 `ui.title`（省略时回退到命令标题）。它同时是自绘标题栏
-    // 的主标题与系统窗口标题——插件名退到副标题，不再顶替窗口标题。
+    // 的主标题与系统窗口标题——扩展名退到副标题，不再顶替窗口标题。
     let title = ui.display_title(&target.title).to_string();
     let load_console = console.clone();
     let window_size = (ui.width, ui.height);
-    // 清单 ui.actions → 标题栏按钮。command 型按 (plugin_id, command_id) 回
+    // 清单 ui.actions → 标题栏按钮。command 型按 (extension_id, command_id) 回
     // 宿主清单里查 target（校验已保证存在且是脚本命令；这里查不到就跳过并
     // 留 warn，不让一个坏按钮挡住整个窗口）。图标与提示在这里就解析好：
     // 清单写的覆盖默认值，`icon` 未写时用动作自带的 Lucide 图标。
@@ -301,7 +301,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
                     }
                     Ok(UiActionKind::Command(action_command)) => {
                         let found = commands.iter().find(|candidate| {
-                            candidate.plugin_id == plugin_id
+                            candidate.extension_id == extension_id
                                 && candidate.command_id == action_command
                         });
                         match found {
@@ -312,7 +312,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
                             ),
                             None => {
                                 console.warn(format!(
-                                    "命令 {plugin_id}.{command_id} 的 ui.actions 引用了未知命令 `{action_command}`，已忽略"
+                                    "命令 {extension_id}.{command_id} 的 ui.actions 引用了未知命令 `{action_command}`，已忽略"
                                 ));
                                 return None;
                             }
@@ -320,7 +320,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
                     }
                     Err(error) => {
                         console.warn(format!(
-                            "命令 {plugin_id}.{command_id} 的 ui.actions 被忽略：{error}"
+                            "命令 {extension_id}.{command_id} 的 ui.actions 被忽略：{error}"
                         ));
                         return None;
                     }
@@ -362,7 +362,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
         .min_size(min_size.0, min_size.1)
         .pinned(pinned);
     let chrome_title: SharedString = title.clone().into();
-    let chrome_plugin: SharedString = plugin.clone().into();
+    let chrome_extension: SharedString = extension.clone().into();
     let opened = cx.open_window(spec.to_options(cx), move |window, cx| {
         // 清单声明置顶：创建视图之前抬层级，`WindowPin` 首帧读到的就是真值。
         if pinned {
@@ -373,7 +373,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
         let chrome = cx.new(|_| ExtensionChrome {
             shell_root,
             title: chrome_title,
-            plugin: chrome_plugin,
+            extension: chrome_extension,
             pin,
             actions: chrome_actions,
             subject,
@@ -383,7 +383,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     let handle = match opened {
         Ok(handle) => handle,
         Err(e) => {
-            console.error(format!("无法打开插件窗口 {title}：{e}"));
+            console.error(format!("无法打开扩展窗口 {title}：{e}"));
             return;
         }
     };
@@ -392,13 +392,13 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
         .ui_windows
         .insert(target.root.clone(), handle.into());
     console.info(format!(
-        "已打开插件窗口「{title}」（{plugin_id} · {}{}）",
+        "已打开扩展窗口「{title}」（{extension_id} · {}{}）",
         target.command_id,
         if pinned { " · 置顶" } else { "" }
     ));
 }
 
-/// 载入插件并返回窗口根里的脚本视图；加载失败时退回一个可选中复制的错误面，
+/// 载入扩展并返回窗口根里的脚本视图；加载失败时退回一个可选中复制的错误面，
 /// 而不是让宿主 panic。
 fn load_shell_root(
     runtime: &Rc<gpui_shell::ShellRuntime>,
@@ -413,14 +413,14 @@ fn load_shell_root(
             #[cfg(debug_assertions)]
             match runtime.watch(&shell_root, window, cx) {
                 Ok(watcher) => watcher.forget(),
-                Err(e) => console.warn(format!("插件热重载不可用：{e:#}")),
+                Err(e) => console.warn(format!("扩展热重载不可用：{e:#}")),
             }
             shell_root
         }
         Err(e) => {
             let message = format!("{e:#}");
             console.error(format!(
-                "插件加载失败 {}：{}",
+                "扩展加载失败 {}：{}",
                 root.display(),
                 first_lines(&message, 12)
             ));
@@ -436,7 +436,7 @@ struct LoadFailure(String);
 impl Render for LoadFailure {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         gpui_shell::failure_surface(
-            "插件加载失败",
+            "扩展加载失败",
             &self.0,
             "修正入口脚本后重新打开该命令",
             window,
@@ -483,7 +483,7 @@ mod tests {
         assert!(chrome_min_width(5) > 280.);
     }
 
-    /// 在 headless 窗口里真实加载一个插件目录的入口脚本，构建并物化一次元素。
+    /// 在 headless 窗口里真实加载一个扩展目录的入口脚本，构建并物化一次元素。
     fn check_loads(dir: &std::path::Path, cx: &mut gpui_kit::TestAppContext) {
         cx.update(gpui_shell::init);
         let runtime = gpui_shell::ShellRuntime::new_isolated().expect("start shell runtime");
@@ -499,25 +499,25 @@ mod tests {
     }
 
     /// JS 没有编译期检查：这里用 gpui-shell 自带的 `check` 在 headless 窗口里
-    /// 真实加载内置示例插件的 `main.js`，构建并物化一次元素描述。
+    /// 真实加载内置示例扩展的 `main.js`，构建并物化一次元素描述。
     #[gpui_kit::test]
-    fn demo_plugin_ui_loads(cx: &mut gpui_kit::TestAppContext) {
+    fn demo_extension_ui_loads(cx: &mut gpui_kit::TestAppContext) {
         use super::super::manifest;
 
         let tmp = crate::test_support::TempDir::new("demo-ui-check");
-        let plugins = tmp.0.join("plugins");
-        std::fs::create_dir_all(&plugins).expect("create plugins dir");
-        manifest::ensure_demo_plugin(&plugins).expect("write demo plugin");
-        check_loads(&plugins.join(manifest::DEMO_DIR), cx);
+        let extensions = tmp.0.join("extensions");
+        std::fs::create_dir_all(&extensions).expect("create extensions dir");
+        manifest::ensure_demo_extension(&extensions).expect("write demo extension");
+        check_loads(&extensions.join(manifest::DEMO_DIR), cx);
     }
 
     /// 仓库内 `json-editor` 同样真实加载一次：入口脚本写错、引用了不存在的
     /// 模块/组件/样式方法都会让它失败。
     #[gpui_kit::test]
-    fn json_editor_plugin_ui_loads(cx: &mut gpui_kit::TestAppContext) {
+    fn json_editor_extension_ui_loads(cx: &mut gpui_kit::TestAppContext) {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("extensions/json-editor-v1.0.0.js");
-        assert!(dir.is_dir(), "缺少仓库插件目录 {}", dir.display());
+        assert!(dir.is_dir(), "缺少仓库扩展目录 {}", dir.display());
         check_loads(&dir, cx);
     }
 

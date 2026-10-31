@@ -3,7 +3,7 @@ name = "bolt"
 version = "0.1.0"
 edition = "2024"
 
-# 插件运行时（plux-rs 的 JS Manager 适配器）独立成一个 crate，与宿主解耦：
+# 扩展运行时（plux-rs 的 JS Manager 适配器）独立成一个 crate，与宿主解耦：
 # 它不依赖 gpui / bolt 的任何类型，宿主通过 `JsEnv` 注入 console、宿主模块与
 # 交互 API。`[patch]` 与 `[profile]` 只在 workspace 根生效，所以都留在本文件。
 [workspace]
@@ -64,8 +64,8 @@ swc_ecma_ast = "29.0.2"
 gpui-shell = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3", default-features = false, features = [
 	"quickjs",
 ] }
-# 第三方扩展（插件）框架：plux 管生命周期/版本/依赖，plux-js-manager 提供
-# QuickJS 适配器（每插件一个常驻运行时，专用线程持有）。
+# 第三方扩展框架：plux 管生命周期/版本/依赖，plux-js-manager 提供
+# QuickJS 适配器（每扩展一个常驻运行时，专用线程持有）。
 plux-rs = { version = "1.1", default-features = false }
 plux-js-manager = { path = "crates/plux-js-manager" }
 # gpui-shell 通过 tracing 上报脚本 console 输出、加载失败与热重载结果；

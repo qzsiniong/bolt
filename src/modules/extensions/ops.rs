@@ -19,13 +19,13 @@ pub(crate) fn set_enabled(cx: &mut App, subject: &ActionSubject, enabled: bool) 
     let outcome = {
         let state = cx.global::<ExtensionsState>();
         let mut host = state.host.borrow_mut();
-        host.set_enabled(&subject.plugin_id, enabled)
+        host.set_enabled(&subject.extension_id, enabled)
     };
     match outcome {
         Ok(report) => {
             report_to_console(cx, &report);
             console(cx).info(format!(
-                "插件 {} 已{}",
+                "扩展 {} 已{}",
                 subject.label(),
                 if enabled {
                     "启用"
@@ -36,17 +36,17 @@ pub(crate) fn set_enabled(cx: &mut App, subject: &ActionSubject, enabled: bool) 
             windows::items_changed(cx);
         }
         Err(error) => console(cx).warn(format!(
-            "{}插件 {} 失败：{error}",
+            "{}扩展 {} 失败：{error}",
             if enabled { "启用" } else { "禁用" },
             subject.label()
         )),
     }
 }
 
-/// 重载：重读清单 + 重建运行时。先关掉该插件的 UI 窗口——它们指向旧的
+/// 重载：重读清单 + 重建运行时。先关掉该扩展的 UI 窗口——它们指向旧的
 /// `ShellRoot`，注册表换了之后继续留着只会一路报错。
 pub(crate) fn reload(cx: &mut App, subject: &ActionSubject) {
-    let closed = ui_window::close_plugin_windows(cx, &subject.root);
+    let closed = ui_window::close_extension_windows(cx, &subject.root);
     let outcome = {
         let state = cx.global::<ExtensionsState>();
         let mut host = state.host.borrow_mut();
@@ -56,7 +56,7 @@ pub(crate) fn reload(cx: &mut App, subject: &ActionSubject) {
         Ok(report) => {
             report_to_console(cx, &report);
             console(cx).info(format!(
-                "插件 {} 已重新加载{}",
+                "扩展 {} 已重新加载{}",
                 subject.label(),
                 if closed > 0 {
                     format!("（关闭了 {closed} 个窗口，重新打开命令即用新代码）")
@@ -66,11 +66,11 @@ pub(crate) fn reload(cx: &mut App, subject: &ActionSubject) {
             ));
             windows::items_changed(cx);
         }
-        Err(error) => console(cx).warn(format!("重载插件 {} 失败：{error}", subject.label())),
+        Err(error) => console(cx).warn(format!("重载扩展 {} 失败：{error}", subject.label())),
     }
 }
 
-/// 在 Finder 中显示插件目录（选中那一层）。
+/// 在 Finder 中显示扩展目录（选中那一层）。
 ///
 /// 拉起 Finder 的动作**放到工作线程**（`mac_ffi::reveal_in_background` 内部起
 /// 线程）：调用方是 GPUI 的点击处理器，在里面同步激活别的 App 会让 AppKit 在
@@ -85,17 +85,17 @@ pub(crate) fn reveal(cx: &App, subject: &ActionSubject) {
     });
 }
 
-/// 打开插件的私有数据目录（`extensions-data/<id>/`）。建目录留在主线程（快），
+/// 打开扩展的私有数据目录（`extensions-data/<id>/`）。建目录留在主线程（快），
 /// 打开窗口交给工作线程，原因同 [`reveal`]。
 pub(crate) fn open_data_dir(cx: &App, subject: &ActionSubject) {
-    let dir = match ensure_extension_data_dir(&subject.plugin_id) {
+    let dir = match ensure_extension_data_dir(&subject.extension_id) {
         Ok(dir) => dir,
         Err(error) => {
             console(cx).warn(format!(
-                "插件 {} 的数据目录不可用：{error}",
+                "扩展 {} 的数据目录不可用：{error}",
                 subject.label()
             ));
-            extension_data_dir(&subject.plugin_id)
+            extension_data_dir(&subject.extension_id)
         }
     };
     let console = console(cx).clone();
@@ -111,7 +111,7 @@ pub(crate) fn open_data_dir(cx: &App, subject: &ActionSubject) {
 /// 顺序就是正确性：注销先于删目录，被依赖时（plux 拒绝卸载）就此打住，磁盘
 /// 一个字节都不动。
 pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
-    let closed = ui_window::close_plugin_windows(cx, &subject.root);
+    let closed = ui_window::close_extension_windows(cx, &subject.root);
 
     let unregistered = {
         let state = cx.global::<ExtensionsState>();
@@ -119,7 +119,7 @@ pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
         host.forget(&subject.bundle)
     };
     if let Err(error) = unregistered {
-        console(cx).warn(format!("卸载插件 {} 失败：{error}", subject.label()));
+        console(cx).warn(format!("卸载扩展 {} 失败：{error}", subject.label()));
         return;
     }
 
@@ -155,11 +155,11 @@ pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
 
     match moved {
         Ok(message) => {
-            console(cx).info(format!("卸载插件 {}：{message}", subject.label()));
+            console(cx).info(format!("卸载扩展 {}：{message}", subject.label()));
             mac_ffi::notify(
                 "Bolt",
                 &format!(
-                    "已卸载插件 {}{}",
+                    "已卸载扩展 {}{}",
                     subject.label(),
                     if closed > 0 {
                         format!("（关闭了 {closed} 个窗口）")
@@ -169,7 +169,7 @@ pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
                 ),
             );
         }
-        Err(error) => console(cx).error(format!("卸载插件 {} 失败：{error}", subject.label())),
+        Err(error) => console(cx).error(format!("卸载扩展 {} 失败：{error}", subject.label())),
     }
     windows::items_changed(cx);
 }
@@ -181,7 +181,7 @@ fn console(cx: &App) -> &crate::console_channel::ConsoleChannel {
 /// 供 `actions::extension_actions` 构造卸载确认文案。
 pub(crate) fn uninstall_description(subject: &ActionSubject) -> String {
     let mut text = format!(
-        "插件 {}\n{}\n\n目录会被移到废纸篓，可以再拖回来恢复。",
+        "扩展 {}\n{}\n\n目录会被移到废纸篓，可以再拖回来恢复。",
         subject.label(),
         subject.root.display()
     );
@@ -197,7 +197,7 @@ pub(crate) fn uninstall_description(subject: &ActionSubject) -> String {
         ));
     }
     if super::manifest::uses_bundled_extensions() {
-        text.push_str("\n\n开发构建：这是仓库里的插件目录，移走后需要用 git 恢复。");
+        text.push_str("\n\n开发构建：这是仓库里的扩展目录，移走后需要用 git 恢复。");
     }
     text
 }

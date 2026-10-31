@@ -146,7 +146,7 @@ declare module "my-utils" {
 
 如果省略 `declaration`，框架会按 `.export("xxx")` 自动生成 `export const xxx: any;`（适合快速原型，但无类型信息）。推荐始终手写完整的 `declaration`，以获得 IDE 补全和诊断。
 
-这些声明在扩展目录里落成 `bolt.d.ts`（由 `HostRegistry::write_type_declarations` 汇总全部宿主模块）。「新建扩展」生成插件时会自动写一份，UI 命令另配 `gpui-kit.d.ts` 与 `jsconfig.json`——详见[新建扩展](extensions.md#新建扩展)。
+这些声明在扩展目录里落成 `bolt.d.ts`（由 `HostRegistry::write_type_declarations` 汇总全部宿主模块）。「新建扩展」生成扩展时会自动写一份，UI 命令另配 `gpui-kit.d.ts` 与 `jsconfig.json`——详见[新建扩展](extensions.md#新建扩展)。
 
 ## 进阶：注入全局对象（非模块）
 

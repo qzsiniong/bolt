@@ -21,13 +21,13 @@ npm i -g typescript-language-server typescript
 cargo run                        # 调试运行
 cargo build                      # 仅构建
 cargo test --workspace           # 运行全部测试（bolt + crates/plux-js-manager）
-cargo test -p plux-js-manager    # 只跑插件运行时那部分
+cargo test -p plux-js-manager    # 只跑扩展运行时那部分
 ./scripts/build-macos-app.sh          # 打包成 target/release/Bolt.app
 ./scripts/build-macos-app.sh --sign   # 打包 + ad-hoc 签名（绕过 Gatekeeper）
 ./scripts/build-macos-app.sh --clean  # 先 cargo clean 再完整打包
 ```
 
-工程是 cargo workspace：根包 `bolt` 是应用本体，[crates/plux-js-manager](../crates/plux-js-manager) 是不依赖 gpui 的 JS 插件 manager（可在没有图形环境下单独测试）。`[patch]` / `[profile]` 只在 workspace 根生效。
+工程是 cargo workspace：根包 `bolt` 是应用本体，[crates/plux-js-manager](../crates/plux-js-manager) 是不依赖 gpui 的 JS 扩展 manager（可在没有图形环境下单独测试）。`[patch]` / `[profile]` 只在 workspace 根生效。
 
 ### 依赖说明（无本地补丁）
 
@@ -88,10 +88,10 @@ scripts/
 
 **QuickJS-JIT 签名要求**：`entitlements.plist` 里声明了 `com.apple.security.cs.allow-unsigned-executable-memory`，因为 QuickJS-JIT 在进程内动态生成机器码。没有这个 entitlement，签名后的 App 一跑脚本就会 `SIGKILL`。
 
-应用启动时会依次完成：**先建 Console 缓冲**（第一时间创建，启动期任何失败都进 Console 而不是只到 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库插件）→ 生成 `demo` 示例插件（目录已存在则不动）→ 装配插件宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：**先建 Console 缓冲**（第一时间创建，启动期任何失败都进 Console 而不是只到 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库扩展）→ 生成 `demo` 示例扩展（目录已存在则不动）→ 装配扩展宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
 
 `eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（共享缓冲，容量 1000、溢出丢最旧；视图打开前的条目会留着，打开后一并显示；调试构建下还会同时打到终端）。`Error` 级条目另外同步落盘到数据目录的 `bolt.log`（滚动保留最近 500 行）——用户若从不打开 Console，日志文件就是启动失败唯一的出路。
 
 > **首次构建**：UI 命令的运行时来自 git 依赖 `https://github.com/longbridge/gpui-kit`（tag `v0.7.3`，crates.io 上只有占位包），首次 `cargo build` 需要联网拉取该仓库与它嵌套的 `quickjs-jit`/LLRT，并编译 cranelift（JIT），明显慢于之后的增量构建。`Cargo.lock` 已提交，tag 不浮动。
 >
-> 普通脚本、插件运行时与 UI 命令**共用同一个 QuickJS**：`[patch.crates-io] rquickjs` 把 crates.io 的 `rquickjs` 改道到 gpui-kit 仓库里的兼容 facade（`pub use quickjs_jit::*`），因此二进制里不会链接两份 QuickJS 静态库。
+> 普通脚本、扩展运行时与 UI 命令**共用同一个 QuickJS**：`[patch.crates-io] rquickjs` 把 crates.io 的 `rquickjs` 改道到 gpui-kit 仓库里的兼容 facade（`pub use quickjs_jit::*`），因此二进制里不会链接两份 QuickJS 静态库。

@@ -1,8 +1,8 @@
 //! Cooperative cancellation token shared between the host UI and a running
-//! plugin command.
+//! extension command.
 //!
 //! Two independent mechanisms watch it: QuickJS's interrupt handler preempts
-//! long-running JS, and the host side polls it while waiting for the plugin
+//! long-running JS, and the host side polls it while waiting for the extension
 //! thread's reply (where no JS executes, so the handler never fires).
 
 use std::sync::Arc;

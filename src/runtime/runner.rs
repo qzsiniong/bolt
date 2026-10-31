@@ -16,14 +16,14 @@ use crate::console_channel::ConsoleChannel;
 use crate::host::modules::bolt;
 use crate::host::{HostLoader, HostRegistry, HostResolver};
 use crate::model::script::Language;
-use crate::modules::extensions::js_env::PluginRunScope;
-use plux_js_manager::{InvokeRequest, JsError, PluginStore};
+use crate::modules::extensions::js_env::ExtensionRunScope;
+use plux_js_manager::{ExtensionStore, InvokeRequest, JsError};
 use plux_rs::Bundle;
 
-/// 取消令牌由插件运行时 crate 提供：命令执行与脚本执行共用同一个语义。
+/// 取消令牌由扩展运行时 crate 提供：命令执行与脚本执行共用同一个语义。
 pub use plux_js_manager::CancelToken;
 
-/// Host-side environment for one script or plugin-command execution, grouped so
+/// Host-side environment for one script or extension-command execution, grouped so
 /// the run entry point does not take a long positional argument list.
 pub(crate) struct RunEnv {
     /// Base directory used to resolve relative module imports.
@@ -32,8 +32,8 @@ pub(crate) struct RunEnv {
     pub(crate) console: ConsoleChannel,
     pub(crate) cancel: CancelToken,
     pub(crate) interaction: InteractionBridge,
-    /// 插件运行时。普通脚本用不到；插件命令缺了它就无法执行。
-    pub(crate) plugins: Option<Arc<PluginStore>>,
+    /// 扩展运行时。普通脚本用不到；扩展命令缺了它就无法执行。
+    pub(crate) extensions: Option<Arc<ExtensionStore>>,
 }
 
 /// Run a script to completion. Call from a worker thread — never on the GPUI
@@ -45,7 +45,7 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
         console,
         cancel,
         interaction,
-        plugins: _,
+        extensions: _,
     } = env;
     console.info(format!("▶ Running {}…", file_name));
 
@@ -107,31 +107,31 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
     });
 }
 
-/// 执行一条插件命令。日志格式与脚本一致（▶ / ✔ / ⏹）；超时与取消共用同一个
+/// 执行一条扩展命令。日志格式与脚本一致（▶ / ✔ / ⏹）；超时与取消共用同一个
 /// `CancelToken`：用户中止后命令里的 `while(true)` 会被 QuickJS 中断。
-pub fn run_plugin(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
+pub fn run_extension(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
     let RunEnv {
         console,
         cancel,
         interaction,
-        plugins,
+        extensions,
         ..
     } = env;
     console.info(format!("▶ Running {label}…"));
 
-    let Some(plugins) = plugins else {
-        console.error("插件运行时不可用，无法执行插件命令");
+    let Some(extensions) = extensions else {
+        console.error("扩展运行时不可用，无法执行扩展命令");
         return;
     };
 
-    // 交互 API（confirm / pickPath / progress）挂在插件常驻上下文上，
+    // 交互 API（confirm / pickPath / progress）挂在扩展常驻上下文上，
     // 每轮用本轮新建的 bridge 覆盖一次。
-    let scope = Arc::new(PluginRunScope {
+    let scope = Arc::new(ExtensionRunScope {
         bridge: interaction,
     });
     let request = InvokeRequest::new(command, cancel.clone()).with_scope(scope);
 
-    match plugins.invoke(&bundle, request) {
+    match extensions.invoke(&bundle, request) {
         Ok(Some(output)) => {
             if !output.trim().is_empty() {
                 console.info(output);
@@ -149,10 +149,10 @@ pub fn run_plugin(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
         // 运行时掉了（加载失败 / 线程退出）时，宿主下一次执行会先重建再跑；
         // 这里把"下一步该做什么"直接写清楚，别让人只看到一句线程错误。
         Err(JsError::NotLoaded(_)) => console.error(format!(
-            "插件运行时尚未就绪：{label}（重新执行该命令会自动加载）"
+            "扩展运行时尚未就绪：{label}（重新执行该命令会自动加载）"
         )),
         Err(JsError::Runtime(message)) => console.error(format!(
-            "{message}\n提示：重新执行该命令会自动重建插件运行时；仍失败请查看上面的加载报错"
+            "{message}\n提示：重新执行该命令会自动重建扩展运行时；仍失败请查看上面的加载报错"
         )),
         Err(error) => console.error(error.to_string()),
     }
@@ -303,7 +303,7 @@ mod tests {
             console: channel.clone(),
             cancel: cancel.clone(),
             interaction: no_ui(cancel),
-            plugins: None,
+            extensions: None,
         }
     }
 
@@ -478,8 +478,8 @@ mod tests {
         );
     }
 
-    /// 真插件 + 真 `PluginStore` 的 RunEnv：验证插件路径与脚本路径的输出对齐。
-    fn plugin_env(
+    /// 真扩展 + 真 `ExtensionStore` 的 RunEnv：验证扩展路径与脚本路径的输出对齐。
+    fn extension_env(
         tmp: &crate::test_support::TempDir,
         dir: &str,
         manifest: &str,
@@ -487,7 +487,7 @@ mod tests {
         registry: Arc<HostRegistry>,
         channel: &ConsoleChannel,
         cancel: &CancelToken,
-    ) -> (RunEnv, Arc<plux_js_manager::PluginStore>) {
+    ) -> (RunEnv, Arc<plux_js_manager::ExtensionStore>) {
         let root = tmp.0.join(dir);
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join(plux_js_manager::MANIFEST_FILE), manifest).unwrap();
@@ -497,7 +497,7 @@ mod tests {
             registry: registry.clone(),
             console: channel.clone(),
         });
-        let store = plux_js_manager::PluginStore::new(env);
+        let store = plux_js_manager::ExtensionStore::new(env);
         // 目录名就是 bundle（`{id}-v{version}.js`）：身份只在一处解析。
         let bundle = plux_rs::Bundle::from_filename(dir).expect("valid bundle");
         store
@@ -510,17 +510,17 @@ mod tests {
             console: channel.clone(),
             cancel: cancel.clone(),
             interaction: no_ui(cancel),
-            plugins: Some(store.clone()),
+            extensions: Some(store.clone()),
         };
         (env, store)
     }
 
     #[test]
-    fn run_plugin_reports_the_exit_sentinel_as_finished() {
-        let tmp = crate::test_support::TempDir::new("runner-plugin-exit");
+    fn run_extension_reports_the_exit_sentinel_as_finished() {
+        let tmp = crate::test_support::TempDir::new("runner-extension-exit");
         let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
-        let (env, _store) = plugin_env(
+        let (env, _store) = extension_env(
             &tmp,
             "quit-v1.0.0.js",
             r#"{ "id": "quit", "version": "1.0.0", "commands": [{ "id": "quit", "title": "Quit" }] }"#,
@@ -530,7 +530,7 @@ mod tests {
             &cancel,
         );
 
-        run_plugin(
+        run_extension(
             Bundle::from_filename("quit-v1.0.0.js").unwrap(),
             "quit",
             "Quit · Quit",
@@ -551,11 +551,11 @@ mod tests {
     }
 
     #[test]
-    fn run_plugin_hints_that_a_dead_runtime_is_rebuilt() {
-        let tmp = crate::test_support::TempDir::new("runner-plugin-dead");
+    fn run_extension_hints_that_a_dead_runtime_is_rebuilt() {
+        let tmp = crate::test_support::TempDir::new("runner-extension-dead");
         let (registry, channel) = make_runner();
         let cancel = CancelToken::new();
-        let (env, _store) = plugin_env(
+        let (env, _store) = extension_env(
             &tmp,
             "dead-v1.0.0.js",
             r#"{ "id": "dead", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
@@ -565,7 +565,7 @@ mod tests {
             &cancel,
         );
 
-        run_plugin(
+        run_extension(
             Bundle::from_filename("dead-v1.0.0.js").unwrap(),
             "go",
             "Dead · Go",

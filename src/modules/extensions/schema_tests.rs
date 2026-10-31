@@ -5,7 +5,7 @@
 //! 手写的东西会漂移，所以这里用 `plux_js_manager::schema::problems` 反查三件事：
 //!
 //! 1. 脚手架生成的每种模板都符合 schema；
-//! 2. 仓库里的示例插件都符合 schema（文档里的写法必须本身合法）；
+//! 2. 仓库里的示例扩展都符合 schema（文档里的写法必须本身合法）；
 //! 3. 校验器真能挑出错误（否则前两条只是空转）。
 
 use std::path::Path;
@@ -50,7 +50,7 @@ fn scaffolded_manifests_match_the_schema() {
     for template in Template::ALL {
         let content = manifest_of(&spec(template));
         let value = check(&format!("{template:?} 模板"), &content);
-        // schema 摆在扩展根目录，插件目录相对它是一层上：两边必须写同一个字符串，
+        // schema 摆在扩展根目录，扩展目录相对它是一层上：两边必须写同一个字符串，
         // 否则「新建扩展」出来的清单第一行就是死链。
         assert_eq!(
             value["$schema"], "../extension.schema.json",
@@ -61,7 +61,7 @@ fn scaffolded_manifests_match_the_schema() {
 
 #[test]
 fn demo_manifest_matches_the_schema() {
-    check("首启示例插件", DEMO_MANIFEST);
+    check("首启示例扩展", DEMO_MANIFEST);
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn bundled_examples_match_the_schema() {
         );
         checked += 1;
     }
-    assert!(checked >= 2, "示例插件不该被删到只剩 {checked} 个");
+    assert!(checked >= 2, "示例扩展不该被删到只剩 {checked} 个");
 }
 
 #[test]

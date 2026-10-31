@@ -1,8 +1,8 @@
-//! 每插件一个专用线程，线程里跑一个常驻的 QuickJS 运行时。
+//! 每扩展一个专用线程，线程里跑一个常驻的 QuickJS 运行时。
 //!
 //! 为什么是线程 + 消息而不是 `AsyncRuntime::spawn`：plux 的 `Function::call` 与
 //! `Manager` 的方法都是同步的，而宿主的定时器、`fetch`、`Async(...)` 宿主函数又都
-//! 依赖 tokio 反应堆。给每个插件一条线程、线程内自带一个 current-thread 运行时，
+//! 依赖 tokio 反应堆。给每个扩展一条线程、线程内自带一个 current-thread 运行时，
 //! 让同步的 `invoke` 与异步的引擎能干净地待在一起，也顺带把"引擎不跨线程"这条
 //! QuickJS 约束变成了结构性保证。
 //!
@@ -11,7 +11,7 @@
 //! 30s 的加载预算不该算在 UI 的响应时间上。
 //!
 //! 超时与取消靠 `AsyncRuntime` 的 interrupt handler：宿主置位
-//! [`PluginWorker::abort`]，QuickJS 在下一个中断点抛不可捕获异常，线程回到消息
+//! [`ExtensionWorker::abort`]，QuickJS 在下一个中断点抛不可捕获异常，线程回到消息
 //! 循环。标志只由工人线程在每条命令开头清零，因此不存在跨线程竞争。
 
 use std::path::PathBuf;
@@ -27,22 +27,22 @@ use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module, Value};
 use crate::cancel::CancelToken;
 use crate::env::{JsEnv, LogLevel};
 use crate::error::JsError;
-use crate::loader::{PluginLoader, PluginResolver};
+use crate::loader::{ExtensionLoader, ExtensionResolver};
 use crate::store::{InvokeRequest, RuntimeState};
 use crate::value::{format_caught, value_to_json};
 
 /// 与普通脚本一致：栈上限 8 MiB（`while(true)` 递归也不会立刻踩穿）。
 const MAX_STACK_SIZE: usize = 8 * 1024 * 1024;
-/// 单个插件的内存上限。
+/// 单个扩展的内存上限。
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
-/// 命令结束后驱动残留任务的预算。不能裸等 `idle()`：插件里一个没清掉的
+/// 命令结束后驱动残留任务的预算。不能裸等 `idle()`：扩展里一个没清掉的
 /// `setInterval` 会让它永不返回。
 const IDLE_BUDGET: Duration = Duration::from_millis(200);
 
 /// 加载（建引擎 + 求值入口模块）的超时。
 pub(crate) const LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 等待插件回复 / 等待就绪的轮询间隔：既用来查超时，也用来查用户取消。
+/// 等待扩展回复 / 等待就绪的轮询间隔：既用来查超时，也用来查用户取消。
 pub(crate) const POLL: Duration = Duration::from_millis(100);
 
 /// 丢给 `Drop` 的宽限：正常停在消息循环里的线程毫秒级退出。
@@ -72,14 +72,14 @@ if (!handler) {
   const argv = Array.isArray(call.argv) ? call.argv : [];
   globalThis.__plux_result = await handler({
     command: name,
-    plugin: { id: globalThis.__plux_plugin_id, version: globalThis.__plux_plugin_version },
+    extension: { id: globalThis.__plux_plugin_id, version: globalThis.__plux_plugin_version },
     root: call.root,
     argv,
   });
 }
 "#;
 
-/// 工人线程需要知道的插件身份、路径与权限。
+/// 工人线程需要知道的扩展身份、路径与权限。
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerSpec {
     pub id: String,
@@ -146,14 +146,14 @@ impl Shared {
         } else {
             LogLevel::Error
         };
-        env.log(level, &format!("插件 {label} 加载失败：{error}"));
+        env.log(level, &format!("扩展 {label} 加载失败：{error}"));
         *self.state.lock() = LoadState::Failed(error);
         self.ready.notify_all();
     }
 }
 
-/// 一个插件的工人线程句柄。
-pub(crate) struct PluginWorker {
+/// 一个扩展的工人线程句柄。
+pub(crate) struct ExtensionWorker {
     tx: Sender<WorkerMsg>,
     abort: Arc<AtomicBool>,
     join: Mutex<Option<JoinHandle<()>>>,
@@ -163,7 +163,7 @@ pub(crate) struct PluginWorker {
     stopped: AtomicBool,
 }
 
-impl PluginWorker {
+impl ExtensionWorker {
     /// 起线程并**立即返回**：引擎构建与入口求值都在工人线程里跑。
     ///
     /// 只有"线程建不起来"会在这里失败；引擎加载的成败通过 [`Self::state`] 与
@@ -182,7 +182,7 @@ impl PluginWorker {
         let join = std::thread::Builder::new()
             .name(format!("plux-js:{}", spec.id))
             .spawn(move || worker_main(spec, env, thread_abort, rx, thread_shared))
-            .map_err(|e| JsError::Runtime(format!("无法启动插件线程：{e}")))?;
+            .map_err(|e| JsError::Runtime(format!("无法启动扩展线程：{e}")))?;
 
         Ok(Arc::new(Self {
             tx,
@@ -209,7 +209,7 @@ impl PluginWorker {
             match &*state {
                 LoadState::Ready => return Ok(()),
                 LoadState::Failed(error) => {
-                    return Err(JsError::Runtime(format!("插件加载失败：{error}")));
+                    return Err(JsError::Runtime(format!("扩展加载失败：{error}")));
                 }
                 LoadState::Exited(error) => return Err(error.clone()),
                 LoadState::Loading => {}
@@ -220,7 +220,7 @@ impl PluginWorker {
             let now = Instant::now();
             if now >= load_deadline {
                 return Err(JsError::Runtime(format!(
-                    "插件加载超时（{}s）",
+                    "扩展加载超时（{}s）",
                     LOAD_TIMEOUT.as_secs()
                 )));
             }
@@ -246,11 +246,11 @@ impl PluginWorker {
         self.shared.state.lock().error()
     }
 
-    /// 投递一条消息（超时/取消由 `PluginStore` 判定，这里只负责发）。
+    /// 投递一条消息（超时/取消由 `ExtensionStore` 判定，这里只负责发）。
     pub(crate) fn send(&self, message: WorkerMsg) -> Result<(), JsError> {
         self.tx
             .send(message)
-            .map_err(|_| JsError::Runtime("插件线程已退出".to_string()))
+            .map_err(|_| JsError::Runtime("扩展线程已退出".to_string()))
     }
 
     /// 请求中断当前命令：QuickJS 在下一个中断点抛出。
@@ -261,7 +261,7 @@ impl PluginWorker {
     /// 停线程，但**只在 `grace` 内等收尾**；超时就丢掉 JoinHandle 放手。
     ///
     /// QuickJS 线程无法被强杀：加载中的线程可能正卡在引擎构建或宿主阻塞调用上，
-    /// 无条件 join 会把"删插件 / 重建运行时"变成主线程上的最长 30s 卡顿。
+    /// 无条件 join 会把"删扩展 / 重建运行时"变成主线程上的最长 30s 卡顿。
     /// 返回 true 表示线程已经收尾（此后资源全部释放）。
     pub(crate) fn shutdown(&self, grace: Duration) -> bool {
         let first_request = !self.stopped.swap(true, Ordering::SeqCst);
@@ -312,7 +312,7 @@ impl PluginWorker {
     }
 }
 
-impl Drop for PluginWorker {
+impl Drop for ExtensionWorker {
     fn drop(&mut self) {
         self.shutdown(DROP_GRACE);
     }
@@ -336,11 +336,11 @@ impl Drop for ExitGuard {
                 LoadState::Failed(_) | LoadState::Exited(_) => false,
                 LoadState::Loading => {
                     *state =
-                        LoadState::Failed(JsError::Runtime("插件线程在就绪前退出".to_string()));
+                        LoadState::Failed(JsError::Runtime("扩展线程在就绪前退出".to_string()));
                     true
                 }
                 LoadState::Ready => {
-                    *state = LoadState::Exited(JsError::Runtime("插件运行时已退出".to_string()));
+                    *state = LoadState::Exited(JsError::Runtime("扩展运行时已退出".to_string()));
                     false
                 }
             }
@@ -349,7 +349,7 @@ impl Drop for ExitGuard {
         if needs_log {
             self.env.log(
                 LogLevel::Error,
-                &format!("插件 {} 加载失败：线程在就绪前退出", self.label),
+                &format!("扩展 {} 加载失败：线程在就绪前退出", self.label),
             );
         }
     }
@@ -434,8 +434,8 @@ async fn build_engine(
         .set_interrupt_handler(Some(Box::new(move || flag.load(Ordering::SeqCst))))
         .await;
 
-    let loader = PluginLoader::new(spec.root.clone(), env.clone(), &spec.permissions);
-    let resolver = PluginResolver::new(
+    let loader = ExtensionLoader::new(spec.root.clone(), env.clone(), &spec.permissions);
+    let resolver = ExtensionResolver::new(
         spec.root.clone(),
         env.host_modules(&spec.permissions)
             .into_iter()

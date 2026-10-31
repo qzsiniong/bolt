@@ -2,7 +2,7 @@
 
 use gpui_kit::{App, AppContext as _};
 
-use super::view::PluginManagerView;
+use super::view::ExtensionManagerView;
 use crate::app::shell::AppShell;
 use crate::modules::extensions::state::ExtensionsState;
 use crate::ui::window::{WindowSpec, open_singleton};
@@ -15,7 +15,7 @@ pub(crate) fn open_manager(cx: &mut App) {
 
     let existing = cx.global_mut::<ExtensionsState>().manager.take();
     match open_singleton(&spec, cx, existing, |_window, cx| {
-        cx.new(|cx| PluginManagerView::new(cx))
+        cx.new(|cx| ExtensionManagerView::new(cx))
     }) {
         Ok(handle) => {
             cx.global_mut::<ExtensionsState>().manager = Some(handle);

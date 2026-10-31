@@ -37,13 +37,13 @@ pub(crate) fn run() {
     if let Err(e) = script_store::ensure_dir(&scripts_dir) {
         console_channel.error(format!("创建脚本目录失败：{e}"));
     }
-    // 插件根：`extensions/`。debug 构建直接用仓库目录，改完重启即生效；
-    // release 构建用数据目录，并把仓库插件播种进去（只补缺失，不覆盖用户改动）。
+    // 扩展根：`extensions/`。debug 构建直接用仓库目录，改完重启即生效；
+    // release 构建用数据目录，并把仓库扩展播种进去（只补缺失，不覆盖用户改动）。
     let extensions_dir = extension::active_extensions_dir();
     if let Err(e) = extension::ensure_dir(&extensions_dir) {
         console_channel.error(format!("创建扩展目录失败：{e}"));
     }
-    // 清单的 JSON Schema 摆在扩展根：插件的 extension.json 用 `$schema:
+    // 清单的 JSON Schema 摆在扩展根：扩展的 extension.json 用 `$schema:
     // "../extension.schema.json"` 就能拿到编辑器的补全与校验。
     if let Err(e) = extension::ensure_schema(&extensions_dir) {
         console_channel.warn(format!("写入 {} 失败：{e}", extension::SCHEMA_FILE));
@@ -52,14 +52,14 @@ pub(crate) fn run() {
         // 仓库目录就是工作树：不往里写示例，也没有「同步」这回事。
         console_channel.info(format!("扩展目录：{}", extensions_dir.display()));
     } else {
-        // 首次启动给一个能直接跑的示例插件（已存在则不动）。
-        if let Err(e) = extension::ensure_demo_plugin(&extensions_dir) {
-            console_channel.warn(format!("生成示例插件失败：{e}"));
+        // 首次启动给一个能直接跑的示例扩展（已存在则不动）。
+        if let Err(e) = extension::ensure_demo_extension(&extensions_dir) {
+            console_channel.warn(format!("生成示例扩展失败：{e}"));
         }
         match extension::ensure_bundled_extensions(&extensions_dir) {
-            Ok(n) if n > 0 => console_channel.info(format!("已同步 {n} 个仓库插件")),
+            Ok(n) if n > 0 => console_channel.info(format!("已同步 {n} 个仓库扩展")),
             Ok(_) => {}
-            Err(e) => console_channel.warn(format!("同步仓库插件失败：{e}")),
+            Err(e) => console_channel.warn(format!("同步仓库扩展失败：{e}")),
         }
     }
 
@@ -113,7 +113,7 @@ pub(crate) fn run() {
                 }
             }
 
-            // plux 插件宿主：Loader 管生命周期与元数据，PluginStore 管执行。
+            // plux 扩展宿主：Loader 管生命周期与元数据，ExtensionStore 管执行。
             // 必须在 RunService 之前就位——命令要在工作线程里跑，RunService 需要
             // 拿到 store 才能投递。
             let js_env = Arc::new(BoltJsEnv {
@@ -125,14 +125,14 @@ pub(crate) fn run() {
                 js_env,
                 &crate::modules::extensions::prefs::path(),
             );
-            let plugin_store = extensions_host.store();
+            let extension_store = extensions_host.store();
 
             let run_service = cx.new(|_cx| {
                 RunService::new(
                     scripts_dir.clone(),
                     registry.clone(),
                     console_channel.clone(),
-                    plugin_store.clone(),
+                    extension_store.clone(),
                 )
             });
 

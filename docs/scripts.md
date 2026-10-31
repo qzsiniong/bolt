@@ -24,7 +24,7 @@ scripts/
 └── demo.ts                # 示例脚本（仅首次生成）
 ```
 
-与 `scripts/` 同级的 `extensions/` 目录也会自动创建，插件直接放在它下面：`<id>-v<version>.js/`（见 [Launcher 与扩展](launcher.md)），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）、`bolt.log`（`Error` 级 Console 条目的落盘文件，滚动保留最近 500 行，排查启动失败用它）。
+与 `scripts/` 同级的 `extensions/` 目录也会自动创建，扩展直接放在它下面：`<id>-v<version>.js/`（见 [Launcher 与扩展](launcher.md)），UI 命令的私有数据目录是 `extensions-data/<id>/`。应用启动器的相关数据也放在这里：`item-usage.json`（item 使用统计：id → 使用时间点列表）、`item-keywords.json`（用户编辑的搜索关键词）、`app-icons/`（图标缓存）、`bolt.log`（`Error` 级 Console 条目的落盘文件，滚动保留最近 500 行，排查启动失败用它）。
 
 ## 快捷键
 
