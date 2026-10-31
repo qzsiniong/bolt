@@ -26,7 +26,12 @@ pub(crate) fn is_activation(event: &ClickEvent) -> bool {
     }
 }
 
-/// 一行：整行可点；选中态用 accent 底色，未选中时 hover 只给一层淡底。
+/// 一行：整行可点；选中态用 secondary 底色，未选中时 hover 只给一层淡底。
+///
+/// 选中不用 `accent`：默认主题的浅色模式里 accent（neutral-100）和
+/// `list_hover`（#f5f5f5）是同一个颜色，悬停掠过选中行完全看不出差别；
+/// `secondary`（neutral-200）正好比 hover 深一档，深色模式里也保持
+/// 「选中比 hover 更醒目」的层级。
 ///
 /// `index` 既是行下标也用来生成本行 id（同一容器内唯一）。
 pub(crate) fn row(
@@ -49,7 +54,8 @@ pub(crate) fn row(
         .text_sm()
         .rounded(px(6.))
         .when(selected, |this| {
-            this.bg(colors.accent).text_color(colors.accent_foreground)
+            this.bg(colors.secondary)
+                .text_color(colors.secondary_foreground)
         })
         // hover 纯粹是视觉反馈：选中仍然只由单击和 ↑/↓ 决定。
         .when(!selected, |this| {
