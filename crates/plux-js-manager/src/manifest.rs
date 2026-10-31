@@ -158,11 +158,18 @@ pub enum UiBuiltin {
 /// 本清单里的一条**脚本**命令）二选一，校验强制。注意 `command` 型按钮走
 /// 插件运行时执行，结果与错误都进 Console——它**无法**回写当前 gpui-shell
 /// 窗口的 UI（gpui-shell 尚未提供宿主→插件的事件通道）。
+///
+/// `icon` / `tooltip` 可选，缺省时按动作取宿主默认值（builtin 用内置图标与
+/// 中文提示，command 用 ▶ 图标与命令标题）。
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct UiAction {
     pub builtin: Option<UiBuiltin>,
     pub command: Option<String>,
+    /// 图标：Lucide 名（`refresh-cw`）或插件目录内的资产路径（`icons/zap.svg`）。
+    pub icon: Option<String>,
+    /// 悬停提示文案。
+    pub tooltip: Option<String>,
 }
 
 /// 一个按钮解析后的语义（[`UiAction::kind`]）。
@@ -182,6 +189,31 @@ impl UiAction {
             (Some(_), Some(_)) => Err("builtin 与 command 只能写一个".to_string()),
             (None, None) => Err("builtin 与 command 必须写一个".to_string()),
         }
+    }
+
+    /// 按钮图标的资产路径；`None` = 用动作的默认图标。
+    ///
+    /// 带 `/` 或以 `.svg` 结尾的值当成资产路径（相对插件目录，插件根已登记进
+    /// 复合资产源），其余当成 Lucide 图标名补成 `icons/<name>.svg`。
+    pub fn icon_path(&self) -> Option<String> {
+        let icon = self.icon.as_deref().map(str::trim)?;
+        if icon.is_empty() {
+            return None;
+        }
+        let icon = icon.trim_start_matches('/');
+        if icon.contains('/') || icon.ends_with(".svg") {
+            Some(icon.to_string())
+        } else {
+            Some(format!("icons/{icon}.svg"))
+        }
+    }
+
+    /// 悬停提示；空白串视同没写。
+    pub fn tooltip_text(&self) -> Option<&str> {
+        self.tooltip
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
     }
 }
 
@@ -307,6 +339,13 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
             }
             for (index, action) in ui.actions.iter().enumerate() {
                 let context = format!("命令 `{}` 的 ui.actions[{index}]", command.id);
+                // 图标路径交给资产源解析（越界会被拒），这里只挡一眼就能看出的错误。
+                if action
+                    .icon_path()
+                    .is_some_and(|icon| icon.split('/').any(|segment| segment == ".."))
+                {
+                    return Err(format!("{context}：icon 不能包含 `..`"));
+                }
                 match action
                     .kind()
                     .map_err(|error| format!("{context}：{error}"))?
@@ -637,6 +676,52 @@ mod tests {
         write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
         let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("ui command target");
         assert!(error.contains("只能触发脚本命令"), "{error}");
+    }
+
+    #[test]
+    fn ui_action_icon_and_tooltip_override_defaults() {
+        let tmp = TempDir::new("manifest-ui-action-icon");
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0",
+            "commands": [{ "id": "panel", "title": "面板", "ui": { "actions": [
+                { "builtin": "reload", "icon": "zap", "tooltip": "重载并重开" },
+                { "builtin": "open_data_dir", "icon": "icons/folder.svg" },
+                { "builtin": "open_plugin_dir", "icon": "  ", "tooltip": "   " },
+                { "builtin": "close_window" }
+            ] } }]
+        }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
+        let actions = &package.manifest.commands[0]
+            .ui
+            .as_ref()
+            .expect("ui")
+            .actions;
+
+        // Lucide 名补成资产路径。
+        assert_eq!(actions[0].icon_path().as_deref(), Some("icons/zap.svg"));
+        assert_eq!(actions[0].tooltip_text(), Some("重载并重开"));
+        // 已是资产路径的原样保留。
+        assert_eq!(actions[1].icon_path().as_deref(), Some("icons/folder.svg"));
+        assert_eq!(actions[1].tooltip_text(), None);
+        // 空白视同没写：走宿主默认。
+        assert_eq!(actions[2].icon_path(), None);
+        assert_eq!(actions[2].tooltip_text(), None);
+        assert_eq!(actions[3].icon_path(), None);
+    }
+
+    #[test]
+    fn ui_action_icon_rejects_traversal() {
+        let tmp = TempDir::new("manifest-ui-action-traversal");
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0",
+            "commands": [{ "id": "panel", "title": "面板", "ui": { "actions": [
+                { "builtin": "reload", "icon": "../../etc/passwd.svg" }
+            ] } }]
+        }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("traversal icon");
+        assert!(error.contains("不能包含 `..`"), "{error}");
     }
 
     #[test]

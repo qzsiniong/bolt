@@ -182,12 +182,29 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 | `width` / `height` | `880` / `720` | 初始窗口尺寸，必须为正；小于宿主最小尺寸时以最小尺寸为准 |
 | `always_on_top` | `false` | 开窗即上浮到 floating 层级（标题栏上的图钉仍可随时切换） |
 | `capabilities.clipboard` | `false` | UI 命令能否读写剪贴板 |
-| `actions` | `[]` | 宿主标题栏右侧的自定义按钮，每项 `{"builtin": "reload" \| "open_data_dir" \| "open_plugin_dir" \| "close_window"}` 或 `{"command": "<脚本命令id>"}`；声明顺序即渲染顺序，图钉固定在最右 |
+| `actions` | `[]` | 宿主标题栏右侧的自定义按钮，每项 `{"builtin": "reload" \| "open_data_dir" \| "open_plugin_dir" \| "close_window"}` 或 `{"command": "<脚本命令id>"}`，可再加 `icon` / `tooltip`；声明顺序即渲染顺序，图钉固定在最右 |
 
 `actions` 的两种按钮：
 
 - **`builtin`**：宿主内建动作，即时生效。`reload` 走扩展管理同一条「重载」路径——**会关闭该插件的所有 UI 窗口（包括按钮所在的这个）**，重开命令即用新代码；`open_data_dir` / `open_plugin_dir` 拉起访达；`close_window` 关掉当前窗口。
 - **`command`**：点击执行本清单里的一条**脚本命令**（必须存在且不能指向另一条 UI 命令，否则清单被拒绝加载）。它走插件运行时，输出与错误都进 Console——但**无法回写当前窗口的 UI**：gpui-shell 还没有宿主→插件的事件通道，窗口里的脚本视图与脚本命令是两套运行时。
+
+每个按钮还可以覆盖外观（都可省略，省略即用该动作的默认值）：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `icon` | builtin 各自的内置图标；`command` 用 ▶ | 写 Lucide 图标名（`zap`、`refresh-cw`，见 [Lucide](https://lucide.dev/icons)，1.9k+ 个）或插件目录里的资产路径（`icons/star.svg`，相对插件根；带 `/` 或以 `.svg` 结尾即按路径处理）。路径不能含 `..`，否则清单被拒。 |
+| `tooltip` | builtin 的中文名；`command` 用命令标题 | 悬停提示文案，空白视同没写。 |
+
+```json
+"actions": [
+  { "builtin": "reload", "icon": "zap", "tooltip": "重载并重开窗口" },
+  { "builtin": "open_data_dir", "icon": "icons/folder-open.svg" },
+  { "builtin": "close_window" }
+]
+```
+
+图标走宿主的复合资产源：内置图标集兜底，插件自己 `icons/` 下的文件优先——同名文件会遮蔽内置图标（见 [src/app/assets.rs](src/app/assets.rs)）。
 
 清单里出现 `ui` 命令时，插件目录必须提供 `main.js`——gpui-shell 对没有 `gpui-shell.json` 的目录固定加载它，不可改名。
 

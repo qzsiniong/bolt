@@ -56,7 +56,6 @@ impl Render for WindowPin {
                         cx.notify();
                     })),
                 tooltip,
-                window,
             ))
     }
 }

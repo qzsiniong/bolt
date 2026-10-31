@@ -31,7 +31,7 @@ use super::ops;
 use super::state::ExtensionsState;
 use crate::app::shell::AppShell;
 use crate::ui::window::{WindowPin, WindowSpec, WindowTitleBar, button_with_tooltip, set_pinned};
-use gpui_kit::assets::IconName;
+use gpui_kit::assets::{IconName, IconNamed};
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::{
@@ -54,44 +54,61 @@ struct ExtensionChrome {
     subject: ActionSubject,
 }
 
-/// 标题栏右侧的一个动作按钮。
+/// 标题栏右侧的一个动作按钮。图标与提示在开窗时解析好，渲染只负责画。
 #[derive(Clone, Debug)]
-enum ChromeAction {
+struct ChromeAction {
+    icon: AssetIcon,
+    tooltip: SharedString,
+    kind: ChromeKind,
+}
+
+/// 点击之后做什么。
+#[derive(Clone, Debug)]
+enum ChromeKind {
     Builtin(UiBuiltin),
     /// 点击执行该脚本命令（走 plux 运行时；输出进 Console，无法回写本窗口 UI）。
     Command(Box<CommandTarget>),
 }
 
+/// 任意资产路径的图标：内置 Lucide 图标也是这条路（`icons/<name>.svg`），
+/// 插件自己提供的 `icons/x.svg` 由复合资产源按已登记的插件根解析。
+#[derive(Clone, Debug)]
+struct AssetIcon(SharedString);
+
+impl IconNamed for AssetIcon {
+    fn path(self) -> SharedString {
+        self.0
+    }
+}
+
+/// builtin 动作的默认图标与提示（清单没写 `icon` / `tooltip` 时用）。
+fn builtin_presentation(builtin: UiBuiltin) -> (IconName, &'static str) {
+    match builtin {
+        UiBuiltin::Reload => (IconName::RefreshCw, "重新加载插件"),
+        UiBuiltin::OpenDataDir => (IconName::FolderOpen, "打开数据目录"),
+        UiBuiltin::OpenPluginDir => (IconName::Folder, "打开插件目录"),
+        UiBuiltin::CloseWindow => (IconName::X, "关闭窗口"),
+    }
+}
+
 impl ExtensionChrome {
     /// 右侧动作按钮行；`None` = 清单没声明 actions，标题栏只有图钉。
-    fn action_buttons(&self, window: &Window, cx: &Context<Self>) -> Option<AnyElement> {
+    fn action_buttons(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.actions.is_empty() {
             return None;
         }
         let mut row = div().flex().items_center().gap(px(4.)).flex_shrink_0();
         for (index, action) in self.actions.iter().enumerate() {
-            let (icon, tooltip) = match action {
-                ChromeAction::Builtin(UiBuiltin::Reload) => (IconName::RefreshCw, "重新加载插件"),
-                ChromeAction::Builtin(UiBuiltin::OpenDataDir) => {
-                    (IconName::FolderOpen, "打开数据目录")
-                }
-                ChromeAction::Builtin(UiBuiltin::OpenPluginDir) => {
-                    (IconName::Folder, "打开插件目录")
-                }
-                ChromeAction::Builtin(UiBuiltin::CloseWindow) => (IconName::X, "关闭窗口"),
-                ChromeAction::Command(target) => (IconName::Play, target.title.as_str()),
-            };
             row = row.child(button_with_tooltip(
                 ("ext-ui-action-tooltip", index),
                 Button::new(("ext-ui-action", index))
-                    .icon(icon)
+                    .icon(action.icon.clone())
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.run_action(index, window, cx);
                     })),
-                tooltip,
-                window,
+                action.tooltip.clone(),
             ));
         }
         Some(row.into_any_element())
@@ -100,19 +117,19 @@ impl ExtensionChrome {
     /// 点击动作按钮的统一分发。builtin 复用扩展管理的 ops（本来就写 Console）；
     /// `close_window` 不写（窗口随即销毁，写了也看不见）。
     fn run_action(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        match &self.actions[index] {
-            ChromeAction::Builtin(UiBuiltin::Reload) => ops::reload(cx, &self.subject),
-            ChromeAction::Builtin(UiBuiltin::OpenDataDir) => ops::open_data_dir(cx, &self.subject),
-            ChromeAction::Builtin(UiBuiltin::OpenPluginDir) => ops::reveal(cx, &self.subject),
-            ChromeAction::Builtin(UiBuiltin::CloseWindow) => window.remove_window(),
-            ChromeAction::Command(target) => exec::run_command(cx, (**target).clone()),
+        match &self.actions[index].kind {
+            ChromeKind::Builtin(UiBuiltin::Reload) => ops::reload(cx, &self.subject),
+            ChromeKind::Builtin(UiBuiltin::OpenDataDir) => ops::open_data_dir(cx, &self.subject),
+            ChromeKind::Builtin(UiBuiltin::OpenPluginDir) => ops::reveal(cx, &self.subject),
+            ChromeKind::Builtin(UiBuiltin::CloseWindow) => window.remove_window(),
+            ChromeKind::Command(target) => exec::run_command(cx, (**target).clone()),
         }
     }
 }
 
 impl Render for ExtensionChrome {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let actions_row = self.action_buttons(window, cx);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let actions_row = self.action_buttons(cx);
         let mut bar = WindowTitleBar::new(self.name.clone());
         if let Some(row) = actions_row {
             bar = bar.trailing(row);
@@ -239,33 +256,62 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     let window_size = (ui.width, ui.height);
     // 清单 ui.actions → 标题栏按钮。command 型按 (plugin_id, command_id) 回
     // 宿主清单里查 target（校验已保证存在且是脚本命令；这里查不到就跳过并
-    // 留 warn，不让一个坏按钮挡住整个窗口）。
+    // 留 warn，不让一个坏按钮挡住整个窗口）。图标与提示在这里就解析好：
+    // 清单写的覆盖默认值，`icon` 未写时用动作自带的 Lucide 图标。
     let chrome_actions: Vec<ChromeAction> = {
         let commands = cx.global::<ExtensionsState>().host.borrow().commands();
         let command_id = target.command_id.clone();
         ui.actions
             .iter()
-            .filter_map(|action| match action.kind() {
-                Ok(UiActionKind::Builtin(builtin)) => Some(ChromeAction::Builtin(builtin)),
-                Ok(UiActionKind::Command(action_command)) => commands
-                    .iter()
-                    .find(|candidate| {
-                        candidate.plugin_id == plugin_id
-                            && candidate.command_id == action_command
-                    })
-                    .map(|candidate| ChromeAction::Command(Box::new(candidate.clone())))
-                    .or_else(|| {
+            .filter_map(|action| {
+                let (kind, default_icon, default_tooltip) = match action.kind() {
+                    Ok(UiActionKind::Builtin(builtin)) => {
+                        let (icon, tooltip) = builtin_presentation(builtin);
+                        (
+                            ChromeKind::Builtin(builtin),
+                            icon.path(),
+                            SharedString::from(tooltip),
+                        )
+                    }
+                    Ok(UiActionKind::Command(action_command)) => {
+                        let found = commands.iter().find(|candidate| {
+                            candidate.plugin_id == plugin_id
+                                && candidate.command_id == action_command
+                        });
+                        match found {
+                            Some(candidate) => (
+                                ChromeKind::Command(Box::new(candidate.clone())),
+                                IconName::Play.path(),
+                                SharedString::from(candidate.title.clone()),
+                            ),
+                            None => {
+                                console.warn(format!(
+                                    "命令 {plugin_id}.{command_id} 的 ui.actions 引用了未知命令 `{action_command}`，已忽略"
+                                ));
+                                return None;
+                            }
+                        }
+                    }
+                    Err(error) => {
                         console.warn(format!(
-                            "命令 {plugin_id}.{command_id} 的 ui.actions 引用了未知命令 `{action_command}`，已忽略"
+                            "命令 {plugin_id}.{command_id} 的 ui.actions 被忽略：{error}"
                         ));
-                        None
-                    }),
-                Err(error) => {
-                    console.warn(format!(
-                        "命令 {plugin_id}.{command_id} 的 ui.actions 被忽略：{error}"
-                    ));
-                    None
-                }
+                        return None;
+                    }
+                };
+                let icon = action
+                    .icon_path()
+                    .map(SharedString::from)
+                    .unwrap_or(default_icon);
+                let tooltip = action
+                    .tooltip_text()
+                    .map(SharedString::from)
+                    .unwrap_or(default_tooltip);
+                Some(ChromeAction {
+                    icon: AssetIcon(icon),
+                    tooltip,
+                    kind,
+                })
             })
             .collect()
     };
