@@ -12,9 +12,9 @@ use std::time::Duration;
 use rquickjs::prelude::{Async, Opt, Rest};
 use rquickjs::{Ctx, Error, Function, IntoJs, Object, Result, Value};
 
-use crate::console_channel::ConsoleChannel;
 use crate::host::{HostModule, HostRegistry};
 use crate::runtime::interaction::{InteractionBridge, PickKind};
+use bolt_console::ConsoleChannel;
 
 /// 写进 `bolt.d.ts` 的 TypeScript 声明正文（供 IDE/LSP 使用）。
 const DECLARATION: &str = r#"
@@ -96,7 +96,7 @@ fn install<'js>(ctx: &Ctx<'js>) -> Result<()> {
 /// 安装 `console` 全局对象，把输出捕获到应用的 Console 面板。
 /// runner 在求值脚本之前调用。
 pub fn install_console<'js>(ctx: &Ctx<'js>, channel: &ConsoleChannel) -> Result<()> {
-    use crate::console_channel::ConsoleLevel;
+    use bolt_console::ConsoleLevel;
 
     let console = Object::new(ctx.clone())?;
     for (method, level) in [

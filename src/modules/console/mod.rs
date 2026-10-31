@@ -1,7 +1,7 @@
 //! Console 模块：把应用的共享输出缓冲变成一个独立窗口，并在 Launcher 里注册
 //! 一条「Console」命令。
 //!
-//! 输出本身属于应用层（`crate::console_channel`）：脚本运行时、扩展宿主、UI 扩展
+//! 输出本身属于应用层（`bolt_console`）：脚本运行时、扩展宿主、UI 扩展
 //! 的 tracing、启动期错误都写同一个 [`ConsoleLog`]，视图（脚本管理器的 dock 面板
 //! 与这个独立窗口）各自持游标读增量。
 

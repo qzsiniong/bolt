@@ -3,11 +3,11 @@
 //! 经阻塞线程中转，调用方（GPUI 后台任务）只需普通的通道等待。
 //!
 //! `client` 是句柄与请求管线，`server` 是子进程及其读/写线程，`protocol` 是
-//! 协议词汇，`providers` 是接进 gpui-kit 编辑器 provider trait 的桥。
+//! 协议词汇。接进 gpui-kit 编辑器 provider trait 的桥（`LspBridge`）依赖
+//! gpui，留在宿主 `modules/scripts/panels/editor/providers.rs`，不属于本 crate。
 
-pub(crate) mod client;
+mod client;
 mod protocol;
-pub(crate) mod providers;
 mod server;
 
 pub use client::LspClient;
@@ -16,8 +16,32 @@ pub use protocol::path_to_uri;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{TempDir, position};
+    use std::path::PathBuf;
     use std::time::{Duration, Instant};
+
+    /// 临时目录，drop 时整棵删掉（与宿主 `test_support::TempDir` 同款）。
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("bolt-lsp-test-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 构造 LSP 位置。
+    fn position(line: u32, character: u32) -> lsp_types::Position {
+        lsp_types::Position { line, character }
+    }
 
     #[test]
     fn uri_roundtrip() {

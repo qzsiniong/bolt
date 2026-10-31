@@ -17,7 +17,7 @@ use std::sync::Arc;
 use rquickjs::loader::{ImportAttributes, Loader, Resolver};
 use rquickjs::{Ctx, Error, Module, Result};
 
-use crate::runtime::ts_transform::strip_typescript;
+use bolt_ts::strip_typescript;
 
 /// 安装闭包：在 QuickJS 上下文里，把模块的原生函数挂到它的全局命名空间对象上。
 type Installer = Box<dyn for<'js> Fn(&Ctx<'js>) -> Result<()> + Send + Sync>;

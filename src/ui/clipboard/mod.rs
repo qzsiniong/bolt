@@ -21,7 +21,7 @@ use files::pasteboard_file_paths;
 use html::html_to_text;
 use image::{image_dimensions, image_file_format, read_image_file};
 
-use crate::console_channel::ConsoleChannel;
+use bolt_console::ConsoleChannel;
 
 /// 从剪贴板识别出的内容类型（判定互斥，按优先级只有一个）。
 #[derive(Clone, Debug)]

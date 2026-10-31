@@ -9,8 +9,8 @@ use global_hotkey::GlobalHotKeyManager;
 use gpui_kit::{AnyWindowHandle, Entity, Global, Task};
 
 use super::launcher::{LauncherAction, Module};
-use crate::console_channel::ConsoleChannel;
 use crate::runtime::run_service::RunService;
+use bolt_console::ConsoleChannel;
 
 /// 全局快捷键 channel 与 Launcher 请求的轮询频率。
 pub(crate) const APP_TICK: Duration = Duration::from_millis(100);
@@ -39,7 +39,7 @@ pub(crate) struct AppShell {
     /// 输出写入端。读者从 [`ConsoleChannel::history`] 取共享缓冲（脚本管理器
     /// 的 Console 面板、独立 Console 窗口各持一个游标）。
     pub(crate) console_channel: ConsoleChannel,
-    pub(crate) lsp: Result<Arc<crate::lsp::LspClient>, String>,
+    pub(crate) lsp: Result<Arc<bolt_lsp::LspClient>, String>,
     /// 整个应用生命周期持有；drop 即注销快捷键。
     pub(crate) _hotkey_manager: Option<GlobalHotKeyManager>,
     pub(crate) _app_tick: Task<()>,

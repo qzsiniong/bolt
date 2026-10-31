@@ -19,7 +19,7 @@ use crossbeam_channel::{Receiver, Sender};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2::{class, msg_send};
 
-use crate::console_channel::ConsoleChannel;
+use bolt_console::ConsoleChannel;
 
 /// 托盘菜单点击后要执行的命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

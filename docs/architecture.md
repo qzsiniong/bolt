@@ -1,6 +1,6 @@
 # 代码结构与架构
 
-> `src/` 的领域分层、目录职责与贯穿性设计决策。
+> `src/` 的领域分层、目录职责、`crates/` 独立 crate 与贯穿性设计决策。
 > 返回总览见 [README](../README.md)。
 
 ## 架构总览
@@ -15,7 +15,7 @@
 | ② 命令面板 | Launcher 收集 items、过滤、排序、键盘分流；对具体模块一无所知 | `app/launcher/` |
 | ③ 内容模块 | 各自实现 `Module` trait，向 Launcher 贡献 items，自管窗口与状态 | `modules/` |
 | ④ 执行层 | 脚本与扩展命令在两个不同的运行时里执行；UI 命令交给 gpui-shell 原生渲染 | `runtime/`、`host/`、`crates/plux-js-manager` |
-| ⑤ 基础设施 | 领域数据、Console 缓冲、语言服务、跨模块 UI 件 | `model/`、`core/`、`lsp/`、`ui/`、`console_channel` |
+| ⑤ 基础设施 | 领域数据、Console 缓冲、语言服务、跨模块 UI 件 | `crates/bolt-model`、`crates/bolt-console`、`crates/bolt-lsp`、`core/`、`ui/` |
 
 图只画主链路。几条贯穿性约束值得先记住：
 
@@ -70,8 +70,9 @@
 
 | 目录 | 职责 |
 | --- | --- |
-| [src/model/](../src/model) | `script`、`script_store`、`project_gen` —— 脚本的数据形状、磁盘读写与脚手架文件生成 |
-| [src/runtime/](../src/runtime) | `runner`（普通脚本的 QuickJS 运行 + 扩展命令的 `run_extension`）、`interaction`（宿主交互桥）、`interaction_window_manager`（待命/进度/确认浮窗与 pickPath 选择器状态机）、`run_service`（任务队列、取消与状态广播，`RunTask` 分脚本与扩展）、`ts_transform`（swc 类型擦除） |
+| [crates/bolt-model/](../crates/bolt-model) | 领域数据与磁盘布局：`script`（`Script`/`Language`）、`script_store`（脚本目录文件操作）、`paths`（应用数据目录的唯一事实来源，所有子路径都从 `data_root()` 派生） |
+| [src/model/](../src/model) | 只剩 `project_gen` —— 生成脚本工程文件（.d.ts、jsconfig），依赖 `host::HostRegistry` 所以留在宿主 |
+| [src/runtime/](../src/runtime) | `runner`（普通脚本的 QuickJS 运行 + 扩展命令的 `run_extension`）、`interaction`（宿主交互桥）、`interaction_window_manager`（待命/进度/确认浮窗与 pickPath 选择器状态机）、`run_service`（任务队列、取消与状态广播，`RunTask` 分脚本与扩展）；TypeScript 类型擦除在 `bolt-ts` crate |
 
 ### 扩展框架
 
@@ -81,10 +82,24 @@
 
 ### 语言服务与通用基础设施
 
-- [src/lsp/](../src/lsp) — `client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider）。
+- [crates/bolt-lsp/](../crates/bolt-lsp) — 最小 LSP 客户端（不依赖 gpui）：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）。接进 gpui 编辑器四大 provider 的桥在宿主 `modules/scripts/panels/editor/providers.rs`（依赖 gpui-kit，不属于本 crate）。
 - [src/core/](../src/core) — 与领域无关的通用设施：`storage`（使用记录的数据形状与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存自动建目录）、`smart_rank`（时间衰减打分 + 事件裁剪）。依赖单向：`smart_rank` → `storage` ← `file_storage`。
-- [src/console_channel.rs](../src/console_channel.rs) — 跨线程 Console 输出：`ConsoleChannel` 写入端，`ConsoleLog` 引用计数的共享缓冲（1000 条、溢出丢最旧），读者用 `since(cursor)` 取增量；`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；调试构建下每条输出同时打到 stdout/stderr。
+- [crates/bolt-console/](../crates/bolt-console) — 跨线程 Console 输出：`ConsoleChannel` 写入端，`ConsoleLog` 引用计数的共享缓冲（1000 条、溢出丢最旧），读者用 `since(cursor)` 取增量；`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；调试构建下每条输出同时打到 stdout/stderr。
 - [src/test_support.rs](../src/test_support.rs) — `#[cfg(test)]` 共享脚手架（`TempDir`、`position`、`run_js` headless 运行器）。
+
+## crates/ 独立 crate
+
+切分标准只有一条：**能否脱离 gpui 独立编译与单测**。能的进 `crates/`，不能的留宿主。
+
+| crate | 职责 | 依赖要点 |
+| --- | --- | --- |
+| [plux-js-manager](../crates/plux-js-manager) | JS 扩展 manager（清单/生命周期/每扩展常驻 QuickJS 线程），细节见「扩展框架」 | rquickjs、plux-rs，无 gpui |
+| [bolt-console](../crates/bolt-console) | Console 输出通道（共享缓冲 + 读者游标 + Error 落盘） | 仅 chrono |
+| [bolt-ts](../crates/bolt-ts) | swc 的 TypeScript 类型擦除（`strip_typescript`），脚本与扩展运行时共用 | 仅 swc 全家桶，单独编译收益最大 |
+| [bolt-lsp](../crates/bolt-lsp) | typescript-language-server 的 stdio JSON-RPC 客户端 | crossbeam-channel、lsp-types，无 gpui |
+| [bolt-model](../crates/bolt-model) | 脚本类型、脚本目录文件操作、应用数据目录 `paths::data_root()` | 仅 dirs |
+
+宿主通过 path 依赖引用它们；`[patch]` / `[profile]` 只在 workspace 根生效（见 [build.md](build.md)）。
 
 ## 关键设计决策
 
@@ -123,4 +138,4 @@
 2. 加进 `default_modules()`。
 3. 需要脱离 gpui 单测的部分（如运行时）放 `crates/` 下独立 crate。
 
-分组规则一句话：`app` 管进程装配与 Launcher 主 UI，`modules` 放内容模块，`ui` 放跨模块共享控件与纯前端逻辑，`model` 放领域数据与磁盘布局，`runtime` 放执行链路，`host` 放宿主扩展框架及原生实现，`lsp` 放语言服务器客户端，`core` 放与领域无关、可单独测试的通用设施。
+分组规则一句话：`app` 管进程装配与 Launcher 主 UI，`modules` 放内容模块，`ui` 放跨模块共享控件与纯前端逻辑，`runtime` 放执行链路，`host` 放宿主扩展框架及原生实现，`core` 放与领域无关、可单独测试的通用设施；能脱离 gpui 独立编译的组件进 `crates/`（扩展运行时、Console 通道、类型擦除、LSP 客户端、脚本领域模型）。

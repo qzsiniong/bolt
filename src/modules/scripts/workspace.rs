@@ -9,10 +9,10 @@ use gpui_kit::{
 use super::panels::editor::{RunRequested, StopRequested};
 use super::panels::script_list_panel::ScriptSelected;
 use super::panels::{EditorPanel, ScriptListPanel};
-use crate::console_channel::ConsoleLog;
 use crate::modules::console::panel::ConsolePanel;
 use crate::runtime::run_service::{RunService, RunStateChanged};
 use crate::ui::window::{WindowPin, WindowTitleBar};
+use bolt_console::ConsoleLog;
 
 gpui_kit::actions!(bolt, [SaveScript, RunScript, NewScript]);
 
@@ -39,7 +39,7 @@ impl Workspace {
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
-        lsp: Result<Arc<crate::lsp::LspClient>, String>,
+        lsp: Result<Arc<bolt_lsp::LspClient>, String>,
         console_log: ConsoleLog,
         run_service: Entity<RunService>,
     ) -> Self {

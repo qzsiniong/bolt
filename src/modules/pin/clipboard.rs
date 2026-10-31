@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use gpui_kit::ImageFormat;
 
-use crate::console_channel::ConsoleChannel;
 use crate::ui::clipboard::{PasteContent, read_paste_content};
+use bolt_console::ConsoleChannel;
 
 /// pin 便签展示的最大尺寸（逻辑像素）。
 pub(crate) const MAX_PIN_WIDTH: f32 = 800.;

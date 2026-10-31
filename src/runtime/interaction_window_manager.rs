@@ -17,8 +17,8 @@ use gpui_kit::{
 
 use super::interaction::{ConfirmChoice, InteractionBridge, PickKind, ProgressSlot, UiRequest};
 use super::runner::CancelToken;
-use crate::console_channel::ConsoleChannel;
 use crate::ui::interaction_window::{InteractionEvent, InteractionState, InteractionWindow};
+use bolt_console::ConsoleChannel;
 
 /// 脚本执行期间交互请求的排空间隔。
 pub(crate) const INTERACTION_TICK: Duration = Duration::from_millis(50);

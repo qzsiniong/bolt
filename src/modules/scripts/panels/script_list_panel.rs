@@ -18,9 +18,9 @@ use gpui_kit::{
 
 use super::editor::EditorPanel;
 use crate::app::shell::AppShell;
-use crate::model::script::{Language, Script};
-use crate::model::script_store;
 use crate::ui::mac_ffi;
+use bolt_model::script::{Language, Script};
+use bolt_model::script_store;
 
 /// 用户从列表里选中了一个脚本时发出。
 #[derive(Clone, Debug)]

@@ -25,13 +25,14 @@ use self::actions::{
     DeleteLine, DuplicateLineDown, DuplicateLineUp, MoveLineDown, MoveLineUp, ToggleBlockComment,
     ToggleComment,
 };
-use crate::lsp::LspClient;
-use crate::lsp::providers::{DocHandle, LspBridge};
-use crate::model::script::{Language, Script};
-use crate::model::script_store;
+use bolt_lsp::LspClient;
+use bolt_model::script::{Language, Script};
+use bolt_model::script_store;
+use providers::{DocHandle, LspBridge};
 
 mod actions;
 mod document;
+mod providers;
 
 /// 用户点击 Run 时发出。
 #[derive(Clone, Debug)]

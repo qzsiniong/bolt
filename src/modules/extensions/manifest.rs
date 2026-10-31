@@ -49,10 +49,7 @@ const DEMO_FILES: &[(&str, &str)] = &[
 
 /// `~/Library/Application Support/bolt/extensions/`。
 pub fn extensions_dir() -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push("extensions");
-    path
+    bolt_model::paths::data_root().join("extensions")
 }
 
 /// 仓库内随源码维护的扩展目录（开发副本）。
@@ -204,11 +201,9 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
 /// 每个扩展的私有数据目录：
 /// `~/Library/Application Support/bolt/extensions-data/<id>/`。
 pub fn extension_data_dir(id: &str) -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push("extensions-data");
-    path.push(id);
-    path
+    bolt_model::paths::data_root()
+        .join("extensions-data")
+        .join(id)
 }
 
 /// 确保扩展的私有数据目录存在并返回其路径。

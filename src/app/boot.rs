@@ -9,9 +9,8 @@ use super::assets::ExtensionAssets;
 use super::shell::{APP_TICK, AppShell};
 use super::shell_log;
 use super::{hotkey, tray, usage, windows};
-use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
-use crate::model::{project_gen, script_store};
+use crate::model::project_gen;
 use crate::modules::extensions::host::ExtensionsHost;
 use crate::modules::extensions::js_env::BoltJsEnv;
 use crate::modules::extensions::manifest as extension;
@@ -19,6 +18,8 @@ use crate::modules::extensions::state::ExtensionsState;
 use crate::modules::json_editor::state::JsonEditorState;
 use crate::modules::scripts::state::ScriptsState;
 use crate::runtime::run_service::RunService;
+use bolt_console::ConsoleChannel;
+use bolt_model::script_store;
 
 pub(crate) fn run() {
     // Console 先于一切创建：启动期错误（目录准备、播种、项目文件）也要进
@@ -26,10 +27,7 @@ pub(crate) fn run() {
     // 1000 条），视图打开前产生的条目会留着，打开后一并显示。Error 级条目
     // 同时落盘 bolt.log：用户若从不打开 Console 窗口，落盘文件就是启动失败的
     // 唯一线索。调试构建下每条输出还会同时打到终端（见 console_channel）。
-    let log_path = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("bolt")
-        .join("bolt.log");
+    let log_path = bolt_model::paths::data_root().join("bolt.log");
     let console_channel = ConsoleChannel::new_with_error_log(log_path);
 
     let scripts_dir = script_store::scripts_dir();
@@ -77,7 +75,7 @@ pub(crate) fn run() {
 
     // 语言服务先于 UI 启动，编辑器从第一帧起就有诊断、补全和悬停。
     // 失败原因会打进下面的 Console；编辑器退化成纯语法高亮。
-    let lsp_client = crate::lsp::LspClient::spawn(&scripts_dir).map(Arc::new);
+    let lsp_client = bolt_lsp::LspClient::spawn(&scripts_dir).map(Arc::new);
 
     // UI 扩展的 `svg("icons/x.svg")` 相对扩展目录解析，而进程只有一个全局
     // AssetSource：用复合资源源在内置 Lucide 图标之前先查已打开的扩展目录。

@@ -1,0 +1,13 @@
+[package]
+name = "bolt-lsp"
+version = "0.1.0"
+edition = "2024"
+description = "最小 LSP 客户端：stdio JSON-RPC 驱动 typescript-language-server 子进程"
+
+[dependencies]
+crossbeam-channel = "0.5"
+# 找 typescript-language-server 可执行文件时要探 home 下的 nvm/volta 等目录。
+dirs = "5"
+lsp-types = "0.97"
+parking_lot = "0.12"
+serde_json = "1.0.154"

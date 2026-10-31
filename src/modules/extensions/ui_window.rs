@@ -94,7 +94,7 @@ enum ChromeKind {
 /// 任意资产路径的图标：内置 Lucide 图标也是这条路（`icons/<name>.svg`），
 /// 扩展自己提供的 `icons/x.svg` 由复合资产源按已登记的扩展根解析。
 /// 实现挪到了 [`crate::app::assets::AssetIcon`]（Launcher 也要用）。
-
+///
 /// builtin 动作的默认图标与提示（清单没写 `icon` / `tooltip` 时用）。
 fn builtin_presentation(builtin: UiBuiltin) -> (IconName, &'static str) {
     match builtin {
@@ -397,7 +397,7 @@ pub(crate) fn open_extension_ui(cx: &mut App, target: CommandTarget) {
 fn load_shell_root(
     runtime: &Rc<gpui_shell::ShellRuntime>,
     root: &PathBuf,
-    console: &crate::console_channel::ConsoleChannel,
+    console: &bolt_console::ConsoleChannel,
     window: &mut Window,
     cx: &mut App,
 ) -> Entity<gpui_shell::ShellRoot> {

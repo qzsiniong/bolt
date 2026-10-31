@@ -1,18 +1,17 @@
-//! 脚本执行管线：QuickJS 运行器、宿主交互桥、应用级运行服务，
-//! 以及 TypeScript 类型擦除步骤。
+//! 脚本执行管线：QuickJS 运行器、宿主交互桥与应用级运行服务。
+//! TypeScript 类型擦除在 `bolt-ts` crate。
 
 use std::path::Path;
 
 use gpui_kit::App;
 
 use crate::app::shell::AppShell;
-use crate::model::script::Language;
+use bolt_model::script::Language;
 
 pub(crate) mod interaction;
 pub(crate) mod interaction_window_manager;
 pub(crate) mod run_service;
 pub(crate) mod runner;
-pub(crate) mod ts_transform;
 
 /// 从磁盘读取脚本或扩展入口文件，再交给运行服务执行。
 /// 启动器里脚本模块和扩展模块的条目都走这里。

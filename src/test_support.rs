@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::console_channel::ConsoleChannel;
 use crate::host::{HostRegistry, modules};
-use crate::model::script::Language;
 use crate::runtime::interaction::InteractionBridge;
 use crate::runtime::runner::{CancelToken, RunEnv, run_script};
+use bolt_console::ConsoleChannel;
+use bolt_model::script::Language;
 
 /// 临时目录，drop 时整棵删掉。
 ///

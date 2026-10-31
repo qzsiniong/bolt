@@ -15,10 +15,10 @@ use gpui_kit::{Context, Entity, EventEmitter, Subscription, Task};
 use super::interaction::InteractionBridge;
 use super::interaction_window_manager::InteractionWindowManager;
 use super::runner::{CancelToken, RunEnv};
-use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
-use crate::model::script::Language;
 use crate::ui::interaction_window::{InteractionEvent, InteractionWindow};
+use bolt_console::ConsoleChannel;
+use bolt_model::script::Language;
 use plux_js_manager::ExtensionStore;
 use plux_rs::Bundle;
 

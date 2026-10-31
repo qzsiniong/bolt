@@ -13,10 +13,10 @@ use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
 use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module, PasteHandler};
-use crate::model::script::Language;
-use crate::model::script_store;
 use crate::ui::clipboard::PasteContent;
 use crate::ui::mac_ffi;
+use bolt_model::script::Language;
+use bolt_model::script_store;
 
 /// Scripts 模块：提供「脚本管理」「新建脚本」两条内置命令，以及脚本目录里
 /// 每个脚本一条的运行命令。

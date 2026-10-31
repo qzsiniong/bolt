@@ -20,8 +20,8 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div, px,
 };
 
-use crate::console_channel::{ConsoleEntry, ConsoleLevel, ConsoleLog};
 use crate::ui::window::{WindowPin, WindowTitleBar};
+use bolt_console::{ConsoleEntry, ConsoleLevel, ConsoleLog};
 
 /// 视图里最多保留的行数；更旧的条目被丢弃。
 const MAX_ENTRIES: usize = 1000;

@@ -711,11 +711,11 @@ fn describe(error: &RegisterPluginError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::console_channel::ConsoleChannel;
     use crate::host::HostRegistry;
     use crate::modules::extensions::js_env::BoltJsEnv;
     use crate::modules::extensions::manifest;
     use crate::test_support::TempDir;
+    use bolt_console::ConsoleChannel;
     use plux_js_manager::{CancelToken, InvokeRequest, JsError, MANIFEST_FILE};
 
     fn host(tmp: &TempDir) -> ExtensionsHost {

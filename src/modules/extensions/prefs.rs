@@ -16,10 +16,7 @@ pub(crate) const FILE_NAME: &str = "extensions-disabled.json";
 
 /// `~/Library/Application Support/bolt/extensions-disabled.json`。
 pub(crate) fn path() -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push(FILE_NAME);
-    path
+    bolt_model::paths::data_root().join(FILE_NAME)
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]

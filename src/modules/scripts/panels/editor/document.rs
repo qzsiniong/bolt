@@ -6,12 +6,12 @@ use std::time::Duration;
 use gpui_kit::component::WindowExt;
 use gpui_kit::{AsyncApp, Context, WeakEntity, Window};
 
+use super::providers::DocHandle;
 use super::{EditorPanel, RunRequested};
 use crate::app::shell::AppShell;
-use crate::lsp::path_to_uri;
-use crate::lsp::providers::DocHandle;
-use crate::model::script::Script;
-use crate::model::script_store;
+use bolt_lsp::path_to_uri;
+use bolt_model::script::Script;
+use bolt_model::script_store;
 
 impl EditorPanel {
     /// 把当前编辑器内容整段推给语言服务（全量同步）。

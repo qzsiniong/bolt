@@ -18,10 +18,7 @@ pub(crate) type KeywordOverrides = HashMap<String, Vec<String>>;
 
 /// `~/Library/Application Support/bolt/item-keywords.json`
 pub(crate) fn path() -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push("item-keywords.json");
-    path
+    bolt_model::paths::data_root().join("item-keywords.json")
 }
 
 /// 读覆盖表：文件缺失或损坏都当作空表（全部用模块默认）。

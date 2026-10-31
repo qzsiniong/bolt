@@ -21,10 +21,7 @@ use std::path::{Path, PathBuf};
 const ICON_SIZE: u32 = 64;
 
 fn cache_dir() -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push("app-icons");
-    path
+    bolt_model::paths::data_root().join("app-icons")
 }
 
 /// 缓存文件名由应用路径哈希决定：同一路径稳定，不同路径不会冲突。

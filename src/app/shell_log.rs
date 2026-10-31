@@ -13,7 +13,7 @@ use tracing::field::{Field, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::{Event, Level, Metadata, Subscriber, span};
 
-use crate::console_channel::{ConsoleChannel, ConsoleLevel};
+use bolt_console::{ConsoleChannel, ConsoleLevel};
 
 /// UI 扩展脚本 `console.*` 的 target（gpui-shell 内部常量）。
 const SCRIPT_TARGET: &str = "gpui_shell::script";

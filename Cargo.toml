@@ -6,8 +6,21 @@ edition = "2024"
 # 扩展运行时（plux-rs 的 JS Manager 适配器）独立成一个 crate，与宿主解耦：
 # 它不依赖 gpui / bolt 的任何类型，宿主通过 `JsEnv` 注入 console、宿主模块与
 # 交互 API。`[patch]` 与 `[profile]` 只在 workspace 根生效，所以都留在本文件。
+#
+# 其余 crate 同理，按「能否脱离 gpui 独立编译」切分：
+# - bolt-console：进程级共享的 Console 输出通道
+# - bolt-ts：swc 的 TypeScript 类型擦除
+# - bolt-lsp：typescript-language-server 的 stdio JSON-RPC 客户端
+# - bolt-model：脚本领域类型与脚本目录文件操作
 [workspace]
-members = [".", "crates/plux-js-manager"]
+members = [
+	".",
+	"crates/plux-js-manager",
+	"crates/bolt-console",
+	"crates/bolt-ts",
+	"crates/bolt-lsp",
+	"crates/bolt-model",
+]
 resolver = "3"
 
 [dependencies]
@@ -52,12 +65,6 @@ core-graphics = "0.24"
 xcap = { version = "0.9", default-features = false, features = ["image"] }
 rqrr = "0.11"
 image = { version = "0.25", default-features = false }
-swc_ecma_parser = "46.0.0"
-swc_ecma_transforms_typescript = "56.0.0"
-swc_common = "26.0.0"
-swc_ecma_codegen = "32.0.3"
-swc_ecma_transforms_base = "50.0.0"
-swc_ecma_ast = "29.0.2"
 # UI 扩展运行时（扩展脚本描述界面，宿主在 GPUI 主线程原生渲染，无 WebView）。
 # 锁 tag：`gpui-component` 是旧仓库名，canonical 名是 `gpui-kit`，
 # git 源 URL 必须与下面两个 [patch] 的 key 完全一致。
@@ -68,6 +75,11 @@ gpui-shell = { git = "https://github.com/longbridge/gpui-kit", tag = "v0.7.3", d
 # QuickJS 适配器（每扩展一个常驻运行时，专用线程持有）。
 plux-rs = { version = "1.1", default-features = false }
 plux-js-manager = { path = "crates/plux-js-manager" }
+# 宿主自己的独立组件（见上面 workspace 注释的切分说明）。
+bolt-console = { path = "crates/bolt-console" }
+bolt-ts = { path = "crates/bolt-ts" }
+bolt-lsp = { path = "crates/bolt-lsp" }
+bolt-model = { path = "crates/bolt-model" }
 # gpui-shell 通过 tracing 上报脚本 console 输出、加载失败与热重载结果；
 # 不装 subscriber 这些事件会被静默丢弃（见 src/app/shell_log.rs）。
 tracing = "0.1"

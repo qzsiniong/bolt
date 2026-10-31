@@ -174,7 +174,7 @@ pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
     windows::items_changed(cx);
 }
 
-fn console(cx: &App) -> &crate::console_channel::ConsoleChannel {
+fn console(cx: &App) -> &bolt_console::ConsoleChannel {
     &cx.global::<AppShell>().console_channel
 }
 

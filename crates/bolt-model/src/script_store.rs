@@ -3,15 +3,12 @@
 //! 这里只做「一个目录 ↔ 一组 [`Script`]」的文件操作，不持有状态。写操作失败一律
 //! 返回可读的错误字符串交给 UI 展示；列表读不到目录时退化成空表，不算错误。
 
-use super::script::{Language, Script};
+use crate::script::{Language, Script};
 use std::path::{Path, PathBuf};
 
 /// 脚本目录：`~/Library/Application Support/bolt/scripts/`。
 pub fn scripts_dir() -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push("scripts");
-    path
+    crate::paths::data_root().join("scripts")
 }
 
 /// 确保脚本目录存在（首次启动或目录被删后都走这里）。

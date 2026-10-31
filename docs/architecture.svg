@@ -207,5 +207,5 @@
   </g>
 
   <!-- ===== 底部注释 ===== -->
-  <text x="60" y="1030" font-size="11.5" fill="#86909C">依赖方向自上而下单向：模块实现 Module trait 向 Launcher 贡献 items，执行层与基础设施对上不可见；扩展运行时独立成 crate（plux-js-manager），不依赖 gpui，可单独测试。</text>
+  <text x="60" y="1030" font-size="11.5" fill="#86909C">依赖方向自上而下单向：模块实现 Module trait 向 Launcher 贡献 items，执行层与基础设施对上不可见；能脱离 gpui 独立编译的组件进 crates/（plux-js-manager、bolt-console、bolt-ts、bolt-lsp、bolt-model），可单独测试。</text>
 </svg>

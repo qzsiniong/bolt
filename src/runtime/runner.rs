@@ -10,12 +10,12 @@ use std::sync::Arc;
 use rquickjs::{AsyncContext, AsyncRuntime, CatchResultExt, Module};
 
 use super::interaction::InteractionBridge;
-use super::ts_transform::strip_typescript;
-use crate::console_channel::ConsoleChannel;
 use crate::host::modules::bolt;
 use crate::host::{HostLoader, HostRegistry, HostResolver};
-use crate::model::script::Language;
 use crate::modules::extensions::js_env::ExtensionRunScope;
+use bolt_console::ConsoleChannel;
+use bolt_model::script::Language;
+use bolt_ts::strip_typescript;
 use plux_js_manager::{ExtensionStore, InvokeRequest, JsError};
 use plux_rs::Bundle;
 

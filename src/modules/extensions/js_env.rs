@@ -13,12 +13,12 @@ use std::sync::Arc;
 use plux_js_manager::{HostModuleSpec, JsEnv, JsError, LogLevel, Scope};
 use rquickjs::Ctx;
 
-use crate::console_channel::ConsoleChannel;
 use crate::host::HostRegistry;
 use crate::host::modules::bolt;
-use crate::model::script::Language;
 use crate::runtime::interaction::InteractionBridge;
-use crate::runtime::ts_transform::strip_typescript;
+use bolt_console::ConsoleChannel;
+use bolt_model::script::Language;
+use bolt_ts::strip_typescript;
 
 /// bolt 侧的运行时环境：一套宿主模块 + 一个 Console 通道。
 pub(crate) struct BoltJsEnv {

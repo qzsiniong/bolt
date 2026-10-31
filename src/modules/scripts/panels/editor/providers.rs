@@ -14,7 +14,7 @@ use gpui_kit::{App, AppContext, Entity, SharedString, Task, Window};
 use lsp_types::{CodeAction, CompletionContext, CompletionResponse, Hover, Position};
 use parking_lot::Mutex;
 
-use super::client::LspClient;
+use bolt_lsp::LspClient;
 
 /// 编辑器里当前载入的文档，面板负责写、provider 负责读。
 #[derive(Clone, Debug)]

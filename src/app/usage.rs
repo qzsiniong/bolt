@@ -20,10 +20,7 @@ use crate::core::smart_rank::{RankConfig, SmartRank};
 
 /// `~/Library/Application Support/bolt/item-usage.json`
 pub(crate) fn usage_path() -> PathBuf {
-    let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-    path.push("bolt");
-    path.push("item-usage.json");
-    path
+    bolt_model::paths::data_root().join("item-usage.json")
 }
 
 /// 一张记录文件对应的排序引擎。每次操作现建：读一次文件即可，不持有跨调用
