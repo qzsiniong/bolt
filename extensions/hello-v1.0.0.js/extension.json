@@ -17,7 +17,7 @@
         "actions": [
             { "builtin": "reload" },
             { "builtin": "open_data_dir" },
-            { "builtin": "open_plugin_dir" },
+            { "builtin": "open_extension_dir" },
             { "builtin": "close_window" },
             { "command": "sayHello" }
         ]

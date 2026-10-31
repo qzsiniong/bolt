@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use gpui_kit::App;
 use gpui_kit::ImageSource;
+use gpui_kit::SharedString;
 use gpui_kit::assets::IconName;
 
 use crate::ui::clipboard::PasteContent;
@@ -89,14 +90,17 @@ pub enum DialogSpec {
     },
 }
 
-/// 列表行左侧的图标：内置图标，或应用自己的内存图片。
+/// 列表行左侧的图标：内置图标、资产路径图标，或应用自己的内存图片。
 ///
 /// 应用启动器需要每个 App 的真实图标，`IconName` 是固定枚举表达不了；
 /// 图片走 `ImageSource::Image`（内存 PNG 字节），不能用 `data:` URI
 /// ——那个字符串会被 gpui 当成 URI 去 fetch 资源，取不到就静默空白。
+/// `Asset` 是扩展清单里声明的图标路径（Lucide 名归一化成 `icons/<name>.svg`，
+/// 扩展自己的 `icons/x.svg` 由复合资产源按已登记的扩展根解析）。
 #[derive(Clone)]
 pub enum LauncherIcon {
     Named(IconName),
+    Asset(SharedString),
     Image(ImageSource),
 }
 

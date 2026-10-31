@@ -5,7 +5,7 @@
 //! `AppShell::items_revision` 传进来，这时也只重取一次内存快照。
 
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{ActiveTheme as _, IconName, Sizable};
+use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable};
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement as _,
     IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window,
@@ -171,6 +171,16 @@ impl ExtensionManagerView {
                             .flex()
                             .items_center()
                             .gap(px(6.))
+                            .child(match &entry.icon {
+                                Some(icon) => {
+                                    Icon::new(crate::app::assets::AssetIcon(icon.clone().into()))
+                                        .size_4()
+                                        .into_any_element()
+                                }
+                                None => Icon::new(gpui_kit::assets::IconName::Puzzle)
+                                    .size_4()
+                                    .into_any_element(),
+                            })
                             .child(
                                 div()
                                     .flex_1()

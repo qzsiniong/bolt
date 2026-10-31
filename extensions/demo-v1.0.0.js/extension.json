@@ -6,36 +6,43 @@
   "version": "1.0.0",
   "entry": "index.js",
   "permissions": ["fs", "net", "typeStr"],
+  "icon": "icons/star.svg",
   "commands": [
     {
       "id": "hello",
       "title": "打招呼",
-      "description": "命令上下文 ctx 与返回值"
+      "description": "命令上下文 ctx 与返回值",
+      "icon": "hand"
     },
     {
       "id": "counter",
       "title": "点一下计数器",
-      "description": "模块级状态跨调用保留"
+      "description": "模块级状态跨调用保留",
+      "icon": "mouse-pointer-click"
     },
     {
       "id": "peek",
       "title": "看一眼扩展目录",
-      "description": "fs 权限：列出并读取扩展自己的文件"
+      "description": "fs 权限：列出并读取扩展自己的文件",
+      "icon": "folder-open"
     },
     {
       "id": "weather",
       "title": "网络请求",
-      "description": "net 权限：异步 fetch（需联网）"
+      "description": "net 权限：异步 fetch（需联网）",
+      "icon": "cloud-sun"
     },
     {
       "id": "chat",
       "title": "交互一下",
-      "description": "confirm / pickPath / typeStr 交互 API"
+      "description": "confirm / pickPath / typeStr 交互 API",
+      "icon": "messages-square"
     },
     {
       "id": "panel",
       "title": "打开面板",
       "description": "原生窗口：控件、剪贴板与标题栏动作",
+      "icon": "app-window",
       "ui": {
         "title": "演示面板",
         "width": 640,

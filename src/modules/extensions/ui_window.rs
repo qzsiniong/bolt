@@ -29,9 +29,10 @@ use super::host::CommandTarget;
 use super::manifest::{UiActionKind, UiBuiltin, ensure_extension_data_dir, extension_data_dir};
 use super::ops;
 use super::state::ExtensionsState;
+use crate::app::assets::AssetIcon;
 use crate::app::shell::AppShell;
 use crate::ui::window::{WindowPin, WindowSpec, WindowTitleBar, button_with_tooltip, set_pinned};
-use gpui_kit::assets::{IconName, IconNamed};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::{
@@ -92,14 +93,7 @@ enum ChromeKind {
 
 /// 任意资产路径的图标：内置 Lucide 图标也是这条路（`icons/<name>.svg`），
 /// 扩展自己提供的 `icons/x.svg` 由复合资产源按已登记的扩展根解析。
-#[derive(Clone, Debug)]
-struct AssetIcon(SharedString);
-
-impl IconNamed for AssetIcon {
-    fn path(self) -> SharedString {
-        self.0
-    }
-}
+/// 实现挪到了 [`crate::app::assets::AssetIcon`]（Launcher 也要用）。
 
 /// builtin 动作的默认图标与提示（清单没写 `icon` / `tooltip` 时用）。
 fn builtin_presentation(builtin: UiBuiltin) -> (IconName, &'static str) {

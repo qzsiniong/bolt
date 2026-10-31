@@ -570,6 +570,10 @@ fn row_content(item: &LauncherItem, cx: &App) -> AnyElement {
         .items_center()
         .child(match item.icon.clone() {
             LauncherIcon::Named(icon) => Icon::new(icon).size_6().into_any_element(),
+            // 扩展清单声明的图标路径：扩展自己的 icons/ 优先，内置 Lucide 兜底。
+            LauncherIcon::Asset(path) => Icon::new(crate::app::assets::AssetIcon(path))
+                .size_6()
+                .into_any_element(),
             // 固定 24×24 容器：图片的行高与内置图标一致，列表各行不会因为
             // 应用图标尺寸不同而抖动。
             LauncherIcon::Image(source) => div()

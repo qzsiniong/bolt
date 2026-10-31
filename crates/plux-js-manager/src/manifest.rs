@@ -69,6 +69,10 @@ pub struct ExtensionManifest {
     /// 脚本命令要用的权限名，取值见 [`PERMISSIONS`]。缺省为空：什么都不给。
     #[serde(default)]
     pub permissions: Vec<String>,
+    /// 扩展图标：Lucide 名（`puzzle`）或扩展目录内的资产路径（`icons/logo.svg`）。
+    /// 显示在扩展管理与 Launcher（命令没写自己的图标时兜底）。省略用宿主默认。
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(default)]
     pub commands: Vec<ExtensionCommand>,
 }
@@ -86,6 +90,11 @@ impl ExtensionManifest {
             &self.name
         }
     }
+
+    /// 扩展图标的资产路径；`None` = 用宿主默认图标。
+    pub fn icon_path(&self) -> Option<String> {
+        normalize_icon(self.icon.as_deref())
+    }
 }
 
 /// 清单里声明的一条命令 = Launcher 里的一条 item。
@@ -95,6 +104,11 @@ pub struct ExtensionCommand {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// 命令图标：Lucide 名或扩展目录内的资产路径（写法同扩展级 `icon`）。
+    /// 省略时回退扩展图标，扩展也没写就用宿主默认（UI 命令 AppWindow、
+    /// 脚本命令 Puzzle）。
+    #[serde(default)]
+    pub icon: Option<String>,
     /// 给了就是 UI 命令：宿主开原生窗口，不跑脚本命令。
     #[serde(default)]
     pub ui: Option<UiSpec>,
@@ -103,6 +117,26 @@ pub struct ExtensionCommand {
 impl ExtensionCommand {
     pub fn is_ui(&self) -> bool {
         self.ui.is_some()
+    }
+
+    /// 命令图标的资产路径；`None` = 回退扩展图标。
+    pub fn icon_path(&self) -> Option<String> {
+        normalize_icon(self.icon.as_deref())
+    }
+}
+
+/// 图标写法归一化：Lucide 名（`zap`）补成资产路径 `icons/zap.svg`；带 `/` 或
+/// 以 `.svg` 结尾的值按资产路径原样保留（相对扩展目录）。空白视同没写。
+fn normalize_icon(spec: Option<&str>) -> Option<String> {
+    let icon = spec.map(str::trim)?;
+    if icon.is_empty() {
+        return None;
+    }
+    let icon = icon.trim_start_matches('/');
+    if icon.contains('/') || icon.ends_with(".svg") {
+        Some(icon.to_string())
+    } else {
+        Some(format!("icons/{icon}.svg"))
     }
 }
 
@@ -198,20 +232,8 @@ impl UiAction {
     }
 
     /// 按钮图标的资产路径；`None` = 用动作的默认图标。
-    ///
-    /// 带 `/` 或以 `.svg` 结尾的值当成资产路径（相对扩展目录，扩展根已登记进
-    /// 复合资产源），其余当成 Lucide 图标名补成 `icons/<name>.svg`。
     pub fn icon_path(&self) -> Option<String> {
-        let icon = self.icon.as_deref().map(str::trim)?;
-        if icon.is_empty() {
-            return None;
-        }
-        let icon = icon.trim_start_matches('/');
-        if icon.contains('/') || icon.ends_with(".svg") {
-            Some(icon.to_string())
-        } else {
-            Some(format!("icons/{icon}.svg"))
-        }
+        normalize_icon(self.icon.as_deref())
     }
 
     /// 悬停提示；空白串视同没写。
@@ -323,8 +345,24 @@ pub fn read(dir: &Path) -> Result<ExtensionPackage, String> {
             id: "run".to_string(),
             title: manifest.display_name().to_string(),
             description: manifest.description.clone(),
+            // 自动补的命令代表扩展本身，图标沿用扩展级声明。
+            icon: manifest.icon.clone(),
             ui: None,
         });
+    }
+
+    // 图标路径交给资产源解析（越界会被拒），这里只挡一眼就能看出的错误。
+    let icon_contexts = std::iter::once(("扩展级 icon".to_string(), manifest.icon.as_deref()))
+        .chain(manifest.commands.iter().map(|command| {
+            (
+                format!("命令 `{}` 的 icon", command.id),
+                command.icon.as_deref(),
+            )
+        }));
+    for (context, spec) in icon_contexts {
+        if normalize_icon(spec).is_some_and(|icon| icon.split('/').any(|seg| seg == "..")) {
+            return Err(format!("{context} 不能包含 `..`"));
+        }
     }
 
     let mut seen = Vec::new();
@@ -747,6 +785,80 @@ mod tests {
     }
 
     #[test]
+    fn icons_normalize_like_action_icons() {
+        let tmp = TempDir::new("manifest-icons");
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0", "icon": "star",
+            "commands": [
+                { "id": "a", "title": "A", "icon": "icons/logo.svg" },
+                { "id": "b", "title": "B", "icon": "  " }
+            ]
+        }"#;
+        write_extension(&tmp, "demo-v1.0.0.js", manifest, &["index.js"]);
+
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
+        // Lucide 名补成资产路径。
+        assert_eq!(
+            package.manifest.icon_path().as_deref(),
+            Some("icons/star.svg")
+        );
+        // 资产路径原样保留。
+        assert_eq!(
+            package.manifest.commands[0].icon_path().as_deref(),
+            Some("icons/logo.svg")
+        );
+        // 空白视同没写。
+        assert_eq!(package.manifest.commands[1].icon_path(), None);
+    }
+
+    #[test]
+    fn synthesized_run_command_inherits_the_extension_icon() {
+        let tmp = TempDir::new("manifest-icon-run");
+        write_extension(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "icon": "star" }"#,
+            &["index.js"],
+        );
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
+        assert_eq!(package.manifest.commands.len(), 1);
+        assert_eq!(
+            package.manifest.commands[0].icon_path().as_deref(),
+            Some("icons/star.svg")
+        );
+    }
+
+    #[test]
+    fn manifest_and_command_icons_reject_traversal() {
+        let tmp = TempDir::new("manifest-icon-traversal");
+        write_extension(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0", "icon": "../secret.svg" }"#,
+            &["index.js"],
+        );
+        let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("traversal icon");
+        assert!(
+            error.contains("扩展级 icon") && error.contains("`..`"),
+            "{error}"
+        );
+
+        let tmp = TempDir::new("manifest-icon-traversal-cmd");
+        write_extension(
+            &tmp,
+            "demo-v1.0.0.js",
+            r#"{ "id": "demo", "version": "1.0.0",
+                 "commands": [{ "id": "a", "title": "A", "icon": "x/../../y.svg" }] }"#,
+            &["index.js"],
+        );
+        let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("traversal command icon");
+        assert!(
+            error.contains("命令 `a` 的 icon") && error.contains("`..`"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn duplicate_command_ids_are_rejected() {
         let tmp = TempDir::new("manifest-dupe");
         let manifest = r#"{
@@ -908,6 +1020,7 @@ mod tests {
             "depends",
             "description",
             "entry",
+            "icon",
             "id",
             "name",
             "optional_depends",

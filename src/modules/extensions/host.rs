@@ -36,6 +36,9 @@ pub(crate) struct CommandTarget {
     pub(crate) command_id: String,
     pub(crate) title: String,
     pub(crate) description: Option<String>,
+    /// Launcher 行图标（资产路径）：命令 `icon` 优先，扩展级 `icon` 兜底；
+    /// 都没写为 `None`（渲染端再退到内置默认图标）。
+    pub(crate) icon: Option<String>,
     /// 给了就是 UI 命令。
     pub(crate) ui: Option<UiSpec>,
 }
@@ -103,6 +106,8 @@ pub(crate) struct ExtensionEntry {
     pub(crate) root: PathBuf,
     pub(crate) name: String,
     pub(crate) description: Option<String>,
+    /// 扩展图标（资产路径）；`None` = 渲染端用内置默认。
+    pub(crate) icon: Option<String>,
     pub(crate) command_count: usize,
     pub(crate) ui_command_count: usize,
     pub(crate) permissions: Vec<String>,
@@ -290,6 +295,7 @@ impl ExtensionsHost {
                 root: meta.root.clone(),
                 name: meta.display_name().to_string(),
                 description: meta.manifest.description.clone(),
+                icon: meta.manifest.icon_path(),
                 command_count: meta.commands().len(),
                 ui_command_count: meta
                     .commands()
@@ -329,6 +335,7 @@ impl ExtensionsHost {
                     root,
                     name: bundle.id.clone(),
                     description: None,
+                    icon: None,
                     command_count: 0,
                     ui_command_count: 0,
                     permissions: Vec::new(),
@@ -621,6 +628,8 @@ impl ExtensionsHost {
                     command_id: command.id.clone(),
                     title: command.title.clone(),
                     description: command.description.clone(),
+                    // 命令图标覆盖扩展图标，都没写就留给渲染端用默认。
+                    icon: command.icon_path().or_else(|| meta.manifest.icon_path()),
                     ui,
                 });
             }

@@ -1,9 +1,11 @@
-//! 复合资源源：gpui-kit 内置图标 + 已打开的 UI 扩展目录。
+//! 复合资源源：gpui-kit 内置图标 + 已登记的扩展目录。
 //!
 //! gpui-shell 的 `svg(path)` 相对**应用根**解析（不是相对调用它的模块），而一个
-//! 进程只有一个全局 `AssetSource`。UI 扩展各有自己的目录，所以这里把所有已打
-//! 开的扩展根登记下来，按「最近打开优先」逐个尝试，最后回退到 gpui-kit 的内置
-//! 图标全集（编辑器、launcher 用的 Lucide 图标）。
+//! 进程只有一个全局 `AssetSource`。扩展目录里的自定义图标（UI 脚本的 `svg()`、
+//! 清单里声明的 `icon`）也要走这条路，所以扩展根有两个登记时机：UI 命令开窗时
+//! （`open_extension_ui`），以及每次 Launcher 收集 items 时（`collect_items`，
+//! 否则清单图标在开窗前解析不到）。按「最近登记优先」逐个尝试，最后回退到
+//! gpui-kit 的内置图标全集（编辑器、launcher 用的 Lucide 图标）。
 //!
 //! 同名资源（例如 `icons/trash.svg`）由**最近打开的扩展**遮蔽内置图标，这一点
 //! 写进了 README。
@@ -13,10 +15,21 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use gpui_kit::assets::AllAssets;
+use gpui_kit::assets::{AllAssets, IconNamed};
 // 显式导入：`gpui_kit::*` 会把 gpui 的 `#[gpui::test]` 宏带进作用域，遮蔽
 // 内置的 `#[test]` 并导致宏展开递归。
 use gpui_kit::{AssetSource, SharedString};
+
+/// 任意资产路径的图标：内置 Lucide 图标也是这条路（`icons/<name>.svg`），
+/// 扩展自己提供的 `icons/x.svg` 由本复合资产源按已登记的扩展根解析。
+#[derive(Clone, Debug)]
+pub(crate) struct AssetIcon(pub(crate) SharedString);
+
+impl IconNamed for AssetIcon {
+    fn path(self) -> SharedString {
+        self.0
+    }
+}
 
 /// 应用启动时用 `.with_assets(..)` 安装；clone 一份存进 `AppShell`，开窗时登记根目录。
 #[derive(Clone, Default)]

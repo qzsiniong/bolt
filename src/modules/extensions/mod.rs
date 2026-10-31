@@ -31,7 +31,7 @@ use std::sync::Arc;
 use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
-use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module};
+use crate::app::launcher::{ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module};
 use crate::app::shell::AppShell;
 
 use actions::{ActionSubject, extension_actions};
@@ -62,6 +62,15 @@ impl Module for ExtensionsModule {
 
         let mut items = builtin_items();
         items.extend(items_in(&targets));
+
+        // 清单声明的图标走资产路径，得让复合资产源认识扩展根（Lucide 兜底，
+        // 扩展同名文件优先）。注册在这里而不是开窗时：Launcher 渲染图标发生
+        // 在 collect 之后的同一帧，开窗才登记就晚了。
+        let assets = cx.global::<ExtensionsState>().assets.clone();
+        for target in &targets {
+            assets.register_root(target.root.clone());
+        }
+
         items
     }
 }
@@ -138,11 +147,18 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
                         target.extension_name, target.bundle.version
                     ))
                 }),
-                icon: if ui {
-                    IconName::AppWindow.into()
-                } else {
-                    IconName::Puzzle.into()
-                },
+                // 清单写了图标（命令级覆盖扩展级）就用它；否则按命令类型给默认。
+                icon: target
+                    .icon
+                    .clone()
+                    .map(|path| LauncherIcon::Asset(path.into()))
+                    .unwrap_or_else(|| {
+                        if ui {
+                            IconName::AppWindow.into()
+                        } else {
+                            IconName::Puzzle.into()
+                        }
+                    }),
                 group: "扩展".to_string(),
                 keywords: vec![target.extension_id.clone(), target.command_id.clone()],
                 on_confirm,
@@ -169,6 +185,7 @@ mod tests {
             command_id: command.to_string(),
             title: format!("命令 {command}"),
             description: None,
+            icon: None,
             ui,
         }
     }
@@ -213,6 +230,24 @@ mod tests {
     #[test]
     fn empty_extension_yields_no_items() {
         assert!(items_in(&[]).is_empty());
+    }
+
+    #[test]
+    fn manifest_icons_override_the_builtin_defaults() {
+        let mut scripted = target("hello", None);
+        scripted.icon = Some("icons/logo.svg".to_string());
+        let items = items_in(&[scripted]);
+        assert!(matches!(
+            &items[0].icon,
+            LauncherIcon::Asset(path) if path.as_ref() == "icons/logo.svg"
+        ));
+
+        // 没写图标的命令保持内置默认：UI 命令 AppWindow、脚本命令 Puzzle。
+        let items = items_in(&[target("hello", None)]);
+        assert!(matches!(
+            items[0].icon,
+            LauncherIcon::Named(IconName::Puzzle)
+        ));
     }
 
     #[test]
@@ -264,6 +299,7 @@ mod tests {
             depends: Vec::new(),
             optional_depends: Vec::new(),
             permissions: Vec::new(),
+            icon: None,
             commands: Vec::new(),
         };
         assert_eq!(manifest.display_name(), "demo");

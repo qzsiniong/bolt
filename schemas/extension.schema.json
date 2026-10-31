@@ -25,6 +25,12 @@
       "maxLength": 64,
       "description": "展示名（扩展管理、Launcher 副标题）。省略时退回 id。"
     },
+    "icon": {
+      "type": "string",
+      "pattern": "^(?!.*\\.\\.)",
+      "markdownDescription": "扩展图标：Lucide 图标名（`puzzle`，见 [lucide.dev/icons](https://lucide.dev/icons)）或扩展目录内的资产路径（`icons/logo.svg`，带 / 或以 .svg 结尾即按路径处理）。不能含 `..`（否则清单被拒）。\n\n显示在扩展管理与 Launcher；命令没写自己的 `icon` 时也用它兜底。都省略时用宿主默认图标。图标名写错时图标会缺失（资产源解析不到），靠试跑发现。",
+      "description": "扩展图标：Lucide 图标名或扩展目录内的资产路径。不能含 `..`。"
+    },
     "description": {
       "type": "string",
       "description": "扩展说明，显示在扩展管理里。"
@@ -91,6 +97,12 @@
         "description": {
           "type": "string",
           "description": "副标题；省略时显示「扩展名 v版本」。"
+        },
+        "icon": {
+          "type": "string",
+          "pattern": "^(?!.*\\.\\.)",
+          "markdownDescription": "命令图标：Lucide 图标名（`zap`，见 [lucide.dev/icons](https://lucide.dev/icons)）或扩展目录内的资产路径（`icons/zap.svg`，带 / 或以 .svg 结尾即按路径处理）。不能含 `..`（否则清单被拒）。\n\n显示在 Launcher 列表行左侧；省略时回退扩展级 `icon`，扩展也没写就用宿主默认（UI 命令 AppWindow、脚本命令 Puzzle）。",
+          "description": "命令图标：Lucide 图标名或扩展目录内的资产路径。不能含 `..`。省略时回退扩展级 icon。"
         },
         "ui": {
           "$ref": "#/$defs/ui"
