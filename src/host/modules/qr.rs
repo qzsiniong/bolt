@@ -1,9 +1,8 @@
-//! Screen capture and QR decoding for `scanQr`.
+//! `scanQr` 背后的截屏与二维码解码。
 //!
-//! Mirrors clipbeam's capture semantics: enumerate every monitor, grab each
-//! screen, greyscale it, downsample very wide screens, then decode the first QR
-//! code that reads. The caller decides what the returned text means — this
-//! module only produces it.
+//! 截屏语义沿用 clipbeam：枚举所有显示器，逐块抓图、转灰度，超宽屏先降采样，
+//! 然后解出第一个能读通的二维码。返回的文本是什么意思由调用方决定——本模块
+//! 只负责把它取出来。
 
 use core_graphics::access::ScreenCaptureAccess;
 use image::GrayImage;
@@ -13,24 +12,23 @@ use xcap::Monitor;
 
 use crate::runtime::interaction::InteractionBridge;
 
-/// Width cap before decoding. QR codes are hard-edged, so a nearest-neighbour
-/// downsample stays readable while keeping decode time flat on large displays.
+/// 解码前的宽度上限。二维码边缘硬朗，最近邻降采样后照样能读，又能让大屏上的
+/// 解码耗时保持稳定。
 const MAX_CAPTURE_WIDTH: u32 = 1600;
 
 const CAPTURE_ACCESS_HINT: &str = "识别二维码需要「屏幕录制」权限：请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Bolt（修改后需重启应用）";
 
-/// Whether this process may capture the screen. Asks the system for the
-/// permission when it is missing. Shared with the color picker module.
+/// 本进程是否有截屏权限。缺权限时顺带向系统申请一次。取色器模块共用。
 pub(crate) fn ensure_capture_access() -> bool {
     let access = ScreenCaptureAccess;
     access.preflight() || access.request()
 }
 
-/// `scanQr()`: `Ok(Some(text))` for the first decodable QR code, `Ok(None)`
-/// when no screen had one.
+/// `scanQr()`：解出第一个二维码返回 `Ok(Some(text))`，所有屏幕都没有则
+/// `Ok(None)`。
 ///
-/// No progress bar: capture + decode is fast enough to not warrant one, and
-/// the progress-floating window would steal focus from the user's target.
+/// 不显示进度条：截屏 + 解码足够快，不值得为它开窗；而且那个进度浮窗会抢走用户
+/// 目标窗口的焦点。
 pub fn scan_qr(_bridge: &InteractionBridge) -> Result<Option<String>, String> {
     if !ensure_capture_access() {
         return Err(CAPTURE_ACCESS_HINT.to_string());
@@ -41,8 +39,8 @@ pub fn scan_qr(_bridge: &InteractionBridge) -> Result<Option<String>, String> {
 fn scan_screens() -> Result<Option<String>, String> {
     let monitors = Monitor::all().map_err(|e| format!("枚举显示器失败：{e}"))?;
     for monitor in monitors {
-        // A screen can fail transiently (hot-plug, display asleep); skip it
-        // rather than failing the whole scan.
+        // 单块屏幕可能瞬时失败（热插拔、显示器休眠），跳过它就行，不必让整轮
+        // 扫描失败。
         let Ok(rgba) = monitor.capture_image() else {
             continue;
         };
@@ -61,8 +59,7 @@ fn downsample(gray: GrayImage) -> GrayImage {
     resize(&gray, MAX_CAPTURE_WIDTH, height.max(1), FilterType::Nearest)
 }
 
-/// First QR code in the frame that decodes. Several codes can be visible at
-/// once; which one comes back is not specified.
+/// 返回画面里第一个能解出的二维码。一屏可能同时有多个码；返回哪一个不确定。
 fn decode(gray: GrayImage) -> Option<String> {
     let mut prepared = PreparedImage::prepare(gray);
     for grid in prepared.detect_grids() {

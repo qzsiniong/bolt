@@ -1,5 +1,5 @@
-//! [`LspClient`]: a cloneable handle to the language server, plus the request
-//! plumbing (initialize handshake, requests, notifications, frame writing).
+//! [`LspClient`]：语言服务器的可克隆句柄，以及请求管线（初始化握手、请求、
+//! 通知、帧写入）。
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,8 +19,8 @@ use super::protocol::{
 };
 use super::server::spawn_process;
 
-/// Shared state of one language-server process. Cloned as an `Arc`; every field
-/// is individually synchronized so no outer lock is needed.
+/// 一个语言服务器进程的共享状态。以 `Arc` 克隆；每个字段各自同步，所以不需要
+/// 外层大锁。
 pub(super) struct Inner {
     pub(super) next_id: AtomicI64,
     pub(super) writer_tx: Sender<String>,
@@ -40,7 +40,7 @@ impl Drop for Inner {
     }
 }
 
-/// A cloneable handle to the language server.
+/// 语言服务器的可克隆句柄。
 #[derive(Clone)]
 pub struct LspClient {
     inner: Arc<Inner>,
@@ -48,20 +48,18 @@ pub struct LspClient {
 }
 
 impl LspClient {
-    /// Spawn `typescript-language-server --stdio` rooted at `scripts_dir` and
-    /// run the initialize handshake. Returns `Err` with the reason when the
-    /// binary is not installed or the handshake fails/times out — the caller
-    /// degrades gracefully to a syntax-highlighting-only editor.
+    /// 以 `scripts_dir` 为根启动 `typescript-language-server --stdio`，并完成
+    /// initialize 握手。可执行文件没装、或握手失败/超时时返回 `Err` 说明原因
+    /// ——调用方据此优雅降级成「只有语法高亮」的编辑器。
     pub fn spawn(scripts_dir: &Path) -> Result<Self, String> {
         let (inner, diagnostics_rx, server) = spawn_process(scripts_dir)?;
         let client = Self {
             inner,
             diagnostics_rx,
         };
-        // The server resolves the TypeScript compiler relative to the
-        // workspace, which usually has no node_modules. Resolve the server's
-        // real location (through version-manager symlinks) and point it at
-        // the sibling `typescript` package it was installed with.
+        // 服务器按工作区去找 TypeScript 编译器，而工作区通常没有
+        // node_modules。所以先解析出服务器自身的真实路径（穿过版本管理器的
+        // 软链），再指向与它一同安装的那个 `typescript` 包。
         let server_real = std::fs::canonicalize(&server).unwrap_or_else(|_| server.clone());
         let tsserver = server_real.ancestors().find_map(|dir| {
             let tsserver = dir.join("node_modules/typescript/lib/tsserver.js");
@@ -72,11 +70,12 @@ impl LspClient {
         Ok(client)
     }
 
+    /// 服务器进程是否仍活着。
     pub fn is_alive(&self) -> bool {
         self.inner.alive.load(Ordering::SeqCst)
     }
 
-    /// Drain all diagnostics pushed since the last call.
+    /// 取走自上次调用以来服务器推送的全部诊断。
     pub fn take_diagnostics(&self) -> Vec<PublishedDiagnostics> {
         let mut out = Vec::new();
         while let Ok(d) = self.diagnostics_rx.try_recv() {
@@ -85,14 +84,15 @@ impl LspClient {
         out
     }
 
+    /// 握手：发送 `initialize` 声明能力，成功后补一条 `initialized` 通知。
     fn initialize(&self, root: &Path, tsserver_path: Option<&Path>) -> Result<(), String> {
         let mut initialization_options = json!({});
         if let Some(tsserver) = tsserver_path {
             initialization_options["tsserver"] = json!({ "path": tsserver });
         }
-        // Client capabilities matter: `textDocument.publishDiagnostics` is
-        // what makes typescript-language-server forward tsserver diagnostics
-        // to us at all (features.diagnosticsSupport in its source).
+        // 客户端能力声明很关键：正是 `textDocument.publishDiagnostics` 让
+        // typescript-language-server 把 tsserver 诊断转发给我们（对应它源码
+        // 里的 features.diagnosticsSupport）。
         let params = json!({
             "processId": std::process::id(),
             "rootUri": path_to_uri(root),
@@ -184,7 +184,7 @@ impl LspClient {
     }
 
     fn send_frame(&self, body: &str) -> std::io::Result<()> {
-        // `body.len()` is the byte length, which is what Content-Length needs.
+        // `body.len()` 是字节长度，正是 Content-Length 需要的值。
         let frame = format!("Content-Length: {}\r\n\r\n{body}", body.len());
         self.inner
             .writer_tx
@@ -192,8 +192,9 @@ impl LspClient {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::BrokenPipe, e))
     }
 
-    // ---- document sync ----
+    // ---- 文档同步 ----
 
+    /// 通知服务器打开了文档（初始版本号为 0）。
     pub fn did_open(&self, uri: &str, language_id: &str, text: &str) {
         self.notify(
             "textDocument/didOpen",
@@ -208,8 +209,9 @@ impl LspClient {
         );
     }
 
+    /// 全量推送文档内容，`version` 由调用方递增。
     pub fn did_change(&self, uri: &str, version: i32, text: &str) {
-        // Full-document sync keeps the client trivial.
+        // 全文档同步，客户端逻辑因此可以保持极简。
         self.notify(
             "textDocument/didChange",
             json!({
@@ -219,6 +221,7 @@ impl LspClient {
         );
     }
 
+    /// 通知服务器关闭文档。
     pub fn did_close(&self, uri: &str) {
         self.notify(
             "textDocument/didClose",
@@ -226,8 +229,9 @@ impl LspClient {
         );
     }
 
-    // ---- typed requests ----
+    // ---- 带类型的请求 ----
 
+    /// `textDocument/completion`。服务器返回 null 时当作空列表。
     pub fn completion(
         &self,
         uri: &str,
@@ -244,6 +248,7 @@ impl LspClient {
         }
     }
 
+    /// `textDocument/hover`。
     pub fn hover(&self, uri: &str, position: lsp_types::Position) -> Result<Option<Hover>, String> {
         let value = self.request(
             "textDocument/hover",
@@ -252,6 +257,7 @@ impl LspClient {
         serde_json::from_value::<Option<Hover>>(value).map_err(|e| e.to_string())
     }
 
+    /// `textDocument/definition`，结果统一成 `LocationLink` 列表。
     pub fn definition(
         &self,
         uri: &str,
@@ -264,6 +270,7 @@ impl LspClient {
         Ok(location_links_from_value(value))
     }
 
+    /// `textDocument/codeAction`。这里不带诊断上下文，只取光标区间的动作。
     pub fn code_action(
         &self,
         uri: &str,
@@ -291,6 +298,7 @@ impl LspClient {
         }
     }
 
+    /// `workspace/executeCommand`，用于只有命令、没有编辑内容的动作。
     pub fn execute_command(
         &self,
         command: &str,

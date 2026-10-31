@@ -1,4 +1,4 @@
-//! The manager window's dock panels.
+//! 管理窗口的 dock 面板。
 //!
 //! Console 面板不在这里：它是 `modules::console::panel::ConsolePanel`，同一份
 //! 组件也被独立 Console 窗口使用。

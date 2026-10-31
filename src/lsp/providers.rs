@@ -1,7 +1,6 @@
-//! Bridges the [`LspClient`] into gpui-kit's Editor LSP provider traits.
-//! A single [`LspBridge`] implements completion, hover, definition and code
-//! actions; the editor's currently open document is tracked through a shared
-//! [`DocHandle`] so providers always target the right URI.
+//! 把 [`LspClient`] 接进 gpui-kit 编辑器的 LSP provider trait。
+//! 单个 [`LspBridge`] 同时实现补全、悬停、跳转与代码操作；编辑器当前打开的
+//! 文档通过共享的 [`DocHandle`] 追踪，保证 provider 总是打到正确的 URI 上。
 
 use std::ops::Range;
 use std::str::FromStr;
@@ -17,15 +16,16 @@ use parking_lot::Mutex;
 
 use super::client::LspClient;
 
-/// The document currently loaded in the editor, shared between the panel
-/// (which updates it) and the providers (which read it).
+/// 编辑器里当前载入的文档，面板负责写、provider 负责读。
 #[derive(Clone, Debug)]
 pub struct DocHandle {
+    /// 文档的 `file://` URI。
     pub uri: String,
+    /// 文档版本号，`didChange` 时递增。
     pub version: i32,
 }
 
-/// One bridge implementing all four gpui LSP provider traits.
+/// 一个桥实现全部四个 gpui LSP provider trait。
 #[derive(Clone)]
 pub struct LspBridge {
     client: Option<Arc<LspClient>>,
@@ -33,12 +33,13 @@ pub struct LspBridge {
 }
 
 impl LspBridge {
+    /// `client` 为 `None` 时桥仍然可用，只是所有请求都返回空结果。
     pub fn new(client: Option<Arc<LspClient>>, doc: Arc<Mutex<Option<DocHandle>>>) -> Self {
         Self { client, doc }
     }
 
-    /// Current document + LSP position for a byte offset, or `None` when the
-    /// LSP is unavailable / no document is open.
+    /// 取出当前文档、客户端，并把字节偏移换算成 LSP 位置。LSP 不可用或没有
+    /// 打开文档时返回 `None`。
     fn active(&self, text: &Rope, offset: usize) -> Option<(Arc<LspClient>, String, Position)> {
         let client = self.client.as_ref()?;
         let doc = self.doc.lock();
@@ -63,10 +64,9 @@ impl CompletionProvider for LspBridge {
         let Some((client, uri, position)) = self.active(text, offset) else {
             return Task::ready(Ok(CompletionResponse::Array(vec![])));
         };
-        // tsserver returns the whole scope/member list unfiltered — client-side
-        // filtering is the provider's job here (the editor shows whatever we
-        // return). Filter by the word before the caret, except after a
-        // non-word trigger like `.` (member access lists everything validly).
+        // tsserver 返回的是整个作用域/成员列表，不做过滤——过滤是这一层的
+        // 责任（编辑器只显示我们返回的东西）。按光标前的单词过滤，但 `.` 这类
+        // 非单词触发符之后不过滤（成员列表本身都是合法候选）。
         let query = word_before(text, offset);
         let word_start = offset.saturating_sub(query.len());
         let word_start_pos = text.offset_to_position(word_start);
@@ -90,10 +90,9 @@ impl CompletionProvider for LspBridge {
                     candidate.to_lowercase().starts_with(&q)
                 });
             }
-            // tsserver items carry no text_edit; the editor's fallback replaces
-            // `trigger_start_offset..cursor` which starts at `.` for member
-            // access, eating the dot. Give every item an explicit text_edit
-            // covering only the word being completed.
+            // tsserver 的补全项不带 text_edit，编辑器会回退成替换
+            // `trigger_start_offset..cursor`——成员访问时那段从 `.` 开始，会把
+            // `.` 一起吃掉。所以给每一项补一个只覆盖待补全单词的 text_edit。
             let edit_range = lsp_types::Range::new(word_start_pos, cursor_pos);
             for item in &mut items {
                 if item.text_edit.is_none() {
@@ -122,8 +121,8 @@ impl CompletionProvider for LspBridge {
     }
 }
 
-/// The identifier immediately before `offset` ("" when none). Mirrors the
-/// editor's own word detection (`is_alphanumeric` + `_`), plus `$` for JS.
+/// `offset` 之前紧邻的标识符（没有则返回空串）。判定规则与编辑器自带的单词
+/// 识别一致（`is_alphanumeric` 加 `_`），再为 JS 补上 `$`。
 fn word_before(text: &Rope, offset: usize) -> String {
     let word_len: usize = text
         .chars_at(offset)
@@ -201,7 +200,7 @@ impl CodeActionProvider for LspBridge {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<anyhow::Result<()>> {
-        // Apply the workspace edit for the current document on the UI thread.
+        // 当前文档的 workspace edit 得在 UI 线程上应用。
         if let Some(edit) = action.edit
             && let Some(changes) = edit.changes
         {
@@ -217,7 +216,7 @@ impl CodeActionProvider for LspBridge {
             }
         }
 
-        // Delegate command-only actions (e.g. Organize Imports) to the server.
+        // 只有 command 的动作（例如 Organize Imports）交回服务器执行。
         if let Some(command) = action.command {
             let Some(client) = self.client.clone() else {
                 return Task::ready(Ok(()));
@@ -245,16 +244,16 @@ mod tests {
         let end = rope.len();
         assert_eq!(word_before(&rope, end), "console");
 
-        // After a dot there is no word prefix (member access).
+        // 点号之后没有单词前缀（成员访问）。
         let dot = "console.".len();
         assert_eq!(word_before(&rope, dot), "");
 
-        // JS identifiers may contain `$`.
+        // JS 标识符可以包含 `$`。
         let rope = Rope::from("const $el = 1;\n$el");
         let end = rope.len();
         assert_eq!(word_before(&rope, end), "$el");
 
-        // Empty document / start of line.
+        // 空文档 / 行首。
         let rope = Rope::from("");
         assert_eq!(word_before(&rope, 0), "");
     }

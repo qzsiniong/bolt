@@ -7,16 +7,14 @@ use super::workspace::Workspace;
 use crate::app::shell::AppShell;
 use crate::ui::window::{WindowSpec, open_spec};
 
-/// Open the manager window as a singleton: focus the existing one (and
-/// optionally start its new-script flow), or create a fresh one.
+/// 以单例方式打开管理器窗口：已有窗口就激活它（可选顺带启动新建脚本
+/// 流程），否则新建一个。
 pub(crate) fn open_manager(cx: &mut App, new_script: bool) {
-    // The launcher (a PopUp window, window level 101) has already closed by the
-    // time this runs, so the app briefly has no window and macOS hands
-    // activation back to the previous app. gpui only calls makeKeyAndOrderFront
-    // when creating a window and never NSApp.activate, so the Normal-level
-    // manager window ends up behind the other app until the app is reactivated
-    // (e.g. by clicking the Dock icon). Activate explicitly, which is exactly
-    // what that Dock click does.
+    // 执行到这里时 Launcher（PopUp 窗口，window level 101）已经关了，应用
+    // 短暂处于无窗口状态，macOS 会把激活权交还给上一个应用。gpui 只在
+    // 创建窗口时调 makeKeyAndOrderFront，从不调 NSApp.activate，于是
+    // Normal 层级的管理器窗口会一直被压在别的应用下面，直到应用重新被
+    // 激活（比如点 Dock 图标）。这里显式 activate——与点 Dock 图标等效。
     cx.activate(true);
 
     let existing = cx.global_mut::<ScriptsState>().manager.take();
@@ -33,7 +31,7 @@ pub(crate) fn open_manager(cx: &mut App, new_script: bool) {
             cx.global_mut::<ScriptsState>().manager = Some((handle, workspace));
             return;
         }
-        // Dead window: fall through and create a new one.
+        // 窗口已死：继续往下走，新建一个。
     }
 
     let (lsp, console_log, run_service, console) = {

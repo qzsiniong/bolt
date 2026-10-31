@@ -1,8 +1,8 @@
-//! Built-in `"bolt"` host module.
+//! 内建 `"bolt"` 宿主模块。
 //!
-//! Provides file I/O, HTTP, shell exec, env, and exit — the common building
-//! blocks user scripts need. Sync functions are registered directly; `fetch`
-//! and `exec` are async (return Promises) and run on the rquickjs scheduler.
+//! 提供文件 I/O、HTTP、shell 执行、环境变量与退出——用户脚本最常用的积木。
+//! 同步函数直接注册；`fetch` 与 `exec` 是异步的（返回 Promise），跑在
+//! rquickjs 调度器上。
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -16,6 +16,7 @@ use crate::console_channel::ConsoleChannel;
 use crate::host::{HostModule, HostRegistry};
 use crate::runtime::interaction::{InteractionBridge, PickKind};
 
+/// 写进 `bolt.d.ts` 的 TypeScript 声明正文（供 IDE/LSP 使用）。
 const DECLARATION: &str = r#"
   /** Sleep for the given number of milliseconds. */
   export function sleep(ms: number): Promise<void>;
@@ -45,6 +46,7 @@ const DECLARATION: &str = r#"
   export function scanQr(): Promise<string | null>;
 "#;
 
+/// 注册 `bolt` 模块：声明类型、逐项登记导出与所需权限，并绑定安装函数。
 pub fn register(registry: &mut HostRegistry) {
     registry.register(
         HostModule::new("bolt")
@@ -72,7 +74,7 @@ pub fn register(registry: &mut HostRegistry) {
     );
 }
 
-/// Install the `__bolt` global object with all native functions.
+/// 创建 `__bolt` 全局对象并挂上全部原生函数。
 fn install<'js>(ctx: &Ctx<'js>) -> Result<()> {
     let g = Object::new(ctx.clone())?;
 
@@ -89,10 +91,10 @@ fn install<'js>(ctx: &Ctx<'js>) -> Result<()> {
     Ok(())
 }
 
-// ── Console global ─────────────────────────────────────────────────────────
+// ── Console 全局对象 ───────────────────────────────────────────────────────
 
-/// Install the `console` global object that captures output into the app's
-/// Console panel. Called by the runner before script evaluation.
+/// 安装 `console` 全局对象，把输出捕获到应用的 Console 面板。
+/// runner 在求值脚本之前调用。
 pub fn install_console<'js>(ctx: &Ctx<'js>, channel: &ConsoleChannel) -> Result<()> {
     use crate::console_channel::ConsoleLevel;
 
@@ -118,20 +120,19 @@ pub fn install_console<'js>(ctx: &Ctx<'js>, channel: &ConsoleChannel) -> Result<
     Ok(())
 }
 
-// ── Timer globals ──────────────────────────────────────────────────────────
+// ── 定时器全局对象 ─────────────────────────────────────────────────────────
 
-/// Install the standard timer globals on the QuickJS context.
+/// 在 QuickJS 上下文上安装标准定时器全局对象。
 ///
-/// Timers are host APIs — QuickJS ships none of them, so `setTimeout` is
-/// otherwise a `ReferenceError`. Each timer becomes a task on the rquickjs
-/// scheduler (driven by the runner's `AsyncRuntime::idle`) that sleeps on
-/// tokio's timer, so the engine keeps running other JS while a timer is
-/// pending. Ids are plain numbers; `clearTimeout`/`clearInterval` only mark an
-/// id as cancelled, because a spawned task cannot be aborted from outside.
+/// 定时器属于宿主 API——QuickJS 自带的东西里没有，否则 `setTimeout` 直接就是
+/// `ReferenceError`。每个定时器都变成 rquickjs 调度器上的一个任务（由 runner 的
+/// `AsyncRuntime::idle` 驱动），在 tokio 定时器上睡眠，所以定时器挂起期间引擎仍能
+/// 继续跑其他 JS。id 就是普通数字；`clearTimeout`/`clearInterval` 只是把 id 标记为
+/// 已取消，因为已 spawn 的任务无法从外部中止。
 pub fn install_timers<'js>(ctx: &Ctx<'js>, console: &ConsoleChannel) -> Result<()> {
     let next_id = Rc::new(Cell::new(1u32));
-    // Ids the script has cleared; the spawned task re-checks this right before
-    // firing. A cleared id also stops the task from firing again.
+    // 脚本已清除的 id；spawn 的任务在触发前会重新检查一次。被清除的 id 同时也让
+    // interval 任务不再继续触发。
     let cancelled = Rc::new(RefCell::new(HashSet::<u32>::new()));
     let globals = ctx.globals();
 
@@ -177,7 +178,7 @@ pub fn install_timers<'js>(ctx: &Ctx<'js>, console: &ConsoleChannel) -> Result<(
                 let cancelled = cancelled_ids.clone();
                 let ch = ch.clone();
                 let timer_ctx = ctx.clone();
-                // Clamp to 1ms: a zero-delay interval would spin the scheduler.
+                // 下限压到 1ms：零延迟的 interval 会把调度器空转拖满。
                 let period = ms_to_duration(ms).max(Duration::from_millis(1));
                 ctx.spawn(async move {
                     loop {
@@ -210,8 +211,8 @@ pub fn install_timers<'js>(ctx: &Ctx<'js>, console: &ConsoleChannel) -> Result<(
     Ok(())
 }
 
-/// Coerce a JS delay to a duration; negative or non-finite delays fire
-/// immediately (`setTimeout(fn, -1)` behaves like `setTimeout(fn, 0)`).
+/// 把 JS 延迟换算成 `Duration`；负数或非有限值立即触发
+/// （`setTimeout(fn, -1)` 等价于 `setTimeout(fn, 0)`）。
 fn ms_to_duration(ms: f64) -> Duration {
     if ms.is_finite() && ms > 0.0 {
         Duration::from_millis(ms as u64)
@@ -220,15 +221,15 @@ fn ms_to_duration(ms: f64) -> Duration {
     }
 }
 
-/// Best-effort `String(value)` conversion for console output.
+/// Console 输出的尽力转换：等价于 `String(value)`。
 fn format_value<'js>(v: &Value<'js>) -> String {
     use rquickjs::FromJs;
     let ctx = v.ctx().clone();
-    // Try direct string first (avoids quoting).
+    // 先试直接取字符串（省掉加引号的那一步）。
     if let Ok(s) = String::from_js(&ctx, v.clone()) {
         return s;
     }
-    // Fall back to JS String() coercion.
+    // 退回到 JS 的 String() 强转。
     if let Ok(to_str) = ctx.globals().get::<_, Function>("String")
         && let Ok(s) = to_str.call::<_, String>((v.clone(),))
     {
@@ -237,7 +238,7 @@ fn format_value<'js>(v: &Value<'js>) -> String {
     "[object]".into()
 }
 
-// ── Sync functions ─────────────────────────────────────────────────────────
+// ── 同步函数 ───────────────────────────────────────────────────────────────
 
 fn read_file(path: String) -> Result<String> {
     std::fs::read_to_string(&path).map_err(Error::Io)
@@ -271,19 +272,19 @@ pub(crate) fn exit_code(message: &str) -> Option<i32> {
         .ok()
 }
 
-/// `exit(code)` — throws a sentinel exception the host detects; the run finishes
-/// cleanly with the exit code instead of being reported as a failure.
+/// `exit(code)`——抛出宿主能识别的哨兵异常；本次运行按该退出码正常结束，
+/// 不会被当成失败上报。
 fn exit_fn<'js>(ctx: Ctx<'js>, code: i32) -> Result<()> {
     Err(throw_error(&ctx, format!("__bolt_exit_{}__", code)))
 }
 
-// ── Interaction functions ──────────────────────────────────────────────────
+// ── 交互函数 ───────────────────────────────────────────────────────────────
 
-/// Install the host interaction APIs onto the existing `__bolt` object.
+/// 把宿主交互 API 挂到已存在的 `__bolt` 对象上。
 ///
-/// Must run *after* [`install`] (via `HostRegistry::install_globals`), which is
-/// what creates `__bolt`; the loader's re-export module reads that same
-/// object when a script does `import { confirm } from 'bolt'`.
+/// 必须跑在 [`install`] **之后**（经 `HostRegistry::install_globals` 调用，
+/// `__bolt` 由它创建）；脚本 `import { confirm } from 'bolt'` 时，加载器生成的
+/// 再导出模块读的正是同一个对象。
 pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> Result<()> {
     let bolt: Object = ctx.globals().get("__bolt")?;
 
@@ -375,7 +376,7 @@ pub fn install_interaction<'js>(ctx: &Ctx<'js>, bridge: &InteractionBridge) -> R
             Async(move |ctx: Ctx<'js>| -> _ {
                 let b = b.clone();
                 async move {
-                    // Capturing and decoding block; keep them off the runtime thread.
+                    // 截屏与解码都是阻塞操作，挪出运行时的线程去做。
                     let scanned = tokio::task::spawn_blocking(move || super::qr::scan_qr(&b))
                         .await
                         .map_err(|e| throw_error(&ctx, format!("截屏任务失败：{e}")))?;
@@ -403,7 +404,7 @@ fn default_pick_prompt(kind: PickKind) -> String {
     }
 }
 
-/// Build an `Error` object for `msg` and set it as the pending exception.
+/// 用 `msg` 构造一个 `Error` 对象，并设为待抛异常。
 fn throw_error<'js>(ctx: &Ctx<'js>, msg: impl Into<String>) -> Error {
     let message = msg.into();
     match rquickjs::Exception::from_message(ctx.clone(), &message) {
@@ -412,7 +413,7 @@ fn throw_error<'js>(ctx: &Ctx<'js>, msg: impl Into<String>) -> Error {
     }
 }
 
-// ── Async functions ─────────────────────────────────────────────────────────
+// ── 异步函数 ───────────────────────────────────────────────────────────────
 
 /// `sleep(ms) -> Promise<void>`
 ///
@@ -442,8 +443,8 @@ async fn exec_cmd<'js>(ctx: Ctx<'js>, cmd: String) -> Result<Value<'js>> {
     let out = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(&cmd)
-        // An aborted run drops this future; without kill_on_drop the child
-        // would outlive the script as an orphan.
+        // 运行被中止时这个 future 会被 drop；没有 kill_on_drop 子进程会活下来
+        // 变成孤儿。
         .kill_on_drop(true)
         .output()
         .await?;
@@ -459,7 +460,7 @@ async fn exec_cmd<'js>(ctx: Ctx<'js>, cmd: String) -> Result<Value<'js>> {
 mod tests {
     use crate::test_support::{TempDir, run_js};
 
-    /// Assert `code` produced a console line matching `needle`.
+    /// 断言 `lines` 里有一行包含 `needle`。
     #[track_caller]
     fn assert_line(lines: &[String], needle: &str) {
         assert!(

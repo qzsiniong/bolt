@@ -1,36 +1,36 @@
-//! Errors surfaced to the host when a extension cannot be loaded or a command
-//! cannot be executed.
+//! 扩展无法加载或命令无法执行时上报给宿主的错误类型。
 //!
-//! Every variant is `Clone`: the message travels from the extension thread over a
-//! channel and is reported by the host, sometimes twice (Console + launcher).
+//! 每个变体都是 `Clone`：错误消息经 channel 从扩展线程传回宿主，
+//! 由宿主上报（有时上报两处：Console + launcher）。
 
 use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum JsError {
-    /// The extension was registered but never loaded (no runtime yet).
+    /// 扩展已注册但从未加载（还没有运行时）。
     #[error("扩展 {0} 尚未加载")]
     NotLoaded(String),
 
-    /// The extension bundle is unknown to the store.
+    /// store 不认识这个扩展 bundle。
     #[error("扩展未注册：{0}")]
     UnknownExtension(String),
 
-    /// The command id is not declared in `extension.json`.
+    /// 命令 id 没有在 `extension.json` 里声明。
     #[error("命令不存在：{0}")]
     UnknownCommand(String),
 
-    /// No JS function matched the command, in any of the three fallbacks.
+    /// 三种回退方式（具名导出 / default 对象 / globalThis.plux.commands）
+    /// 都没找到命令对应的 JS 函数。
     #[error(
         "扩展没有实现命令 `{0}`（具名导出 / default 对象 / globalThis.plux.commands 均未找到）"
     )]
     MissingHandler(String),
 
-    /// The command exceeded its deadline and was interrupted.
+    /// 命令超出时限，被强制中断。
     #[error("命令执行超时（{} ms）", .0.as_millis())]
     Timeout(Duration),
 
-    /// The user aborted the run.
+    /// 用户主动取消了这次运行。
     #[error("命令已取消")]
     Cancelled,
 
@@ -39,22 +39,22 @@ pub enum JsError {
     #[error("退出码 {0}")]
     Exit(i32),
 
-    /// JS threw, or the module failed to evaluate.
+    /// JS 抛了异常，或模块求值失败。
     #[error("{0}")]
     Script(String),
 
-    /// Extension discovery / validation failed.
+    /// 扩展发现 / 校验失败。
     #[error("{0}")]
     Invalid(String),
 
-    /// The extension thread is gone or never started.
+    /// 扩展线程已退出，或从未启动。
     #[error("扩展运行时不可用：{0}")]
     Runtime(String),
 }
 
 impl JsError {
-    /// Whether the error is a normal control outcome (abort / timeout) rather
-    /// than a extension bug. Hosts use it to pick the log level.
+    /// 这个错误是正常的控制流结果（取消 / 超时），而不是扩展的 bug。
+    /// 宿主据此选择日志级别。
     pub fn is_control_flow(&self) -> bool {
         matches!(self, Self::Timeout(_) | Self::Cancelled | Self::Exit(_))
     }

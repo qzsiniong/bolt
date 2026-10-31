@@ -1,11 +1,9 @@
-//! Minimal LSP client speaking JSON-RPC over stdio with
-//! `typescript-language-server`. Runs the server as a child process and
-//! bridges requests/notifications through blocking threads, so callers
-//! (GPUI background tasks) use plain channel waits.
+//! 一个最小 LSP 客户端：以 stdio 上的 JSON-RPC 与
+//! `typescript-language-server` 通信。它把语言服务作为子进程跑，请求与通知都
+//! 经阻塞线程中转，调用方（GPUI 后台任务）只需普通的通道等待。
 //!
-//! `client` holds the handle and request plumbing, `server` the child process
-//! and its reader/writer threads, `protocol` the wire vocabulary, and
-//! `providers` the bridge into gpui-kit's editor provider traits.
+//! `client` 是句柄与请求管线，`server` 是子进程及其读/写线程，`protocol` 是
+//! 协议词汇，`providers` 是接进 gpui-kit 编辑器 provider trait 的桥。
 
 pub(crate) mod client;
 mod protocol;
@@ -40,7 +38,7 @@ mod tests {
         };
         assert!(client.is_alive());
 
-        // Open a document with an obvious type error.
+        // 打开一个明显有类型错误的文档。
         let uri = path_to_uri(&dir.0.join("bad.ts"));
         client.did_open(
             &uri,
@@ -48,7 +46,7 @@ mod tests {
             "const n: number = \"oops\";\nconsole.log(n);\n",
         );
 
-        // Wait for publishDiagnostics (tsserver needs a moment).
+        // 等 publishDiagnostics 到来（tsserver 需要一点时间）。
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut got = None;
         while Instant::now() < deadline {
@@ -72,7 +70,7 @@ mod tests {
             published.diagnostics
         );
 
-        // Hover over `console` should produce something.
+        // 在 `console` 上悬停应当有内容。
         client.did_change(&uri, 1, "console.log(1);\n");
         std::thread::sleep(Duration::from_millis(500));
         let hover = client
@@ -80,7 +78,7 @@ mod tests {
             .expect("hover request should not fail");
         assert!(hover.is_some(), "expected hover info for `console`");
 
-        // Completion after `console.` should contain `log`.
+        // 在 `console.` 之后补全，结果里应当有 `log`。
         client.did_change(&uri, 2, "console.\n");
         std::thread::sleep(Duration::from_millis(500));
         let completions = client
@@ -97,11 +95,10 @@ mod tests {
         );
     }
 
-    /// Regression test: when the user types after a member-access trigger, the
-    /// tsserver must still return useful completions even if the LSP client
-    /// sends a multi-character trigger_character (gpui editor sends the whole
-    /// query as trigger_character). The provider's own filtering should then
-    /// narrow the list to matching members.
+    /// 回归测试：用户在成员访问触发符之后继续打字时，即使 LSP 客户端传来的
+    /// trigger_character 有多个字符（gpui 编辑器会把整段查询当成
+    /// trigger_character 发过来），tsserver 也必须仍返回可用的补全。随后的
+    /// provider 侧过滤负责把列表收窄到匹配的成员。
     #[test]
     fn completion_after_continued_typing() {
         let dir = TempDir::new("completion");
@@ -114,7 +111,7 @@ mod tests {
         client.did_open(&uri, "typescript", "console.\n");
         std::thread::sleep(Duration::from_secs(1));
 
-        // 1) After `.` — tsserver should return member completions with `log`.
+        // 1) 在 `.` 之后——tsserver 应返回带 `log` 的成员补全。
         let resp = client
             .completion(
                 &uri,
@@ -135,9 +132,8 @@ mod tests {
             items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
         );
 
-        // 2) After `console.l` — tsserver may receive trigger_character `.l`.
-        //    It should still return members (or a subset); client-side filtering
-        //    must then keep `log`.
+        // 2) 在 `console.l` 之后——tsserver 可能收到 trigger_character `.l`。
+        //    它仍应返回成员（或其中一部分），再由客户端过滤保住 `log`。
         client.did_change(&uri, 2, "console.l\n");
         std::thread::sleep(Duration::from_millis(500));
         let resp = client
@@ -160,8 +156,8 @@ mod tests {
             items.iter().map(|i| &i.label).take(20).collect::<Vec<_>>()
         );
 
-        // 3) After `console` — plain-word trigger. tsserver returns scope-wide
-        //    identifiers. Client-side filtering should keep only `console`.
+        // 3) 在 `console` 之后——纯单词触发。tsserver 会返回整个作用域的标识符，
+        //    客户端过滤应当只留下 `console`。
         client.did_change(&uri, 3, "console\n");
         std::thread::sleep(Duration::from_millis(500));
         let resp = client

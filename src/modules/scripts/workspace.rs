@@ -16,12 +16,13 @@ use crate::ui::window::{WindowPin, WindowTitleBar};
 
 gpui_kit::actions!(bolt, [SaveScript, RunScript, NewScript]);
 
-/// The script manager window: dock with script list, editor and console.
-/// Script execution lives in the app-level [`RunService`], so this window can
-/// be closed without affecting runs started from the launcher.
+/// 脚本管理器窗口：带脚本列表、编辑器与控制台的 dock 布局。脚本执行在
+/// app 级的 [`RunService`] 里跑，因此本窗口可以随时关掉，不影响从
+/// Launcher 启动的运行。
 pub struct Workspace {
     /// 标题栏右上角的置顶图钉（公共控件，读窗口真实层级）。
     pin: Entity<WindowPin>,
+    /// dock 区（左：脚本列表；右上：编辑器；右下：控制台）。
     dock_area: Entity<DockArea>,
     script_list: Entity<ScriptListPanel>,
     editor: Entity<EditorPanel>,
@@ -33,6 +34,8 @@ pub struct Workspace {
 }
 
 impl Workspace {
+    /// 组装窗口：创建列表 / 编辑器 / 控制台三个面板并按 dock 布局拼装，
+    /// 订阅选中、运行、停止事件。
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -40,7 +43,7 @@ impl Workspace {
         console_log: ConsoleLog,
         run_service: Entity<RunService>,
     ) -> Self {
-        // Window-level shortcuts: Cmd+S save, Cmd+Enter run, Cmd+N new.
+        // 窗口级快捷键：Cmd+S 保存、Cmd+Enter 运行、Cmd+N 新建。
         cx.bind_keys([
             KeyBinding::new("cmd-s", SaveScript, None),
             KeyBinding::new("cmd-enter", RunScript, None),
@@ -53,12 +56,11 @@ impl Workspace {
         let script_list = cx.new(|cx| ScriptListPanel::new(window, cx));
         let console = cx.new(|cx| ConsolePanel::new(window, console_log, cx));
         let editor = cx.new(|cx| EditorPanel::new(window, cx, lsp.ok()));
-        // Let the list panel warn about unsaved edits before it replaces the
-        // script currently open in the editor.
+        // 让列表面板在替换编辑器里当前打开的脚本之前，先对未保存的编辑给出警告。
         script_list.update(cx, |list, _| list.set_editor(editor.downgrade()));
 
-        // Script selection -> load into the editor (deferred to render, which
-        // owns the window that EditorState::set_value requires).
+        // 选中脚本 → 载入编辑器（推迟到 render：EditorState::set_value 需要
+        // window，事件回调里没有）。
         let sub_select = cx.subscribe(
             &script_list,
             move |this, _list, event: &ScriptSelected, cx| {
@@ -67,7 +69,7 @@ impl Workspace {
             },
         );
 
-        // Run request -> hand the script to the app-level run service.
+        // 运行请求 → 把脚本交给 app 级 run service。
         let sub_run = cx.subscribe(&editor, move |this, _ed, event: &RunRequested, cx| {
             this.run_service.update(cx, |svc, cx| {
                 svc.start_script(
@@ -79,19 +81,19 @@ impl Workspace {
             });
         });
 
-        // Stop request -> flip the service's cancel token.
+        // 停止请求 → 翻转服务的取消 token。
         let sub_stop = cx.subscribe(&editor, move |this, _ed, _: &StopRequested, cx| {
             this.run_service.update(cx, |svc, _| svc.stop());
         });
 
-        // A run may already be in flight (started from the launcher): the
-        // toolbar must reflect it immediately, not only on the next event.
+        // 可能已有运行在进行（从 Launcher 启动的）：工具栏要立即反映出来，
+        // 而不是等下一个事件。
         editor.update(cx, |ed, cx| {
             ed.set_running(run_service.read(cx).is_running(), cx)
         });
 
-        // Follow the service's running state so the toolbar reflects runs
-        // started from anywhere (editor button, Cmd+Enter or the launcher).
+        // 跟随服务的运行状态：任何来源启动的运行（编辑器按钮、Cmd+Enter 或
+        // Launcher）都能反映到工具栏。
         let sub_run_state = cx.subscribe(
             &run_service,
             move |this, _svc, event: &RunStateChanged, cx| {
@@ -134,7 +136,7 @@ impl Workspace {
         }
     }
 
-    /// Run the new-script flow (used by the launcher's NewScript command).
+    /// 走一遍新建脚本流程（供 Launcher 的 NewScript 命令调用）。
     pub fn trigger_new_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.script_list
             .update(cx, |list, cx| list.create_new(window, cx));
@@ -156,9 +158,8 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Keep the system-level window title in sync with the loaded script
-        // (Mission Control / Cmd+Tab). The on-screen title lives in the
-        // custom title bar below.
+        // 让系统级窗口标题跟随当前打开的脚本（Mission Control / Cmd+Tab 里
+        // 看得到）。屏幕上显示的标题在下面的自绘标题栏里。
         let title = match self.editor.read(cx).current_script() {
             Some(script) => format!("Bolt — {}", script.file_name),
             None => "Bolt".to_string(),

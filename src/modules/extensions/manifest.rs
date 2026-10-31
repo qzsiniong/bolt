@@ -91,6 +91,7 @@ pub fn active_extensions_dir() -> PathBuf {
     bundled.unwrap_or_else(extensions_dir)
 }
 
+/// 确保目录存在（不存在则递归创建）。
 pub fn ensure_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))
 }
@@ -200,7 +201,7 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Per-extension private data directory:
+/// 每个扩展的私有数据目录：
 /// `~/Library/Application Support/bolt/extensions-data/<id>/`。
 pub fn extension_data_dir(id: &str) -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -210,6 +211,7 @@ pub fn extension_data_dir(id: &str) -> PathBuf {
     path
 }
 
+/// 确保扩展的私有数据目录存在并返回其路径。
 pub fn ensure_extension_data_dir(id: &str) -> Result<PathBuf, String> {
     let dir = extension_data_dir(id);
     std::fs::create_dir_all(&dir)
@@ -217,8 +219,8 @@ pub fn ensure_extension_data_dir(id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// First-run convenience: write the bundled demo extension when its directory
-/// is absent. An existing directory is left untouched (作者的改动不该被覆盖).
+/// 首次启动的便利措施：示例扩展目录不存在时写出内嵌的 demo 扩展。
+/// 已存在的目录一律不动（作者的改动不该被覆盖）。
 pub fn ensure_demo_extension(extensions: &Path) -> Result<(), String> {
     let root = extensions.join(DEMO_DIR);
     if root.exists() {

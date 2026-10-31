@@ -32,6 +32,8 @@ impl std::error::Error for StorageError {}
 
 /// 存储层抽象：排序引擎通过它读写全部使用记录。
 pub(crate) trait UsageStorage {
+    /// 读出全量使用记录。
     fn load(&self) -> Result<UsageData, StorageError>;
+    /// 全量覆盖写入（不是增量追加）。
     fn save(&self, data: &UsageData) -> Result<(), StorageError>;
 }

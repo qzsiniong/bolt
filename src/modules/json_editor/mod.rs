@@ -1,5 +1,5 @@
-//! Native JSON editor module: a strict-JSON editor window with syntax
-//! highlighting and folding, plus a single launcher item that opens it.
+//! 原生 JSON 编辑器模块：严格 JSON 的编辑器窗口，带语法高亮与折叠，
+//! 外加一个打开它的 launcher item。
 
 pub(crate) mod panel;
 pub(crate) mod parsers;

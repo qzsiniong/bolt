@@ -1,11 +1,9 @@
-//! Application-level script run service.
+//! 应用级脚本运行服务。
 //!
-//! Owns the run chain — worker thread, cancel token and the interaction
-//! window manager — so both the launcher and the script manager can start
-//! runs without depending on each other's windows. The interaction window
-//! itself (standby/progress/confirm + native picker) lives in
-//! [`InteractionWindowManager`]; this type only tracks *whether* something
-//! is running and spawns/monitors the worker thread.
+//! 持有整条运行链路——工作线程、取消令牌、交互窗口管理器——所以启动器和
+//! 脚本管理器都能发起运行，而互不依赖对方的窗口。交互窗口本身（待命/进度/
+//! 确认 + 原生选择器）在 [`InteractionWindowManager`] 里；这里只管记录
+//! *有没有*东西在跑，并派生、监视工作线程。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,15 +22,15 @@ use crate::ui::interaction_window::{InteractionEvent, InteractionWindow};
 use plux_js_manager::ExtensionStore;
 use plux_rs::Bundle;
 
-/// A single script run currently in flight.
+/// 一次正在进行中的脚本运行。
 struct RunState {
     cancel: CancelToken,
-    /// Set by the worker thread once `run_script` returns.
+    /// 工作线程在 `run_script` 返回后置位。
     done: Arc<AtomicBool>,
 }
 
-/// Emitted when a run starts (`true`) or finishes (`false`), so UI like the
-/// editor toolbar can follow the service without owning it.
+/// 运行开始（`true`）或结束（`false`）时发出，编辑器工具栏之类的 UI 因此可以
+/// 跟着服务走而不必自己持有它。
 pub struct RunStateChanged(pub bool);
 
 /// 本轮要执行的东西：一个脚本文件，或一条扩展命令。
@@ -63,16 +61,16 @@ impl RunTask {
     }
 }
 
+/// 脚本与扩展命令共用的运行业务：发起、监视、取消，外加交互窗口同步。
 pub struct RunService {
     scripts_dir: PathBuf,
     registry: Arc<HostRegistry>,
     /// 扩展命令的执行入口。脚本运行用不到，但两者共用同一条取消/交互链路，
     /// 所以放在同一个服务里。
     extensions: Arc<ExtensionStore>,
-    /// Cloneable handle so the runner can push output to the Console panel
-    /// from a worker thread.
+    /// 可克隆的句柄，好让运行器从工作线程往 Console 面板推输出。
     console_channel: ConsoleChannel,
-    /// `None` while idle; only one run at a time.
+    /// 空闲时为 `None`；同一时刻只允许一次运行。
     running: Option<RunState>,
     /// 交互浮窗与待答复请求（confirm / pickPath / requestFocus）。
     manager: InteractionWindowManager,
@@ -80,15 +78,16 @@ pub struct RunService {
     /// 与 manager 的不一致就重订（旧的 Subscription 随赋值被丢弃）。
     subscribed_window: Option<Entity<InteractionWindow>>,
     _sub_interaction: Option<Subscription>,
-    /// Polls `running.done` so listeners leave the "running" state.
+    /// 轮询 `running.done`，让监听方及时退出「运行中」状态。
     _run_task: Option<Task<()>>,
-    /// Drains interaction requests and keeps the interaction window in sync.
+    /// 排空交互请求，并让交互窗口保持同步。
     _interaction_task: Option<Task<()>>,
 }
 
 impl EventEmitter<RunStateChanged> for RunService {}
 
 impl RunService {
+    /// 创建服务。此时没有任何运行在进行。
     pub fn new(
         scripts_dir: PathBuf,
         registry: Arc<HostRegistry>,
@@ -109,6 +108,7 @@ impl RunService {
         }
     }
 
+    /// 当前是否有运行在进行中。
     pub fn is_running(&self) -> bool {
         self.running.is_some()
     }
@@ -149,9 +149,8 @@ impl RunService {
         );
     }
 
-    /// One run at a time: a second request while busy is refused with a Console
-    /// warning rather than queued (a queued run would fire long after the user
-    /// asked for it).
+    /// 同一时刻只跑一个：忙的时候再来的请求直接拒绝并在 Console 里警告，而不是
+    /// 排队（排队的运行会在用户早就忘了之后才触发）。
     fn start(&mut self, task: RunTask, cx: &mut Context<Self>) {
         if self.running.is_some() {
             self.console_channel
@@ -166,9 +165,8 @@ impl RunService {
         });
         cx.emit(RunStateChanged(true));
 
-        // Fresh interaction bridge per run: the script side talks to the UI
-        // through it (progress, confirm, pickPath, requestFocus). 扩展命令也用它
-        // ——每轮覆盖到扩展常驻上下文上。
+        // 每轮新建一座交互桥：脚本侧经它与 UI 打交道（progress、confirm、
+        // pickPath、requestFocus）。扩展命令也用它——每轮覆盖到扩展常驻上下文上。
         let (interaction, interaction_rx) = InteractionBridge::new(cancel.clone());
         self.manager
             .begin_run(interaction.clone(), interaction_rx, cancel.clone());
@@ -201,8 +199,8 @@ impl RunService {
             done.store(true, Ordering::SeqCst);
         });
 
-        // The worker thread cannot reach gpui entities, so poll for
-        // completion (same pattern as EditorPanel::diagnostics_loop).
+        // 工作线程碰不到 gpui 实体，只能轮询完成状态（与
+        // EditorPanel::diagnostics_loop 同一套做法）。
         self._run_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -215,9 +213,8 @@ impl RunService {
             }
         }));
 
-        // Answer interaction requests and keep the interaction window in
-        // sync. Runs faster than the run poll above: it drives the standby
-        // release check and the progress bar.
+        // 应答交互请求，并让交互窗口保持同步。比上面的运行轮询更快：待命释放
+        // 检测和进度条都靠它推动。
         self._interaction_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -233,16 +230,14 @@ impl RunService {
         }));
     }
 
-    /// Flip the token; the runner aborts at the next interrupt check or when
-    /// the racing wait wins.
+    /// 翻转取消令牌；运行器会在下一次中断检查、或竞争的等待先返回时中止。
     pub fn stop(&mut self) {
         if let Some(run) = &self.running {
             run.cancel.cancel();
         }
     }
 
-    /// Returns true once the in-flight run has finished, after notifying
-    /// listeners and tearing down interaction state.
+    /// 本轮运行结束后返回 true；返回前先通知监听方、拆掉交互状态。
     fn poll_run(&mut self, cx: &mut Context<Self>) -> bool {
         let finished = self
             .running
@@ -252,15 +247,15 @@ impl RunService {
         if finished {
             self.running = None;
             cx.emit(RunStateChanged(false));
-            // The script side is gone: drop every pending request and close the
-            // interaction window, so nothing is left waiting on a dead run.
+            // 脚本侧已经没了：丢弃所有待答复请求并关掉交互窗口，不留任何
+            // 等在死运行上的东西。
             self.manager.end_run(cx);
         }
         finished
     }
 
-    /// Drain interaction requests, resolve what the UI can resolve and keep
-    /// the interaction window in sync. Returns true once the run has ended.
+    /// 排空交互请求，能就地解决的解决掉，并让交互窗口保持同步。本轮运行结束
+    /// 后返回 true。
     fn poll_interaction(&mut self, cx: &mut Context<Self>) -> bool {
         let finished = self.running.is_none();
         self.manager.drain(cx);

@@ -1,5 +1,4 @@
-//! Editing shortcuts for the editor panel: each action computes a pure text
-//! transform and applies it to the editor.
+//! 编辑器面板的编辑快捷键：每个 action 计算一个纯文本变换并应用到编辑器。
 
 use gpui_kit::component::input::Rope;
 use gpui_kit::{Context, Window};
@@ -7,10 +6,9 @@ use gpui_kit::{Context, Window};
 use super::EditorPanel;
 use crate::ui::editor_ops;
 
-// The editor's key context is "Input mode=editor", so a binding under "Input"
-// only fires while the editor has focus. Note that `Cmd+Shift+/` cannot be
-// used for the block comment: on macOS the shifted punctuation key is reported
-// as `cmd-?`, not `cmd-shift-/`.
+// 编辑器的按键上下文是 "Input mode=editor"，所以挂在 "Input" 下的绑定只在
+// 编辑器聚焦时触发。注意块注释不能用 `Cmd+Shift+/`：macOS 上 shift 后的
+// 标点键上报为 `cmd-?`，不是 `cmd-shift-/`。
 gpui_kit::actions!(
     bolt,
     [
@@ -25,12 +23,11 @@ gpui_kit::actions!(
 );
 
 impl EditorPanel {
-    /// Apply a pure text transform to the editor: compute an edit from the
-    /// current rope/selection, then replace that byte range and set the
-    /// resulting selection. Changing the selection first turns
-    /// [`EditorState::replace`] into a replace-arbitrary-range primitive.
-    /// `replace` still emits `InputEvent::Change`, so dirty tracking and the
-    /// LSP `did_change` sync keep working as usual.
+    /// 对编辑器应用纯文本变换：基于当前 rope/选区算出一个 edit，替换该
+    /// 字节范围并设置 resulting selection。先改选区可以把
+    /// [`EditorState::replace`] 当成替换任意范围的 primitive 用。`replace`
+    /// 照常发 `InputEvent::Change`，所以 dirty 追踪和 LSP `did_change`
+    /// 同步不受影响。
     fn apply_op(
         &mut self,
         window: &mut Window,
@@ -44,7 +41,7 @@ impl EditorPanel {
             let Some(edit) = compute(state.text(), state.selected_range()) else {
                 return;
             };
-            // Guard against no-op edits so they don't add a stray undo step.
+            // 无操作（no-op）的 edit 直接跳过，免得多记一步撤销。
             if edit.text == state.text().slice(edit.range.clone()) {
                 return;
             }

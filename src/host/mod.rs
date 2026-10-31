@@ -1,13 +1,12 @@
-//! HostModule framework — register Rust modules that scripts can `import`.
+//! HostModule 框架——把 Rust 模块注册成脚本可 `import` 的宿主模块。
 //!
-//! Each `HostModule` has a name, a TypeScript declaration (written to
-//! `scripts/types/<name>.d.ts` for IDE/LSP), a list of export names, and an
-//! installer closure that creates native functions on a global object.
+//! 每个 `HostModule` 包含：名字、TypeScript 声明（写到
+//! `scripts/types/<name>.d.ts` 供 IDE/LSP 使用）、导出名列表，以及一个安装闭包
+//! （在全局对象上创建原生函数）。
 //!
-//! At runtime the [`HostLoader`] (impl `rquickjs::Loader`) intercepts
-//! `import "name"`: for a registered host module it declares a tiny re-export
-//! module that pulls functions off a global namespace; for file specifiers it
-//! reads + (for `.ts`) type-strips the source.
+//! 运行时由 [`HostLoader`]（实现 `rquickjs::Loader`）拦截 `import "name"`：
+//! 命中已注册的宿主模块时，声明一个极小的再导出模块，从全局命名空间取函数；
+//! 命中文件说明符时读取源文件，`.ts` 还会先剥掉类型。
 
 pub(crate) mod modules;
 
@@ -20,11 +19,10 @@ use rquickjs::{Ctx, Error, Module, Result};
 
 use crate::runtime::ts_transform::strip_typescript;
 
-/// Installer closure: registers a module's native functions on its global
-/// namespace object inside the QuickJS context.
+/// 安装闭包：在 QuickJS 上下文里，把模块的原生函数挂到它的全局命名空间对象上。
 type Installer = Box<dyn for<'js> Fn(&Ctx<'js>) -> Result<()> + Send + Sync>;
 
-/// A Rust module exposed to scripts via `import { ... } from "name"`.
+/// 通过 `import { ... } from "name"` 暴露给脚本的 Rust 模块。
 pub struct HostModule {
     pub name: String,
     declaration: String,
@@ -37,6 +35,7 @@ pub struct HostModule {
 }
 
 impl HostModule {
+    /// 新建一个空模块：无声明、无导出、安装闭包为空操作。
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -47,19 +46,19 @@ impl HostModule {
         }
     }
 
-    /// TypeScript declaration body (the contents inside `declare module "name" { … }`).
+    /// TypeScript 声明正文（即 `declare module "name" { … }` 大括号里的内容）。
     pub fn declaration(mut self, decl: impl Into<String>) -> Self {
         self.declaration = decl.into();
         self
     }
 
-    /// Add an exported name. Call once per export.
+    /// 添加一个导出名，每个导出调用一次。
     pub fn export(mut self, name: impl Into<String>) -> Self {
         self.exports.push(name.into());
         self
     }
 
-    /// Add an exported name guarded by a permission: 扩展清单不声明该权限时，
+    /// 添加一个受权限保护的导出名：扩展清单不声明该权限时，
     /// 运行时里这个导出是调用即抛错的占位函数。
     pub fn export_guarded(mut self, name: impl Into<String>, permission: &str) -> Self {
         let name = name.into();
@@ -84,8 +83,8 @@ impl HostModule {
         (allowed, denied)
     }
 
-    /// Installer called inside the QuickJS context to register native
-    /// functions on a global object named `__<module_name>`.
+    /// 在 QuickJS 上下文内调用的安装器：把原生函数挂到名为 `__<模块名>` 的
+    /// 全局对象上。
     pub fn installer<F>(mut self, f: F) -> Self
     where
         F: for<'js> Fn(&Ctx<'js>) -> Result<()> + Send + Sync + 'static,
@@ -95,23 +94,25 @@ impl HostModule {
     }
 }
 
-/// Registry of all host modules. Cheaply cloneable behind `Arc`.
+/// 全部宿主模块的注册表。外面套 `Arc` 后可廉价克隆。
 pub struct HostRegistry {
     pub modules: HashMap<String, HostModule>,
 }
 
 impl HostRegistry {
+    /// 新建空注册表。
     pub fn new() -> Self {
         Self {
             modules: HashMap::new(),
         }
     }
 
+    /// 注册（或按名覆盖）一个模块。
     pub fn register(&mut self, module: HostModule) {
         self.modules.insert(module.name.clone(), module);
     }
 
-    /// Write `declare module "name" { … }` for every module to `types_dir`.
+    /// 为每个模块把 `declare module "name" { … }` 写到 `types_dir`。
     pub fn write_type_declarations(&self, types_dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(types_dir)?;
         for module in self.modules.values() {
@@ -127,13 +128,12 @@ impl HostRegistry {
             };
             let content = format!("declare module \"{}\" {{\n  {}\n}}\n", module.name, body);
             let path = types_dir.join(format!("{}.d.ts", module.name));
-            let _ = std::fs::write(path, content); // best-effort
+            let _ = std::fs::write(path, content); // 尽力而为：写失败只影响 IDE 提示
         }
         Ok(())
     }
 
-    /// Install all module globals on the given context. Called by the runner
-    /// before evaluating the user script.
+    /// 在给定上下文里装上所有模块的全局对象。runner 在求值用户脚本前调用。
     pub fn install_globals<'js>(&self, ctx: &Ctx<'js>) -> Result<()> {
         for module in self.modules.values() {
             (module.installer)(ctx)?;
@@ -148,15 +148,16 @@ impl Default for HostRegistry {
     }
 }
 
-// ─── Loader + Resolver ─────────────────────────────────────────────────────
+// ─── 加载器与解析器（Loader / Resolver） ────────────────────────────────────
 
-/// rquickjs `Loader`: host modules first, then file-based modules.
+/// rquickjs 的 `Loader`：先查宿主模块，再落到文件模块。
 pub struct HostLoader {
     pub registry: Arc<HostRegistry>,
     pub scripts_dir: PathBuf,
 }
 
 impl HostLoader {
+    /// 绑定注册表与脚本根目录。
     pub fn new(registry: Arc<HostRegistry>, scripts_dir: PathBuf) -> Self {
         Self {
             registry,
@@ -172,7 +173,7 @@ impl Loader for HostLoader {
         name: &str,
         _attrs: Option<ImportAttributes<'js>>,
     ) -> Result<Module<'js>> {
-        // 1. Registered host module → forward to the global namespace.
+        // 1. 已注册的宿主模块 → 转发到全局命名空间。
         //    转发源码由 plux-js-manager 统一生成（转发函数每次调用都现取
         //    `globalThis.__<name>`，扩展与脚本两条链路行为一致）。脚本链路
         //    是用户自己写的代码，全权：denied 恒为空。
@@ -182,7 +183,7 @@ impl Loader for HostLoader {
             return Module::declare(ctx.clone(), name, source);
         }
 
-        // 2. File-based module (relative path or bare path).
+        // 2. 文件模块（相对路径或裸路径）。
         //    单文件脚本没有"导入方"概念，`base` 传空串：相对说明符以脚本
         //    目录为基准。解析逻辑与扩展运行时共用同一份。
         let path = plux_js_manager::resolve_file(&self.scripts_dir, "", name)
@@ -198,7 +199,7 @@ impl Loader for HostLoader {
     }
 }
 
-/// Identity resolver — the loader handles both host names and paths.
+/// 恒等解析器——宿主名与路径都由加载器自己处理，这里原样返回说明符。
 pub struct HostResolver;
 
 impl Resolver for HostResolver {

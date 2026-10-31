@@ -20,17 +20,16 @@ use super::runner::CancelToken;
 use crate::console_channel::ConsoleChannel;
 use crate::ui::interaction_window::{InteractionEvent, InteractionState, InteractionWindow};
 
-/// How often the interaction drain runs while a script is executing.
+/// 脚本执行期间交互请求的排空间隔。
 pub(crate) const INTERACTION_TICK: Duration = Duration::from_millis(50);
 
-/// Progress that finishes faster than this never opens a window — otherwise
-/// short operations flash one on screen for a single frame.
+/// 比这更快的进度不开窗——否则短操作会在屏幕上闪一帧。
 const PROGRESS_WINDOW_DELAY: Duration = Duration::from_millis(300);
 
-/// Standby / progress window size.
+/// 待命窗 / 进度窗的尺寸。
 const INTERACTION_WINDOW_SIZE: (f32, f32) = (420., 150.);
 
-/// A `pickPath` call waiting on the native file picker.
+/// 一次等待原生文件选择器返回的 `pickPath` 调用。
 /// `Receiver` 是 gpui `prompt_for_paths` 的返回类型（futures-channel oneshot）。
 type PickPending = (
     Sender<Option<PathBuf>>,
@@ -39,33 +38,32 @@ type PickPending = (
 
 /// 交互浮窗管理器：一轮运行一个实例状态（`begin_run` 重置）。
 pub(crate) struct InteractionWindowManager {
-    /// Bridge of the in-flight run. Kept on the UI side so the drain loop can
-    /// read progress and mark focus as confirmed.
+    /// 进行中运行的 bridge。留在 UI 侧，好让排空循环能读进度、标记焦点已确认。
     bridge: InteractionBridge,
-    /// Script → UI requests of the in-flight run.
+    /// 进行中运行的「脚本 → UI」请求流。
     rx: Receiver<UiRequest>,
-    /// Progress slot shared with the in-flight run.
+    /// 与进行中运行共享的进度槽。
     progress: ProgressSlot,
     /// 当前运行的取消令牌：确认窗的「中止」按钮经它打断脚本侧的等待。
     cancel: CancelToken,
     console: ConsoleChannel,
-    /// The standby / progress / confirm window, when one is up.
+    /// 待命 / 进度 / 确认窗，开着的时候才有值。
     window: Option<(AnyWindowHandle, Entity<InteractionWindow>)>,
-    /// `confirm` waiting for an answer.
+    /// 等待作答的 `confirm`。
     pending_confirm: Option<(String, Sender<ConfirmChoice>)>,
-    /// `requestFocus` waiting for the user to pick a window.
+    /// 等用户选窗口的 `requestFocus`。
     pending_focus: Option<(String, Sender<()>)>,
-    /// `pickPath` waiting on the native picker.
+    /// 等原生选择器的 `pickPath`。
     pending_pick: Option<PickPending>,
-    /// Whether the standby window has been seen active at least once; only then
-    /// does losing activation mean "the user picked another window".
+    /// 待命窗是否至少被观察到一次处于激活态；只有此后「失去激活」才等于
+    /// 「用户改选了别的窗口」。
     focus_activated: bool,
-    /// When progress first appeared, for the no-flash delay.
+    /// 进度首次出现的时间，用于抑制窗口闪现。
     progress_since: Option<Instant>,
 }
 
 impl InteractionWindowManager {
-    /// Idle placeholders, replaced by the first run's own bridge.
+    /// 空闲占位状态，首次运行时会被本轮自己的 bridge 替换掉。
     pub(crate) fn new(console: ConsoleChannel) -> Self {
         let (bridge, rx) = InteractionBridge::new(CancelToken::new());
         let progress = bridge.progress_slot();
@@ -118,8 +116,8 @@ impl InteractionWindowManager {
         self.close_window(cx);
     }
 
-    /// Drain interaction requests, resolve what the UI can resolve and keep
-    /// the interaction window in sync. Called once per tick while a run is up.
+    /// 排空交互请求，能就地解决的解决掉，并让交互窗口保持同步。运行期间
+    /// 每个 tick 调一次。
     pub(crate) fn drain(&mut self, cx: &mut App) {
         while let Ok(request) = self.rx.try_recv() {
             match request {
@@ -131,8 +129,8 @@ impl InteractionWindowManager {
                     kind,
                     reply,
                 } => {
-                    // The native picker is modal and cannot be driven from here,
-                    // so start it and remember the reply for later ticks.
+                    // 原生选择器是模态的，没法在这里同步驱动，所以先发出去，
+                    // 把 reply 记下来留到后续 tick 再收结果。
                     let receiver = cx.prompt_for_paths(PathPromptOptions {
                         files: kind == PickKind::File,
                         directories: kind == PickKind::Dir,
@@ -153,20 +151,20 @@ impl InteractionWindowManager {
         self.sync_window(cx);
     }
 
-    /// Forward the native picker's result once the user closes it.
+    /// 用户关掉原生选择器后，把结果转发回去。
     fn poll_pick(&mut self) {
         let Some((_, receiver)) = &mut self.pending_pick else {
             return;
         };
         let picked = match receiver.try_recv() {
-            // Still on screen: keep waiting, the next tick checks again.
+            // 选择器还在屏幕上：继续等，下一个 tick 再看。
             Ok(None) => return,
             Ok(Some(Ok(paths))) => paths.and_then(|paths| paths.into_iter().next()),
             Ok(Some(Err(err))) => {
                 self.console.warn(format!("Pick path failed: {err}"));
                 None
             }
-            // The sender was dropped: treat it as a cancel, not a failure.
+            // 发送端被丢弃：按「用户取消」处理，不当成失败。
             Err(oneshot::Canceled) => None,
         };
         if let Some((reply, _)) = self.pending_pick.take() {
@@ -174,13 +172,13 @@ impl InteractionWindowManager {
         }
     }
 
-    /// Release a focus standby once the user moves activation to another window.
+    /// 用户把激活切到别的窗口后，释放焦点待命。
     fn poll_focus(&mut self, cx: &mut App) {
         if self.pending_focus.is_none() {
             return;
         }
-        // A window that is not up yet cannot be inactive, which is why the
-        // release only arms after it has been seen active at least once.
+        // 还没显示出来的窗口谈不上「失去激活」，所以必须先把窗口观察到一次
+        // 激活态，释放逻辑才武装起来。
         let active = self
             .window
             .as_ref()
@@ -203,7 +201,7 @@ impl InteractionWindowManager {
         self.bridge.confirm_focus();
     }
 
-    /// Show, update or close the interaction window based on what is pending.
+    /// 按当前待处理的事项决定交互窗口的开、关与内容更新。
     fn sync_window(&mut self, cx: &mut App) {
         let state = if let Some((message, _)) = &self.pending_confirm {
             InteractionState::Confirm {
@@ -212,7 +210,7 @@ impl InteractionWindowManager {
         } else if let Some((hint, _)) = &self.pending_focus {
             InteractionState::Focus { hint: hint.clone() }
         } else if let Some(snapshot) = self.progress.lock().clone() {
-            // Progress shorter than the delay is not worth a window.
+            // 短于延迟的进度不值得为它开个窗。
             let since = *self.progress_since.get_or_insert_with(Instant::now);
             if self.window.is_none() && since.elapsed() < PROGRESS_WINDOW_DELAY {
                 return;
@@ -228,18 +226,17 @@ impl InteractionWindowManager {
             return;
         }
 
-        // Whether this state should take focus on creation. Focus/Confirm need
-        // focus so the standby can detect a loss-of-activation and Confirm
-        // catches keystrokes; Progress must NOT steal focus or the simulated
-        // keystrokes will land on our own window.
+        // 创建时是否抢焦点。Focus/Confirm 必须抢：待命窗要靠失去激活来判断
+        // 用户已切走，Confirm 还要接收按键；Progress 绝不能抢，否则模拟键入
+        // 会打进我们自己的窗口。
         let wants_focus = !matches!(state, InteractionState::Progress { .. });
 
         let need_reopen = match &self.window {
             None => true,
             Some((_, view)) => {
                 let current_state = view.read(cx).state();
-                // Same kind of state — just update the content, window keeps
-                // its existing focus (which is correct for a same-type transition).
+                // 同一类状态：只更新内容即可，窗口保留现有焦点（同类切换时
+                // 这正是想要的行为）。
                 std::mem::discriminant(current_state) != std::mem::discriminant(&state)
                     || (wants_focus != current_state.wants_focus())
             }
@@ -253,9 +250,8 @@ impl InteractionWindowManager {
         }
     }
 
-    /// Open the always-on-top interaction window. `take_focus` should be `false`
-    /// for the Progress state so simulated keystrokes don't land on the overlay
-    /// itself; Focus/Confirm need it to be `true`.
+    /// 打开置顶的交互窗口。Progress 状态必须传 `take_focus = false`，否则模拟
+    /// 键入会落在这个浮窗上；Focus/Confirm 则要 `true`。
     fn open_window(&mut self, cx: &mut App, take_focus: bool) {
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(
@@ -288,8 +284,8 @@ impl InteractionWindowManager {
         let _ = handle.update(cx, |_, window, _| window.remove_window());
     }
 
-    /// Buttons in the interaction window are answered here, so the reply
-    /// channels only ever have one owner. 由 [`RunService`] 的订阅转发进来。
+    /// 交互窗里的按钮在这里作答，保证每条 reply 通道只有一个所有者。
+    /// 由 [`RunService`] 的订阅转发进来。
     pub(crate) fn on_interaction_event(&mut self, event: InteractionEvent) {
         match event {
             InteractionEvent::ConfirmYes | InteractionEvent::ConfirmNo => {
@@ -303,8 +299,8 @@ impl InteractionWindowManager {
                 }
             }
             InteractionEvent::Abort => {
-                // Hand the script its abort reason, then stop the run; the token
-                // also breaks any await the request is still sitting in.
+                // 先把中止原因交给脚本，再停掉本轮；令牌同时会打断该请求还在
+                // 等待的 await。
                 if let Some((_, reply)) = self.pending_confirm.take() {
                     let _ = reply.send(ConfirmChoice::Abort);
                 }

@@ -1,39 +1,37 @@
-//! Pure text transforms behind the editor's editing shortcuts.
+//! 编辑器快捷键背后的纯文本变换。
 //!
-//! Each op maps (current text, byte selection) to a single range replacement
-//! plus the selection to restore afterwards, so the gpui layer only has to
-//! spell out `set_selected_range` + `replace`. Byte offsets throughout, and all
-//! line helpers are built on [`RopeExt`].
+//! 每个操作把「当前文本 + 字节选区」映射成一次区间替换，外加替换后要恢复的
+//! 选区，gpui 那层只需照做 `set_selected_range` + `replace`。全程用字节偏移，
+//! 行级辅助函数都建在 [`RopeExt`] 上。
 //!
-//! Note: `RopeExt::line_end_offset` ends a line *before* its `\n` (despite the
-//! doc comment, which claims otherwise), and `slice_line` keeps a trailing
-//! `\r`. [`line_full_end`] is the one that includes the terminator.
+//! 注意：`RopeExt::line_end_offset` 实际把行尾收在 `\n` **之前**（尽管它自己的
+//! 注释说的不是这样），而 `slice_line` 会保留行尾的 `\r`。真正把终止符算进
+//! 行内的是 [`line_full_end`]。
 
 use std::ops::Range;
 use std::ops::RangeInclusive;
 
 use gpui_kit::component::input::{Rope, RopeExt};
 
-/// One replacement to feed `EditorState::set_selected_range` + `replace`.
+/// 一次替换：喂给 `EditorState::set_selected_range` + `replace`。
 pub struct Edit {
-    /// Byte range in the current text to overwrite.
+    /// 当前文本里要被覆盖的字节区间。
     pub range: Range<usize>,
-    /// Replacement text.
+    /// 替换进去的文本。
     pub text: String,
-    /// Byte range to select once the edit is applied.
+    /// 编辑应用后要选中的字节区间。
     pub selection: Range<usize>,
 }
 
-// ── Line helpers ───────────────────────────────────────────────────────────
+// ── 行辅助函数 ─────────────────────────────────────────────────────────────
 
-/// Byte range of a line's content, without its terminator (a trailing `\r` is
-/// kept, since that belongs to the line rather than to the newline).
+/// 一行正文的字节区间，不含行终止符（行尾的 `\r` 保留：它属于这一行，而不是
+/// 属于换行）。
 fn line_content_range(rope: &Rope, row: usize) -> Range<usize> {
     rope.line_start_offset(row)..rope.line_end_offset(row)
 }
 
-/// Byte offset just past a line's terminator: the next line's start, or the end
-/// of the text for the last line.
+/// 一行终止符之后的字节偏移：下一行的开头，最后一行则是文本末尾。
 fn line_full_end(rope: &Rope, row: usize) -> usize {
     if row + 1 < rope.lines_len() {
         rope.line_start_offset(row + 1)
@@ -42,14 +40,12 @@ fn line_full_end(rope: &Rope, row: usize) -> usize {
     }
 }
 
-/// Whether the line is followed by a `\n`. False only for an unterminated last
-/// line.
+/// 该行后面是否跟着 `\n`。只有末尾没有换行的最后一行才是 false。
 fn line_has_terminator(rope: &Rope, row: usize) -> bool {
     line_full_end(rope, row) > rope.line_end_offset(row)
 }
 
-/// The terminator text to use for the final line of a replacement block, so the
-/// text's trailing-newline state survives the edit.
+/// 替换块最后一行该用的终止符，让文本「末尾有没有换行」的状态在编辑后保持不变。
 fn final_terminator(rope: &Rope, row: usize) -> &'static str {
     if line_has_terminator(rope, row) {
         "\n"
@@ -58,15 +54,14 @@ fn final_terminator(rope: &Rope, row: usize) -> &'static str {
     }
 }
 
-/// Content (no `\n`, `\r` kept) of the rows `first..=last`.
+/// `first..=last` 这几行的正文（不含 `\n`，保留 `\r`）。
 fn line_contents(rope: &Rope, first: usize, last: usize) -> Vec<String> {
     (first..=last)
         .map(|row| rope.slice_line(row).to_string())
         .collect()
 }
 
-/// Join lines back up, separating them with `\n` and using `final_term` for the
-/// last one.
+/// 把行拼回去：行间用 `\n` 分隔，最后一行用 `final_term`。
 fn build_block(contents: &[String], final_term: &str) -> String {
     let mut out = String::new();
     for (i, content) in contents.iter().enumerate() {
@@ -80,8 +75,7 @@ fn build_block(contents: &[String], final_term: &str) -> String {
     out
 }
 
-/// Rows covered by a byte selection. A selection ending exactly at a line start
-/// does not include that line (the usual "whole line" rule).
+/// 字节选区覆盖到的行。恰好结束在行首的选区不含那一行（常见的「整行」规则）。
 fn selected_rows(rope: &Rope, selection: &Range<usize>) -> RangeInclusive<usize> {
     let first = rope.offset_to_position(selection.start).line as usize;
     if selection.end <= selection.start {
@@ -100,15 +94,15 @@ fn is_blank(line: &str) -> bool {
     line.trim().is_empty()
 }
 
-// ── Comment toggling ───────────────────────────────────────────────────────
+// ── 注释开关 ───────────────────────────────────────────────────────────────
 
-/// Insert `// ` after the line's leading whitespace.
+/// 在行首缩进之后插入 `// `。
 fn comment_line(line: &str) -> String {
     let indent = line.len() - line.trim_start().len();
     format!("{}// {}", &line[..indent], &line[indent..])
 }
 
-/// Remove one `//` and the single space that follows it.
+/// 去掉一个 `//` 及紧随其后的一个空格。
 fn uncomment_line(line: &str) -> String {
     let indent = line.len() - line.trim_start().len();
     let rest = &line[indent..];
@@ -117,8 +111,8 @@ fn uncomment_line(line: &str) -> String {
     format!("{}{}", &line[..indent], rest)
 }
 
-/// `Cmd + /` — comment out the selected lines, or uncomment them when every
-/// non-blank line already starts with `//`. Blank lines are left alone.
+/// `Cmd + /` —— 注释掉选中的行；若每个非空行都已以 `//` 开头，则反向取消注释。
+/// 空行原样保留。
 pub fn toggle_line_comment(rope: &Rope, selection: Range<usize>) -> Option<Edit> {
     let rows = selected_rows(rope, &selection);
     let (first, last) = (*rows.start(), *rows.end());
@@ -148,7 +142,7 @@ pub fn toggle_line_comment(rope: &Rope, selection: Range<usize>) -> Option<Edit>
     if text == rope.slice(block.clone()) {
         return None;
     }
-    // Select the rewritten block, which may be longer than the original.
+    // 选中改写后的整块，它可能比原来更长。
     let selection = block.start..block.start + text.len();
     Some(Edit {
         range: block,
@@ -157,8 +151,8 @@ pub fn toggle_line_comment(rope: &Rope, selection: Range<usize>) -> Option<Edit>
     })
 }
 
-/// `Cmd + Option + /` — wrap the selection (or the current line) in `/* */`, or
-/// strip the delimiters when it is already wrapped.
+/// `Cmd + Option + /` —— 把选区（无选区时取当前行）包进 `/* */`，已经包住时
+/// 则剥掉定界符。
 pub fn toggle_block_comment(rope: &Rope, selection: Range<usize>) -> Option<Edit> {
     let range = if selection.is_empty() {
         let row = rope.offset_to_position(selection.start).line as usize;
@@ -184,8 +178,8 @@ pub fn toggle_block_comment(rope: &Rope, selection: Range<usize>) -> Option<Edit
         };
     if wrapped {
         let close = body.rfind("*/").unwrap();
-        // Strip the delimiters plus one space of padding each, so both
-        // `/*code*/` and `/* code */` come back as `code`.
+        // 剥掉定界符，并各带走一个空格的内边距，这样 `/*code*/` 和
+        // `/* code */` 都能还原成 `code`。
         let mut inner_start = open + 2;
         if body[inner_start..].starts_with(' ') {
             inner_start += 1;
@@ -217,16 +211,15 @@ pub fn toggle_block_comment(rope: &Rope, selection: Range<usize>) -> Option<Edit
     })
 }
 
-// ── Whole-line edits ───────────────────────────────────────────────────────
+// ── 整行编辑 ───────────────────────────────────────────────────────────────
 
-/// `Cmd + Shift + K` — delete the selected lines, terminator included.
+/// `Cmd + Shift + K` —— 删除选中的行，连同行终止符。
 pub fn delete_lines(rope: &Rope, selection: Range<usize>) -> Option<Edit> {
     let rows = selected_rows(rope, &selection);
     let (first, last) = (*rows.start(), *rows.end());
 
     let mut range = rope.line_start_offset(first)..line_full_end(rope, last);
-    // The last line of the text has no terminator: also swallow the newline
-    // separating it from the line above, so no blank line is left behind.
+    // 文本最后一行没有终止符：把与上一行之间的换行一起吞掉，免得留下空行。
     if range.end == rope.len() && !line_has_terminator(rope, last) && first > 0 {
         range.start = rope.line_end_offset(first - 1);
     }
@@ -240,9 +233,8 @@ pub fn delete_lines(rope: &Rope, selection: Range<usize>) -> Option<Edit> {
     })
 }
 
-/// `Option + Shift + Up/Down` — copy the selected lines above (`up`) or below
-/// the original. Both directions select the fresh copy so the shortcut can be
-/// pressed repeatedly.
+/// `Option + Shift + Up/Down` —— 把选中的行复制到原位置之上（`up`）或之下。
+/// 两个方向都选中新复制的那份，方便连按。
 pub fn duplicate_lines(rope: &Rope, selection: Range<usize>, up: bool) -> Option<Edit> {
     let rows = selected_rows(rope, &selection);
     let (first, last) = (*rows.start(), *rows.end());
@@ -266,8 +258,8 @@ pub fn duplicate_lines(rope: &Rope, selection: Range<usize>, up: bool) -> Option
     })
 }
 
-/// `Option + Up/Down` — swap the selected lines with the adjacent line above
-/// (`up`) or below. `None` when there is no line to swap with.
+/// `Option + Up/Down` —— 把选中的行与相邻的上一行（`up`）或下一行交换。
+/// 没有可交换的行时返回 `None`。
 pub fn move_lines(rope: &Rope, selection: Range<usize>, up: bool) -> Option<Edit> {
     let rows = selected_rows(rope, &selection);
     let (first, last) = (*rows.start(), *rows.end());
@@ -279,7 +271,7 @@ pub fn move_lines(rope: &Rope, selection: Range<usize>, up: bool) -> Option<Edit
         let prev = first - 1;
         let mut contents = line_contents(rope, first, last);
         contents.push(rope.slice_line(prev).to_string());
-        // The block keeps the trailing-newline state of the region it leaves.
+        // 整块保持它离开的那片区域「末尾有无换行」的状态。
         let moved = build_block(&contents, final_terminator(rope, last));
 
         let prev_start = rope.line_start_offset(prev);
@@ -316,7 +308,7 @@ pub fn move_lines(rope: &Rope, selection: Range<usize>, up: bool) -> Option<Edit
 mod tests {
     use super::*;
 
-    /// Apply an edit the way the panel does, and return the resulting text.
+    /// 按面板的方式应用一次编辑，返回结果文本。
     fn applied(rope: &Rope, edit: &Edit) -> String {
         let mut out = rope.slice(0..edit.range.start).to_string();
         out.push_str(&edit.text);
@@ -352,8 +344,7 @@ mod tests {
         let edit = toggle_line_comment(&rope(text), 0..6).unwrap();
         let out = applied(&rope(text), &edit);
         assert_eq!(out, "// a\n// b\n// c\n");
-        // The whole rewritten block stays selected, so the shortcut can be
-        // pressed again right away.
+        // 改写后的整块保持选中，方便立刻再按一次快捷键。
         assert_eq!(edit.selection, 0..15);
 
         let edit = toggle_line_comment(&rope(&out), edit.selection.clone()).unwrap();
@@ -364,7 +355,7 @@ mod tests {
     #[test]
     fn toggle_comment_skips_blank_lines() {
         let text = "a\n\n  \nb\n";
-        // Select the whole text so all four rows are covered.
+        // 选中整段文本，四行都覆盖到。
         let edit = toggle_line_comment(&rope(text), 0..text.len()).unwrap();
         assert_eq!(applied(&rope(text), &edit), "// a\n\n  \n// b\n");
     }
@@ -378,7 +369,7 @@ mod tests {
 
     #[test]
     fn selection_ending_at_column_zero_excludes_that_line() {
-        // Selecting "a\n" (0..2) must not pull in the following "b" line.
+        // 选中 "a\n"（0..2）不能顺带把后面那行 "b" 卷进来。
         let text = "a\nb\n";
         let edit = toggle_line_comment(&rope(text), 0..2).unwrap();
         assert_eq!(applied(&rope(text), &edit), "// a\nb\n");
@@ -431,8 +422,7 @@ mod tests {
 
     #[test]
     fn duplicate_unterminated_last_line() {
-        // The text does not end with a newline, so the duplicate must not add
-        // one either.
+        // 文本不以换行结尾，复制出来的那份也不能加。
         let text = "a\nb";
         let edit = duplicate_lines(&rope(text), 2..2, false).unwrap();
         assert_eq!(applied(&rope(text), &edit), "a\nb\nb");
@@ -446,7 +436,7 @@ mod tests {
     #[test]
     fn move_line_down_at_bottom_is_noop() {
         assert!(move_lines(&rope("a\nb"), 2..2, false).is_none());
-        // A trailing empty line is not a line to swap with either.
+        // 末尾的空行同样不算可交换的行。
         assert!(move_lines(&rope("a\nb\n"), 2..2, false).is_none());
     }
 

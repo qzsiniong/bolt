@@ -1,8 +1,7 @@
-//! The native JSON editor panel — uses gpui-kit's `Editor` with JSON syntax
-//! highlighting + tree-sitter folding + line numbers, plus a row of format /
-//! minify / escape / copy / clear tools. Keeps the "paste auto-format"
-//! heuristic from the extension so pasting a blob of valid JSON immediately
-//! gets pretty-printed.
+//! 原生 JSON 编辑器面板——用 gpui-kit 的 `Editor`，带 JSON 语法高亮 +
+//! tree-sitter 折叠 + 行号，外加一排格式化 / 压缩 / 转义 / 复制 / 清空
+//! 工具。保留扩展版的「粘贴即自动格式化」启发式：粘贴一大段合法 JSON
+//! 时立刻美化。
 
 use super::parsers;
 use crate::ui::window::{WindowPin, WindowTitleBar};
@@ -16,8 +15,7 @@ use gpui_kit::{
     Styled, Subscription, Window, div, px,
 };
 
-/// Net insertion of at least this many characters is treated as a paste —
-/// auto-format the incoming text if it parses as strict JSON.
+/// 一次性净插入至少这么多字符就视为粘贴——若能解析为严格 JSON 则自动格式化。
 const PASTE_MIN: usize = 8;
 
 #[derive(Clone, Debug)]
@@ -77,28 +75,28 @@ const TOOLS: &[ToolButton] = &[
     },
 ];
 
+/// 原生 JSON 编辑器面板。
 pub struct JsonEditorPanel {
     focus_handle: FocusHandle,
     editor: Entity<EditorState>,
     /// 标题栏右上角的置顶图钉（公共控件，自带状态与窗口层级同步）。
     pin: Entity<WindowPin>,
-    /// While `true`, a pending set_value on the editor is in flight — the
-    /// corresponding `Change` subscription callback does nothing so we don't
-    /// re-trigger auto-format on our own writes.
+    /// 为 `true` 时编辑器上有一笔 set_value 在途——对应的 `Change` 订阅
+    /// 回调什么都不做，避免我们自己的写入再次触发自动格式化。
     suppress: bool,
-    /// Net text we last observed from a `Change` event — used so we can
-    /// compute whether the delta looks like a paste (large bulk insert).
+    /// 上次 `Change` 事件看到的文本——用来判断增量像不像粘贴（大段插入）。
     last_text: String,
-    /// Latest status message to show in the bottom bar.
+    /// 底栏显示的最新状态消息。
     status: String,
-    /// A deferred write (e.g. paste auto-format) waiting for the next render
-    /// cycle — `EditorState::set_value` needs a `&mut Window` which only
-    /// render provides; subscribe callbacks do not.
+    /// 等待下一轮 render 的延迟写入（如粘贴自动格式化）——
+    /// `EditorState::set_value` 需要 `&mut Window`，只有 render 拿得到，
+    /// 订阅回调拿不到。
     pending_set: Option<String>,
     _subscription: Subscription,
 }
 
 impl JsonEditorPanel {
+    /// 创建 JSON 编辑器面板；`content` 非空时作为初始内容注入。
     pub fn new(window: &mut Window, cx: &mut Context<Self>, content: String) -> Self {
         let editor = cx.new(|ecx| {
             EditorState::new(window, ecx)
@@ -154,9 +152,9 @@ impl JsonEditorPanel {
 
         if inserted >= PASTE_MIN {
             if let Ok(pretty) = parsers::format(&text) {
-                // EditorState::set_value needs a &mut Window — render provides
-                // one; subscribe callbacks do not. Defer to the next render
-                // cycle by scheduling a notify and a `pending_set` field.
+                // EditorState::set_value 需要 &mut Window——render 里有，
+                // 订阅回调里没有。安排一次 notify 并暂存到 `pending_set`，
+                // 推迟到下一轮 render。
                 self.pending_set = Some(pretty);
                 self.status = "已自动格式化".to_string();
             } else {
@@ -253,8 +251,8 @@ impl Focusable for JsonEditorPanel {
 
 impl Render for JsonEditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Apply any deferred writes (auto-format on paste) now that we have
-        // a &mut Window — `set_value` requires it.
+        // 现在拿到 &mut Window 了，先落实所有延迟写入（粘贴自动格式化）——
+        // `set_value` 需要它。
         self.apply_pending(window, cx);
 
         let colors = cx.theme().colors;

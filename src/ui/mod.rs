@@ -1,7 +1,6 @@
-//! Cross-module UI pieces: the host-interaction overlay, the window pin
-//! control, and the pure text-edit operations the editor panel binds to.
-//! Per-feature views (script manager, launcher, JSON editor) live under
-//! `src/modules/<feature>/`.
+//! 跨模块的 UI 通用件：宿主交互浮层、窗口图钉控件，以及编辑器面板绑定的
+//! 纯文本编辑操作。按功能划分的视图（脚本管理、Launcher、JSON 编辑器）在
+//! `src/modules/<feature>/` 下。
 
 pub(crate) mod clipboard;
 pub(crate) mod editor_ops;

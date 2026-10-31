@@ -1,4 +1,4 @@
-//! Shared scaffolding for unit tests. Compiled only under `cargo test`.
+//! 单元测试共用的脚手架。只在 `cargo test` 下编译。
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -9,13 +9,13 @@ use crate::model::script::Language;
 use crate::runtime::interaction::InteractionBridge;
 use crate::runtime::runner::{CancelToken, RunEnv, run_script};
 
-/// A temporary directory that is removed when dropped.
+/// 临时目录，drop 时整棵删掉。
 ///
-/// The name carries the caller's tag plus the process id, so tests running in
-/// parallel never collide.
+/// 目录名带上调用方的 tag 和进程 id，并行跑的测试不会撞车。
 pub struct TempDir(pub PathBuf);
 
 impl TempDir {
+    /// 建一个干净的同名临时目录（先删旧目录，避免上次残留）。
     pub fn new(tag: &str) -> Self {
         let dir = std::env::temp_dir().join(format!("bolt-test-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -23,7 +23,7 @@ impl TempDir {
         Self(dir)
     }
 
-    /// Write `content` to `<dir>/<rel>`, creating parent directories.
+    /// 把 `content` 写到 `<dir>/<rel>`，父目录不存在就建出来。
     pub fn write(&self, rel: &str, content: &str) {
         let path = self.0.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -37,21 +37,20 @@ impl Drop for TempDir {
     }
 }
 
-/// LSP position constructor.
+/// 构造 LSP 位置。
 pub fn position(line: u32, character: u32) -> lsp_types::Position {
     lsp_types::Position { line, character }
 }
 
-/// Run a JS snippet through the real runner (all built-in host modules
-/// registered) and return the console lines. Host-layer tests use it to
-/// exercise the public `import { … } from 'bolt'` path end-to-end.
+/// 用真实 runner（注册全部内建 host 模块）跑一段 JS，返回 Console 里的行。
+/// host 层测试靠它端到端走一遍公开的 `import { … } from 'bolt'` 路径。
 pub fn run_js(code: &str, scripts_dir: &Path) -> Vec<String> {
     let mut registry = HostRegistry::new();
     modules::register_all(&mut registry);
     run_with_registry(code, scripts_dir, Arc::new(registry))
 }
 
-/// Same as [`run_js`] with a custom registry (e.g. to test loader precedence).
+/// 同 [`run_js`]，但用自带的 registry（例如测加载器优先级）。
 pub fn run_with_registry(
     code: &str,
     scripts_dir: &Path,

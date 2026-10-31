@@ -1,3 +1,8 @@
+//! 脚本列表面板：脚本目录的列表 + 刷新 / 新建 / 在 Finder 中显示。
+//!
+//! 选中切换与新建都会先检查编辑器是否有未保存的修改（经 [`EditorPanel`]
+//! 的弱引用），有则弹确认对话框，避免静默丢失编辑。
+
 use std::path::PathBuf;
 
 use gpui_kit::base::dock::PanelEvent;
@@ -17,21 +22,22 @@ use crate::model::script::{Language, Script};
 use crate::model::script_store;
 use crate::ui::mac_ffi;
 
-/// Emitted when the user picks a script from the list.
+/// 用户从列表里选中了一个脚本时发出。
 #[derive(Clone, Debug)]
 pub struct ScriptSelected(pub Script);
 
+/// 脚本列表面板。
 pub struct ScriptListPanel {
     focus_handle: FocusHandle,
     scripts_dir: PathBuf,
     scripts: Vec<Script>,
     selected_file: Option<String>,
-    /// The editor, used to warn before a selection change discards unsaved
-    /// edits.
+    /// 编辑器（弱引用）：选中切换前用来检查有没有未保存的编辑。
     editor: Option<WeakEntity<EditorPanel>>,
 }
 
 impl ScriptListPanel {
+    /// 创建面板并列出脚本目录。
     pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
         let scripts_dir = script_store::scripts_dir();
         let scripts = script_store::list_scripts(&scripts_dir);
@@ -44,8 +50,7 @@ impl ScriptListPanel {
         }
     }
 
-    /// Hand the panel a handle to the editor so it can check for unsaved
-    /// changes before replacing the open script.
+    /// 把编辑器的弱引用交给面板：替换当前打开的脚本前先检查未保存修改。
     pub fn set_editor(&mut self, editor: WeakEntity<EditorPanel>) {
         self.editor = Some(editor);
     }
@@ -67,8 +72,7 @@ impl ScriptListPanel {
         if Some(&file_name) == self.selected_file.as_ref() {
             return;
         }
-        // Switching away discards unsaved edits in the open script, so ask
-        // before replacing it.
+        // 切走会丢弃打开脚本里未保存的编辑，替换前先问一下。
         if self.editor_is_dirty(cx) {
             let list = cx.entity();
             window.open_alert_dialog(cx, move |alert, _, _| {
@@ -92,7 +96,7 @@ impl ScriptListPanel {
         self.apply_selection(file_name, cx);
     }
 
-    /// Commit a selection, loading the script into the editor.
+    /// 落实一次选中：把脚本载入编辑器。
     fn apply_selection(&mut self, file_name: String, cx: &mut Context<Self>) {
         self.selected_file = Some(file_name.clone());
         if let Some(script) = self
@@ -106,9 +110,9 @@ impl ScriptListPanel {
         cx.notify();
     }
 
-    /// Create a new script file (toolbar + button / Cmd+N).
+    /// 新建脚本文件（工具栏按钮 / Cmd+N）。
     pub fn create_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Creating discards unsaved edits in the open script, so ask first.
+        // 新建会丢弃打开脚本里未保存的编辑，先问一下。
         if self.editor_is_dirty(cx) {
             let list = cx.entity();
             window.open_alert_dialog(cx, move |alert, _, _| {
@@ -159,7 +163,7 @@ impl ScriptListPanel {
         }
     }
 
-    /// Ask for confirmation before deleting a script (dialog).
+    /// 删除脚本前先弹对话框确认。
     fn request_delete(&mut self, file_name: String, window: &mut Window, cx: &mut Context<Self>) {
         let list = cx.entity();
         window.open_alert_dialog(cx, move |alert, _, _| {
@@ -180,7 +184,7 @@ impl ScriptListPanel {
         });
     }
 
-    /// Open the scripts directory in Finder.
+    /// 在 Finder 中打开脚本目录。
     fn reveal_scripts_dir(&mut self, cx: &mut Context<Self>) {
         let console = cx.global::<AppShell>().console_channel.clone();
         mac_ffi::open_in_background(self.scripts_dir.clone(), move |result| {
@@ -190,7 +194,7 @@ impl ScriptListPanel {
         });
     }
 
-    /// Select a script file in Finder.
+    /// 在 Finder 中选中一个脚本文件。
     fn reveal_script(&mut self, file_name: String, cx: &mut Context<Self>) {
         let console = cx.global::<AppShell>().console_channel.clone();
         mac_ffi::reveal_in_background(self.scripts_dir.join(file_name), move |result| {
@@ -364,7 +368,7 @@ impl Render for ScriptListPanel {
                             .flex()
                             .items_center()
                             .gap_2()
-                            // Delete icon sits next to the script name.
+                            // 删除图标紧挨脚本名（已改到行尾 row_action）。
                             // .child(
                             //     div()
                             //         .id(("del", idx))

@@ -1,6 +1,5 @@
-//! Feature modules — each a self-contained unit that contributes items to the
-//! launcher and owns its own windows and state. The app shell wires them up at
-//! boot via [`default_modules`].
+//! 功能模块——每个都是自包含单元：向 launcher 贡献 items，并拥有自己的窗口
+//! 与状态。app shell 在启动时经 [`default_modules`] 把它们装配起来。
 
 pub(crate) mod apps;
 pub(crate) mod color_picker;

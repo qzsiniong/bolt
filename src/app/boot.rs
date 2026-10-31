@@ -1,6 +1,5 @@
-//! Boot sequence: prepare the data directories, register the built-in host
-//! modules, generate the script project files, start the language server, then
-//! hand over to GPUI.
+//! 启动序列：准备数据目录、注册内置宿主模块、生成脚手架工程文件、
+//! 启动语言服务，然后交给 GPUI。
 
 use std::sync::Arc;
 
@@ -63,8 +62,8 @@ pub(crate) fn run() {
         }
     }
 
-    // Register built-in host modules before generating project files so
-    // their .d.ts declarations are available for IDE/LSP.
+    // 先注册内置宿主模块再生成工程文件，这样它们的 .d.ts 声明对
+    // IDE/LSP 可见。
     let mut registry = HostRegistry::new();
     crate::host::modules::register_all(&mut registry);
     if let Err(e) = project_gen::generate_project_files(&scripts_dir, &registry) {
@@ -76,9 +75,8 @@ pub(crate) fn run() {
     // （`record` 只裁被记录的那一个 item）。
     usage::prune_usage();
 
-    // Spawn the language server before the UI so the editor gets diagnostics,
-    // completions and hover from the start. Failure reason is surfaced in the
-    // Console below; the editor degrades to highlighting-only.
+    // 语言服务先于 UI 启动，编辑器从第一帧起就有诊断、补全和悬停。
+    // 失败原因会打进下面的 Console；编辑器退化成纯语法高亮。
     let lsp_client = crate::lsp::LspClient::spawn(&scripts_dir).map(Arc::new);
 
     // UI 扩展的 `svg("icons/x.svg")` 相对扩展目录解析，而进程只有一个全局
@@ -136,8 +134,8 @@ pub(crate) fn run() {
                 )
             });
 
-            // Raycast-style global hotkey toggles the launcher; Cmd+Shift+T pins
-            // the clipboard to a floating sticky.
+            // Raycast 风格的全局快捷键唤起/收起 launcher；Cmd+Shift+T 把剪贴板
+            // 钉成浮动便签。
             let (hotkey_manager, hotkey_statuses) = hotkey::register();
             for (id, result) in hotkey_statuses {
                 match (id, result) {
@@ -249,6 +247,6 @@ pub(crate) fn run() {
                 _app_tick: app_tick,
             });
 
-            // No window at startup: the app idles until Alt+Space.
+            // 启动时不开任何窗口：应用闲置，等 Alt+Space。
         });
 }

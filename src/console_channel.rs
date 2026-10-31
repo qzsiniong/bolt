@@ -1,3 +1,9 @@
+//! Console 输出通道：进程级共享缓冲 + 各读者自持游标取增量。
+//!
+//! 写入方是 [`ConsoleChannel`]，读取方通过 [`ConsoleChannel::history`] 拿到同一个
+//! [`ConsoleLog`]，因此 Console 面板和独立 Console 窗口能同时看同一份输出；Error
+//! 级条目还额外滚动落盘，打包成 .app 后 stderr 不可见，落盘是唯一线索。
+
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -11,7 +17,7 @@ const CONSOLE_CAP: usize = 1000;
 /// Error 级条目落盘 `bolt.log` 时保留的最大行数（滚动裁剪）。
 const MAX_LOG_LINES: usize = 500;
 
-/// Severity of a console line. Drives the color in the Console panel.
+/// 一行 Console 输出的级别，决定它在 Console 面板里的颜色。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleLevel {
     Log,
@@ -21,8 +27,10 @@ pub enum ConsoleLevel {
 }
 
 impl ConsoleLevel {
+    /// 全部级别，按严重程度从低到高。
     pub const ALL: [Self; 4] = [Self::Log, Self::Info, Self::Warn, Self::Error];
 
+    /// 级别名（也写进 `bolt.log`）。
     pub fn label(self) -> &'static str {
         match self {
             Self::Log => "Log",
@@ -32,6 +40,7 @@ impl ConsoleLevel {
         }
     }
 
+    /// 终端镜像用的行首标记，Log 不带标记。
     pub fn prefix(self) -> &'static str {
         match self {
             Self::Log => "",
@@ -42,12 +51,12 @@ impl ConsoleLevel {
     }
 }
 
-/// A single console output line.
+/// 一条 Console 输出。
 #[derive(Clone, Debug)]
 pub struct ConsoleEntry {
     pub level: ConsoleLevel,
     pub text: String,
-    /// Unix epoch milliseconds.
+    /// Unix 纪元毫秒时间戳。
     pub timestamp: i64,
 }
 
@@ -69,6 +78,7 @@ struct LogInner {
 }
 
 impl ConsoleLog {
+    /// 新建一个空的共享缓冲。
     pub fn new() -> Self {
         Self::default()
     }
@@ -114,12 +124,11 @@ impl ConsoleLog {
     }
 }
 
-/// Cloneable handle used by the runner (and any Rust side) to push lines into
-/// the Console. Readers get the shared [`ConsoleLog`] via [`Self::history`].
+/// 写入方（runner 及任何 Rust 侧代码）用来往 Console 推行的可克隆句柄。读取方
+/// 通过 [`Self::history`] 拿到共享的 [`ConsoleLog`]。
 ///
-/// The buffer is bounded (`CONSOLE_CAP`): when nobody reads for a long time and
-/// output keeps arriving, the oldest entry is dropped to make room, so it always
-/// holds the most recent lines instead of growing without limit.
+/// 缓冲有上限（`CONSOLE_CAP`）：长时间没人读而输出持续到来时，挤出最旧的条目
+/// 腾地方，因此它始终保留最近的行，而不是无限增长。
 #[derive(Clone)]
 pub struct ConsoleChannel {
     log: ConsoleLog,
@@ -131,16 +140,15 @@ pub struct ConsoleChannel {
 }
 
 impl ConsoleChannel {
-    /// Create a channel with no disk log and no terminal mirror. Tests use this;
-    /// production goes through [`new_with_error_log`].
+    /// 建一个既不落盘也不镜像到终端的通道。仅供测试；生产走
+    /// [`new_with_error_log`]。
     #[cfg(test)]
     pub fn new() -> Self {
         Self::new_inner(None, false)
     }
 
-    /// Same as [`new`], but `Error`-level entries are also appended to
-    /// `log_path` (rolling, keeps the last [`MAX_LOG_LINES`] lines), and every
-    /// line is mirrored to the terminal in debug builds.
+    /// 同 [`new`]，但 `Error` 级条目额外追加到 `log_path`（滚动保留最后
+    /// [`MAX_LOG_LINES`] 行），调试构建下每行还镜像到终端。
     pub fn new_with_error_log(log_path: PathBuf) -> Self {
         Self::new_inner(
             Some(Arc::new(ErrorLog {
@@ -175,16 +183,20 @@ impl ConsoleChannel {
         self.log.clone()
     }
 
+    /// 写一条 Info 级输出。
     pub fn info(&self, text: impl Into<String>) {
         self.send(ConsoleLevel::Info, text.into());
     }
+    /// 写一条 Warn 级输出。
     pub fn warn(&self, text: impl Into<String>) {
         self.send(ConsoleLevel::Warn, text.into());
     }
+    /// 写一条 Error 级输出；配置了落盘时会同步写进 `bolt.log`。
     pub fn error(&self, text: impl Into<String>) {
         self.send(ConsoleLevel::Error, text.into());
     }
 
+    /// 按级别写一条输出：先落盘（Error 且配置了日志时），再进共享缓冲。
     pub fn send(&self, level: ConsoleLevel, text: String) {
         let entry = ConsoleEntry {
             level,
@@ -252,9 +264,8 @@ fn terminal_mirror_enabled() -> bool {
     }
 }
 
-/// Rolling error log: appends `Error` entries, keeps the last
-/// [`MAX_LOG_LINES`] lines. All IO is best-effort — a broken log file must
-/// never take the console channel down with it.
+/// 滚动错误日志：追加 `Error` 条目，只保留最后 [`MAX_LOG_LINES`] 行。所有 IO
+/// 都尽力而为——日志文件坏了，也绝不能连带把 Console 通道拖垮。
 struct ErrorLog {
     path: PathBuf,
     lock: Mutex<()>,

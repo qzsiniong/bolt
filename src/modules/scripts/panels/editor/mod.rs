@@ -1,10 +1,8 @@
-//! The editor panel: hosts the code editor, its LSP providers, and the script
-//! currently loaded into it.
+//! 编辑器面板：承载代码编辑器、它的 LSP providers，以及当前载入的脚本。
 //!
-//! Document plumbing (load / save / run / diagnostics) lives in `document`,
-//! the editing shortcuts in `actions`. All fields stay here and are private:
-//! child modules can read and write them, which keeps the split free of extra
-//! accessor indirection.
+//! 文档层面的管道（载入 / 保存 / 运行 / 诊断）在 `document`，编辑快捷键
+//! 在 `actions`。所有字段都留在本模块且私有：子模块可直接读写，拆分
+//! 不需要额外的 accessor 间接层。
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -35,28 +33,31 @@ use crate::model::script_store;
 mod actions;
 mod document;
 
-/// Emitted when the user clicks Run.
+/// 用户点击 Run 时发出。
 #[derive(Clone, Debug)]
 pub struct RunRequested {
+    /// 脚本文本内容。
     pub content: String,
+    /// 脚本语言。
     pub language: Language,
+    /// 文件名（用于运行时展示与日志）。
     pub file_name: String,
 }
 
-/// Emitted when the user clicks Stop, asking the host to abort the running
-/// script.
+/// 用户点击 Stop 时发出，请求宿主中止正在运行的脚本。
 #[derive(Clone, Debug)]
 pub struct StopRequested;
 
+/// 编辑器面板：代码编辑器 + 工具栏（运行/停止/保存）+ 未打开脚本时的
+/// 快捷键提示页。
 pub struct EditorPanel {
     focus_handle: FocusHandle,
     scripts_dir: PathBuf,
     editor: Entity<EditorState>,
     current_script: Option<Script>,
     dirty: bool,
-    /// True while a script started from this panel is executing; drives the
-    /// Run/Stop enabled state. Owned by the host (Workspace), which calls
-    /// `set_running`.
+    /// 脚本正由本面板启动执行中；驱动 Run/Stop 的禁用态。归宿主
+    /// （Workspace）所有，由它调 `set_running`。
     running: bool,
     pending_load: Option<Script>,
     lsp: Option<Arc<LspClient>>,
@@ -66,12 +67,12 @@ pub struct EditorPanel {
 }
 
 impl EditorPanel {
+    /// 创建编辑器面板：绑定编辑快捷键，LSP 可用时注册 providers。
     pub fn new(window: &mut Window, cx: &mut Context<Self>, lsp: Option<Arc<LspClient>>) -> Self {
-        // Editing shortcuts. `Some("Input")` matches the editor's key context
-        // ("Input mode=editor"), so these only fire while the editor is focused
-        // and never shadow unrelated bindings elsewhere in the app. Note that
-        // `cmd-shift-/` is unreachable on macOS (the shifted punctuation key
-        // reports as `cmd-?`), hence the `cmd-alt-/` block-comment binding.
+        // 编辑快捷键。`Some("Input")` 匹配编辑器的按键上下文
+        // （"Input mode=editor"），因此只在编辑器聚焦时触发，不会遮蔽
+        // 应用其他位置的无关绑定。注意 `cmd-shift-/` 在 macOS 上按不出来
+        // （shift 后的标点键上报为 `cmd-?`），所以块注释用 `cmd-alt-/`。
         cx.bind_keys([
             KeyBinding::new("cmd-/", ToggleComment, Some("Input")),
             KeyBinding::new("cmd-alt-/", ToggleBlockComment, Some("Input")),
@@ -95,8 +96,7 @@ impl EditorPanel {
                 .placeholder("Select a script from the list…")
         });
 
-        // Register the LSP providers on the editor when the language server
-        // is available.
+        // 语言服务器可用时，在编辑器上注册 LSP providers。
         let doc: Arc<Mutex<Option<DocHandle>>> = Arc::new(Mutex::new(None));
         if let Some(client) = lsp.clone() {
             let bridge = Rc::new(LspBridge::new(Some(client), doc.clone()));
@@ -111,10 +111,9 @@ impl EditorPanel {
 
         let subscription = cx.subscribe(&editor, |this, _state, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
-                // Dirty means the editor content differs from the loaded
-                // script's saved content. Comparing content (instead of
-                // assuming every Change is a user edit) keeps `set_value`
-                // during script loading from marking the editor dirty.
+                // dirty 的含义是编辑器内容与载入脚本已保存的内容不一致。
+                // 比较内容（而不是把每次 Change 都当成用户编辑），可避免
+                // 载入脚本时 `set_value` 把编辑器误标为 dirty。
                 let value = this.editor.read(cx).value().to_string();
                 this.dirty = this
                     .current_script
@@ -214,9 +213,8 @@ impl Render for EditorPanel {
                     .on_click(cx.listener(|this, _, window, cx| this.run_current(window, cx))),
             )
             .child(
-                // Stop uses the full Lucide catalog (assets::IconName); the
-                // component enum only carries a fixed compatibility subset and
-                // has no SquareStop variant.
+                // Stop 用完整的 Lucide 目录（assets::IconName）；组件层的
+                // 枚举只带固定的兼容子集，没有 SquareStop 变体。
                 Button::new("stop")
                     .icon(gpui_kit::assets::IconName::SquareStop)
                     .label("Stop")
@@ -252,8 +250,7 @@ impl Render for EditorPanel {
                 div().into_any_element()
             });
 
-        // With no script loaded there is nothing to edit, so show a hint plus a
-        // shortcut cheat-sheet instead of an empty editor.
+        // 没载入脚本就没东西可编辑：显示提示 + 快捷键速查表，而不是空编辑器。
         let editor_area: AnyElement = if can_run {
             Editor::new(&self.editor)
                 .appearance(false)
@@ -317,7 +314,7 @@ impl Render for EditorPanel {
             .size_full()
             .flex()
             .flex_col()
-            // Actions bubble from the focused editor up to this ancestor.
+            // action 从聚焦的编辑器向上冒泡到这个祖先容器处理。
             .on_action(cx.listener(Self::on_toggle_comment))
             .on_action(cx.listener(Self::on_toggle_block_comment))
             .on_action(cx.listener(Self::on_delete_line))

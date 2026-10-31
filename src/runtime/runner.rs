@@ -1,9 +1,8 @@
-//! Script execution engine.
+//! 脚本执行引擎。
 //!
-//! Runs a script (JS or TS) in a fresh `rquickjs::AsyncRuntime` on a worker
-//! thread. TypeScript is type-stripped via swc first. Host modules are
-//! installed via the `HostLoader`/`HostResolver`, and a custom `console`
-//! global captures output into the app's Console panel.
+//! 在工作线程上用一个全新的 `rquickjs::AsyncRuntime` 跑脚本（JS 或 TS），
+//! TypeScript 先经 swc 擦除类型。宿主模块通过 `HostLoader`/`HostResolver`
+//! 装载，另外装一个自定义 `console` 全局，把输出收进应用的 Console 面板。
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,10 +22,10 @@ use plux_rs::Bundle;
 /// 取消令牌由扩展运行时 crate 提供：命令执行与脚本执行共用同一个语义。
 pub use plux_js_manager::CancelToken;
 
-/// Host-side environment for one script or extension-command execution, grouped so
-/// the run entry point does not take a long positional argument list.
+/// 一次脚本或扩展命令执行所需的宿主侧环境。打包成结构体，免得运行入口
+/// 拖一长串位置参数。
 pub(crate) struct RunEnv {
-    /// Base directory used to resolve relative module imports.
+    /// 解析相对模块导入时使用的基准目录。
     pub(crate) scripts_dir: PathBuf,
     pub(crate) registry: Arc<HostRegistry>,
     pub(crate) console: ConsoleChannel,
@@ -36,8 +35,7 @@ pub(crate) struct RunEnv {
     pub(crate) extensions: Option<Arc<ExtensionStore>>,
 }
 
-/// Run a script to completion. Call from a worker thread — never on the GPUI
-/// main thread.
+/// 把一个脚本跑到结束。必须在工作线程调用，绝不能放在 GPUI 主线程。
 pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) {
     let RunEnv {
         scripts_dir,
@@ -49,7 +47,7 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
     } = env;
     console.info(format!("▶ Running {}…", file_name));
 
-    // 1. Type-strip TypeScript → JS (imports preserved).
+    // 1. TypeScript 擦除类型 → JS（保留 import）。
     let js_code = match language {
         Language::TypeScript => match strip_typescript(code) {
             Ok(js) => js,
@@ -61,7 +59,7 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
         Language::JavaScript => code.to_string(),
     };
 
-    // 2. Create a tokio runtime on this thread for async host fns (fetch/exec).
+    // 2. 在本线程建一个 tokio 运行时，供异步宿主函数（fetch/exec）使用。
     let tokio_rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -75,11 +73,10 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
 
     let body_cancel = cancel.clone();
     let file_name = file_name.to_string();
-    // Race the run against the cancel token. A script blocked inside a host
-    // function (`sleep`/`exec`) or waiting in `idle()` executes no JS, so the
-    // interrupt handler never fires — dropping the future is the only way out.
-    // `select!` drops the losing branch, tearing the runtime and every
-    // spawned timer task down with it.
+    // 让运行与取消令牌赛跑。脚本若卡在宿主函数里（`sleep`/`exec`）或在
+    // `idle()` 上等待，就不执行任何 JS，中断处理器永远不会触发——丢掉这个
+    // future 是唯一的出路。`select!` 会丢弃输的那一支，连带拆掉运行时和它
+    // 派生出的所有定时任务。
     tokio_rt.block_on(async move {
         tokio::select! {
             outcome = run_async(
@@ -92,7 +89,7 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
                 &interaction,
             ) => {
                 if cancel.is_cancelled() {
-                    // run_async suppressed its own error log while cancelled.
+                    // 被取消时 run_async 自己不打错误日志，这里统一报中止。
                     console.warn(format!("⏹ Aborted {file_name}"));
                 } else if let Err(e) = outcome {
                     console.error(e);
@@ -167,50 +164,47 @@ async fn run_async(
     cancel: &CancelToken,
     interaction: &InteractionBridge,
 ) -> Result<(), String> {
-    // 3. Create QuickJS runtime + install host loader/resolver.
+    // 3. 建 QuickJS 运行时，并装上宿主 loader / resolver。
     let rt = AsyncRuntime::new().map_err(|e| e.to_string())?;
     rt.set_max_stack_size(8 * 1024 * 1024).await;
-    // Preempt long-running JS (`while (true) {}`): QuickJS polls this handler
-    // periodically and aborts with an uncatchable exception when it returns
-    // true.
+    // 抢占长时间运行的 JS（`while (true) {}`）：QuickJS 会周期性轮询这个回调，
+    // 一旦它返回 true 就以一个无法被 catch 的异常中止执行。
     let interrupted = cancel.clone();
     rt.set_interrupt_handler(Some(Box::new(move || interrupted.is_cancelled())))
         .await;
     let loader = HostLoader::new(registry.clone(), scripts_dir);
     rt.set_loader(HostResolver, loader).await;
 
-    // 4. Create context.
+    // 4. 建上下文。
     let ctx = AsyncContext::full(&rt).await.map_err(|e| e.to_string())?;
 
-    // 5. Inside the context: install console + host module globals, then eval.
+    // 5. 在上下文里装 console 与宿主模块全局，然后求值。
     ctx.async_with(async |ctx| {
-        // console global
+        // console 全局
         if let Err(e) = bolt::install_console(&ctx, console) {
             console.error(format!("console install: {e}"));
         }
-        // timer globals (setTimeout / clearTimeout / setInterval / clearInterval)
+        // 定时器全局（setTimeout / clearTimeout / setInterval / clearInterval）
         if let Err(e) = bolt::install_timers(&ctx, console) {
             console.error(format!("timer install: {e}"));
         }
-        // host module globals
+        // 宿主模块全局
         if let Err(e) = registry.install_globals(&ctx) {
             console.error(format!("module install: {e}"));
         }
-        // Interaction APIs (typeStr / requestFocus / confirm / pickPath /
-        // scanQr) extend the `__bolt` object that the line above created,
-        // so they must be installed after it.
+        // 交互 API（typeStr / requestFocus / confirm / pickPath / scanQr）是在
+        // 上一步创建的 `__bolt` 对象上追加的，所以必须排在它之后。
         if let Err(e) = bolt::install_interaction(&ctx, interaction) {
             console.error(format!("interaction install: {e}"));
         }
 
-        // Evaluate as an ES module (resolves imports via the loader).
+        // 按 ES module 求值（import 由 loader 解析）。
         let result = Module::evaluate(ctx.clone(), file_name, js_code);
         match result {
             Ok(promise) => {
-                // Drive the module promise to completion.
+                // 把模块 promise 跑到结束。
                 if let Err(e) = promise.into_future::<()>().await.catch(&ctx) {
-                    // A cancelled run bails out with the interrupt exception;
-                    // the caller reports the abort instead.
+                    // 被取消的运行会以中断异常退出，由调用方报告中止即可。
                     if !cancel.is_cancelled() {
                         report_outcome(console, &e, file_name);
                     }
@@ -226,9 +220,8 @@ async fn run_async(
     })
     .await;
 
-    // 6. Drain remaining async jobs (fetch/exec Promises, setTimeout-like) —
-    // unless cancelled: a leftover `setInterval` or pending host call would
-    // otherwise keep `idle()` waiting forever.
+    // 6. 排干剩余的异步任务（fetch/exec 的 Promise、类 setTimeout）——被取消时
+    // 跳过：残留的 `setInterval` 或未决宿主调用会让 `idle()` 永远等下去。
     if !cancel.is_cancelled() {
         rt.idle().await;
     }
@@ -236,6 +229,7 @@ async fn run_async(
     Ok(())
 }
 
+/// 把捕获到的异常按类型打到 Console，是各处统一的上报方式。
 pub(crate) fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) {
     match err {
         rquickjs::CaughtError::Exception(ex) => {
@@ -250,9 +244,9 @@ pub(crate) fn log_caught(console: &ConsoleChannel, err: &rquickjs::CaughtError) 
     }
 }
 
-/// Report a failed evaluation. `bolt.exit(code)` unwinds by throwing the
-/// sentinel `__bolt_exit_<code>__`; that is a normal termination, not an
-/// error — report a clean finish with the code instead.
+/// 上报一次失败的求值。`bolt.exit(code)` 靠抛出一个哨兵异常
+/// `__bolt_exit_<code>__` 来退栈——那是正常终止而不是错误，应当报告成一次
+/// 干净的结束并带上退出码。
 fn report_outcome(console: &ConsoleChannel, err: &rquickjs::CaughtError, file_name: &str) {
     if let rquickjs::CaughtError::Exception(ex) = err
         && let Some(msg) = ex.message()
@@ -286,8 +280,7 @@ mod tests {
         (registry, ConsoleChannel::new())
     }
 
-    /// Bridge with no UI attached. Interaction APIs would fail through it, but
-    /// none of the tests below call them.
+    /// 没接 UI 的桥。经它调用交互 API 会失败，但下面这些测试都不碰。
     fn no_ui(cancel: &CancelToken) -> InteractionBridge {
         InteractionBridge::new(cancel.clone()).0
     }
@@ -389,8 +382,7 @@ mod tests {
             run_env(registry, &channel, &cancel),
         );
         let lines = drain(&channel);
-        // The callback must observe the full top-level execution first: the
-        // run only finishes after pending timers have fired.
+        // 回调必须先观察到完整的一遍顶层执行：待定定时器跑完之后整轮才算结束。
         let start = lines.iter().position(|l| l.contains("start")).unwrap();
         let end = lines.iter().position(|l| l.contains("end")).unwrap();
         let timeout = lines
@@ -464,7 +456,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(200));
             killer.cancel();
         });
-        // Without a working interrupt handler this never returns.
+        // 中断处理器要是失效，这里永远不会返回。
         run_script(
             "while (true) {}",
             Language::JavaScript,

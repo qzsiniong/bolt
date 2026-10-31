@@ -7,8 +7,7 @@ use super::state::JsonEditorState;
 use crate::app::shell::AppShell;
 use crate::ui::window::{WindowSpec, open_singleton};
 
-/// Open the native JSON editor window as a singleton — focus the existing
-/// handle if it's still alive, otherwise create a fresh one.
+/// 以单例方式打开原生 JSON 编辑器窗口——已有句柄还活着就激活它，否则新建。
 pub(crate) fn open_json_editor(cx: &mut App) {
     open_json_editor_with(cx, String::new())
 }

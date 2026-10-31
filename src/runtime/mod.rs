@@ -1,5 +1,5 @@
-//! The script execution pipeline: the QuickJS runner, the host-interaction
-//! bridge, the app-level run service, and the TypeScript type-stripping step.
+//! 脚本执行管线：QuickJS 运行器、宿主交互桥、应用级运行服务，
+//! 以及 TypeScript 类型擦除步骤。
 
 use std::path::Path;
 
@@ -14,8 +14,8 @@ pub(crate) mod run_service;
 pub(crate) mod runner;
 pub(crate) mod ts_transform;
 
-/// Read a script or extension entry from disk and hand it to the run service.
-/// Used by launcher items from both the scripts and extensions modules.
+/// 从磁盘读取脚本或扩展入口文件，再交给运行服务执行。
+/// 启动器里脚本模块和扩展模块的条目都走这里。
 pub(crate) fn run_path(cx: &mut App, path: &Path) {
     let console = cx.global::<AppShell>().console_channel.clone();
     let file_name = path

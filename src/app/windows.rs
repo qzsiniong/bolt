@@ -1,6 +1,6 @@
-//! Window lifecycle: the launcher palette, plus the dispatch of confirmed
-//! launcher item actions. Module windows (script manager, JSON editor, UI
-//! extensions) open themselves — see each module's `window`/`ui_window` file.
+//! 窗口生命周期：Launcher 面板，以及确认后的 Launcher 条目动作分发。
+//! 模块窗口（脚本管理、JSON 编辑器、UI 扩展）各自负责打开自己——
+//! 见各模块的 `window`/`ui_window` 文件。
 
 use crossbeam_channel::Receiver;
 use gpui_kit::{
@@ -10,29 +10,26 @@ use gpui_kit::{
 use super::launcher::{Launcher, LauncherAction};
 use super::shell::AppShell;
 
-/// Launcher window size.
+/// Launcher 窗口尺寸。
 const LAUNCHER_SIZE: (f32, f32) = (720., 480.);
 
-/// The display under the mouse cursor, so with multiple monitors the launcher
-/// opens on the screen the cursor is on. `None` when it cannot be determined;
-/// callers then fall back to the primary display.
+/// 鼠标光标所在的那块显示器，多显示器时 Launcher 就在光标所在屏幕打开。
+/// 无法确定时返回 `None`，由调用方回退到主显示器。
 #[cfg(target_os = "macos")]
 pub(crate) fn display_under_cursor() -> Option<DisplayId> {
     use core_graphics::display::{CGDirectDisplayID, CGDisplayBounds, CGGetActiveDisplayList};
     use core_graphics::event::CGEvent;
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-    // A freshly synthesized event reports the current cursor location in the
-    // global display coordinate space (origin: top-left of the primary
-    // display). Creating an event source needs no accessibility permission.
+    // 刚合成的事件能在全局显示器坐标空间（原点：主显示器左上角）里
+    // 报告当前光标位置；创建事件源不需要辅助功能权限。
     let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
     let point = CGEvent::new(source).ok()?.location();
 
-    // Same 32-display upper bound gpui's own platform code assumes.
+    // 与 gpui 自己的平台代码相同的 32 块显示器上限。
     let mut ids: Vec<CGDirectDisplayID> = Vec::with_capacity(32);
     let mut count = 0;
-    // SAFETY: the buffer has the capacity passed in; `count` says how many
-    // entries were written.
+    // SAFETY：缓冲区容量就是传入的值；`count` 表示实际写入了多少条。
     if unsafe { CGGetActiveDisplayList(ids.capacity() as u32, ids.as_mut_ptr(), &mut count) } != 0 {
         return None;
     }
@@ -40,7 +37,7 @@ pub(crate) fn display_under_cursor() -> Option<DisplayId> {
 
     ids.into_iter()
         .find(|&id| {
-            // SAFETY: FFI call with a valid active display id.
+            // SAFETY：传入有效活动显示器 id 的 FFI 调用。
             let frame = unsafe { CGDisplayBounds(id) };
             point.x >= frame.origin.x
                 && point.x < frame.origin.x + frame.size.width
@@ -85,8 +82,8 @@ fn activate_app() {
     // Linux/Windows 下 Floating 窗口的激活策略由平台层统一处理，不需要额外调用。
 }
 
-/// Alt+Space: close the launcher if it is open, open it otherwise. A stale
-/// handle means the window closed itself (Esc / blur / confirm) — reopen.
+/// Alt+Space：Launcher 已开则关闭，未开则打开。stale 的 handle 说明窗口
+/// 自己关掉了（Esc / 失焦 / 确认）——重新打开。
 pub(super) fn toggle_launcher(cx: &mut App) {
     let existing = cx.global_mut::<AppShell>().launcher.take();
     if let Some(handle) = existing
@@ -96,7 +93,7 @@ pub(super) fn toggle_launcher(cx: &mut App) {
     {
         return;
     }
-    // Stale handle: fall through and reopen.
+    // Stale 的 handle：继续往下走，重新打开。
 
     let requests = cx.global::<AppShell>().launcher_tx.clone();
     // Floating 窗口只有在应用已经激活时才会出现在前台；全局快捷键按下时
@@ -105,8 +102,7 @@ pub(super) fn toggle_launcher(cx: &mut App) {
     // NSWindowStyleMaskNonactivatingPanel + NSPopUpWindowLevel=101 才绕过了
     // 这个问题，代价是 IME 不工作）。
     activate_app();
-    // Center on the display under the cursor; falls back to the primary
-    // display when it can't be determined.
+    // 以光标所在显示器为中心；确定不了就回退主显示器。
     let display_id = display_under_cursor();
     let window_size = size(px(LAUNCHER_SIZE.0), px(LAUNCHER_SIZE.1));
     let options = WindowOptions {
@@ -137,12 +133,11 @@ pub(super) fn toggle_launcher(cx: &mut App) {
     }
 }
 
-/// Execute confirmed launcher item actions from the app tick.
+/// 在 app tick 里执行确认后的 Launcher 条目动作。
 ///
-/// Dispatch happens here rather than in the launcher's own confirm callback:
-/// that callback runs while the launcher window is being torn down, so the
-/// item's action (an `Arc` closure that owns everything it needs) travels
-/// through this channel to outlive the launcher entity.
+/// 分发放在这里而不是 Launcher 自己的确认回调里：那个回调运行时 Launcher
+/// 窗口正在销毁，条目的动作（一个自持所有依赖的 `Arc` 闭包）经这个
+/// channel 传出，以活得比 Launcher entity 更久。
 pub(super) fn drain_launcher_requests(rx: &Receiver<LauncherAction>, cx: &mut App) {
     while let Ok(action) = rx.try_recv() {
         action(cx);

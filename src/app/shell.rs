@@ -1,4 +1,4 @@
-//! App-lifetime state shared across windows and content modules.
+//! App 生命周期内跨窗口、跨内容模块共享的状态。
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -12,38 +12,35 @@ use super::launcher::{LauncherAction, Module};
 use crate::console_channel::ConsoleChannel;
 use crate::runtime::run_service::RunService;
 
-/// How often the global hotkey channel and launcher requests are polled.
+/// 全局快捷键 channel 与 Launcher 请求的轮询频率。
 pub(crate) const APP_TICK: Duration = Duration::from_millis(100);
 
-/// App-lifetime state: the launcher window/channel, the registered content
-/// modules, and the shared services (run service, console, LSP) that modules
-/// reach for in their item actions. Window singletons live in each module's
-/// own Global state, not here.
+/// App 生命周期状态：Launcher 窗口/channel、已注册的内容模块，以及模块在
+/// 条目动作里要用的共享服务（run service、console、LSP）。各窗口的单例
+/// 状态放在各自模块的 Global 里，不在这里。
 pub(crate) struct AppShell {
-    /// The launcher window, while it is open. A stale handle means the window
-    /// closed itself (Esc / blur / confirm).
+    /// Launcher 窗口（开着的时候）。stale 的 handle 说明窗口自己关掉了
+    /// （Esc / 失焦 / 确认）。
     pub(crate) launcher: Option<AnyWindowHandle>,
     /// 取色浮窗组：每块显示器一个。再触发取色时整组先关再开。
     pub(crate) color_picker: Vec<AnyWindowHandle>,
     /// 通知卡片窗口堆叠（index 0 贴屏幕底边距上方，越往后越靠下）；关闭时
     /// 其下方的窗口上移补位。见 ui/notify_window.rs。
     pub(crate) notify_windows: Vec<AnyWindowHandle>,
-    /// Sender handed to each launcher, which pushes the confirmed item's
-    /// action here; the app tick drains and executes it.
+    /// 交给每个 Launcher 的发送端：确认条目后把它的动作推进这里，app tick
+    /// 排空并执行。
     pub(crate) launcher_tx: Sender<LauncherAction>,
-    /// The registered content modules, re-queried for items on every
-    /// launcher open.
+    /// 已注册的内容模块，每次打开 Launcher 时重新收集 items。
     pub(crate) modules: Vec<Box<dyn Module>>,
-    /// Bumped when modules' item set changes while a launcher is open (e.g.
-    /// app icons finished generating). The launcher re-collects items on its
-    /// next paint instead of waiting for the next open.
+    /// Launcher 开着的时候模块的 item 集合变了（例如应用图标刚生成完）就
+    /// 自增。Launcher 在下一次绘制重新收集 items，而不是等下次打开。
     pub(crate) items_revision: Cell<u64>,
     pub(crate) run_service: Entity<RunService>,
     /// 输出写入端。读者从 [`ConsoleChannel::history`] 取共享缓冲（脚本管理器
     /// 的 Console 面板、独立 Console 窗口各持一个游标）。
     pub(crate) console_channel: ConsoleChannel,
     pub(crate) lsp: Result<Arc<crate::lsp::LspClient>, String>,
-    /// Kept alive for the app lifetime; dropping unregisters the hotkey.
+    /// 整个应用生命周期持有；drop 即注销快捷键。
     pub(crate) _hotkey_manager: Option<GlobalHotKeyManager>,
     pub(crate) _app_tick: Task<()>,
 }

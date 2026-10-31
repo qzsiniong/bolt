@@ -1,8 +1,7 @@
-//! TypeScript → JavaScript type stripping.
+//! TypeScript → JavaScript 的类型擦除。
 //!
-//! Uses swc to parse TypeScript, strip type annotations, and emit JavaScript.
-//! `import` statements are preserved so rquickjs's module loader can resolve
-//! them at runtime. No ES version downleveling is performed.
+//! 用 swc 解析 TypeScript、去掉类型标注、再输出 JavaScript。`import` 语句原样
+//! 保留，交给 rquickjs 的模块 loader 在运行时解析。不做 ES 版本降级。
 
 use swc_common::{FileName, GLOBALS, Globals, Mark, SourceMap, sync::Lrc};
 use swc_ecma_ast::{EsVersion, Program};
@@ -11,8 +10,8 @@ use swc_ecma_parser::{Syntax, TsSyntax, parse_file_as_program};
 use swc_ecma_transforms_base::{fixer::fixer, resolver};
 use swc_ecma_transforms_typescript::strip;
 
-/// Strip TypeScript type annotations from `ts_source`, returning valid JS
-/// source with `import`/`export` statements intact.
+/// 把 `ts_source` 里的 TypeScript 类型标注剥掉，返回保留 `import`/`export`
+/// 的合法 JS 源码。
 pub fn strip_typescript(ts_source: &str) -> Result<String, String> {
     let cm: Lrc<SourceMap> = Default::default();
     let fm = cm.new_source_file(
@@ -30,11 +29,15 @@ pub fn strip_typescript(ts_source: &str) -> Result<String, String> {
     )
     .map_err(|e| format!("TS parse error: {e:?}"))?;
 
+    // 连「可恢复」的语法错误也当失败：带着错擦出来的代码跑不起来，不如原样
+    // 报给用户。
     if !recovered.is_empty() {
         let msgs: Vec<String> = recovered.iter().map(|e| format!("{e:?}")).collect();
         return Err(format!("TS parse errors:\n{}", msgs.join("\n")));
     }
 
+    // swc 的变换需要 `Globals` 上下文：resolver 先给标识符打标记，strip 才能
+    // 正确删掉类型引用，最后 fixer 收拾残留的括号/分号。
     let output = GLOBALS.set(&Globals::default(), || {
         let unresolved = Mark::new();
         let top_level = Mark::new();

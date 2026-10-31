@@ -1,5 +1,4 @@
-//! Raycast-style launcher: a floating command palette, toggled by a global
-//! hotkey.
+//! Raycast 风格的启动器：一个浮动命令面板，由全局快捷键唤起/关闭。
 //!
 //! Launcher 是应用的中心 UI，但它对「有哪些模块」一无所知：每次打开时从
 //! [`super::shell::AppShell::modules`] 逐个收集 [`LauncherItem`]，平铺渲染；
@@ -58,7 +57,7 @@ use panel::{ActionsPanel, render_overlay};
 
 gpui_kit::actions!(bolt_launcher, [ToggleActions]);
 
-/// Poll interval for the auto-close-on-blur check.
+/// 失焦自动关窗检查的轮询间隔。
 const BLUR_TICK: Duration = Duration::from_millis(100);
 
 /// 输入框的「有效查询」：剥掉类型 token 的占位文本，剩用户手输的部分。
@@ -67,6 +66,7 @@ fn effective_query(input: &InputState) -> String {
     strip_token_text(input.value().as_ref(), input.tokens())
 }
 
+/// Launcher 主面板：搜索框 + 自绘命令列表 + Cmd+K 动作面板。
 pub struct Launcher {
     /// 主搜索框（宿主自有）：Cmd+V 识别、token 渲染、Change 订阅都挂它。
     input: Entity<InputState>,
@@ -94,15 +94,16 @@ pub struct Launcher {
     /// 列表过滤为声明能处理该类型的 items，回车把内容交给选中 item 的
     /// paste handler。与 on_paste hook 闭包共享（Rc+RefCell）。
     paste: Rc<RefCell<Option<PendingPaste>>>,
-    /// Drained by the app shell, which executes the confirmed action.
+    /// 由 app shell 排空并执行确认后的动作。
     requests: Sender<LauncherAction>,
     /// Cmd+K 动作面板；None = 关闭。
     panel: Option<ActionsPanel>,
-    /// Auto-close-on-blur poll; ends when the view is dropped.
+    /// 失焦自动关窗的轮询任务；视图 drop 时结束。
     _blur_task: Task<()>,
 }
 
 impl Launcher {
+    /// 创建 Launcher：收集全部模块 items、聚焦搜索框并启动失焦自动关窗轮询。
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -117,15 +118,14 @@ impl Launcher {
             }
         })
         .detach();
-        // Start with the caret in the search field.
+        // 让光标一开始就落在搜索框里。
         let focus = input.read(cx).focus_handle(cx);
         focus.focus(window, cx);
 
         cx.bind_keys([KeyBinding::new("cmd-k", ToggleActions, None)]);
 
-        // Re-collect on every open: scripts and extensions may have changed
-        // since the last time the launcher was up. Each module reports its
-        // own load errors to the console.
+        // 每次打开都重新收集：脚本和扩展自上次唤起后可能变了。各模块的
+        // 加载错误自己报到 console。
         let CollectedItems {
             items,
             revision: items_revision,
@@ -134,9 +134,8 @@ impl Launcher {
 
         let window_handle = window.window_handle();
 
-        // Raycast behavior: once the window has been active, losing activation
-        // closes it. Arming only after the first activation avoids closing
-        // during the initial focus hand-off.
+        // Raycast 行为：窗口一旦激活过，失去激活就关窗。首次激活之后才
+        // 启用（arm），避免初始焦点交接期间被误关。
         let blur_task = cx.spawn(async move |this, cx| {
             let mut was_active = false;
             loop {
@@ -232,7 +231,7 @@ impl Launcher {
             window.remove_window();
             return;
         }
-        // If the receiver is gone the app is shutting down: nothing left to do.
+        // 接收端已不在说明应用正在退出：无事可做。
         let _ = self.requests.send(item.on_confirm.clone());
         window.remove_window();
     }

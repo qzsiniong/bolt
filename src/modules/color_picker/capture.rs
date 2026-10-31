@@ -93,8 +93,7 @@ fn matching_display_id(mx: i32, my: i32, w: u32, h: u32) -> Option<DisplayId> {
     // 32 个的上限与 gpui 平台层代码的假设一致。
     let mut ids: Vec<CGDirectDisplayID> = Vec::with_capacity(32);
     let mut count = 0;
-    // SAFETY: the buffer has the capacity passed in; `count` says how many
-    // entries were written.
+    // SAFETY: 缓冲区容量即上面传入的 capacity；`count` 是实际写入的条数。
     if unsafe { CGGetActiveDisplayList(ids.capacity() as u32, ids.as_mut_ptr(), &mut count) } != 0 {
         return None;
     }
@@ -102,7 +101,7 @@ fn matching_display_id(mx: i32, my: i32, w: u32, h: u32) -> Option<DisplayId> {
 
     ids.into_iter()
         .find(|&id| {
-            // SAFETY: FFI call with a valid active display id.
+            // SAFETY: FFI 调用，传入的是有效的活动显示器 id。
             let frame = unsafe { CGDisplayBounds(id) };
             frame.origin.x as i32 == mx
                 && frame.origin.y as i32 == my

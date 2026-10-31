@@ -1,6 +1,5 @@
-//! Document lifecycle for the editor panel: loading a script from disk, saving
-//! it back, running it, and mirroring server-pushed LSP diagnostics into the
-//! editor.
+//! 编辑器面板的文档生命周期：从磁盘加载脚本、保存回磁盘、运行，以及把
+//! 语言服务推送的诊断镜像进编辑器。
 
 use std::time::Duration;
 
@@ -15,7 +14,7 @@ use crate::model::script::Script;
 use crate::model::script_store;
 
 impl EditorPanel {
-    /// Push the current editor content to the language server (full sync).
+    /// 把当前编辑器内容整段推给语言服务（全量同步）。
     pub(super) fn sync_did_change(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.lsp.as_ref() else {
             return;
@@ -29,8 +28,8 @@ impl EditorPanel {
         client.did_change(&handle.uri, handle.version, &text);
     }
 
-    /// Poll server-pushed diagnostics and mirror them into the editor's
-    /// diagnostic set (squiggly lines) for the currently open document.
+    /// 轮询语言服务推送的诊断，镜像进编辑器当前打开文档的诊断集
+    /// （波浪线标记）。
     pub(super) async fn diagnostics_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
         loop {
             cx.background_executor()
@@ -50,8 +49,7 @@ impl EditorPanel {
                         panel.editor.update(cx, |state, ecx| {
                             let rope = state.text().clone();
                             if let Some(set) = state.diagnostics_mut() {
-                                // reset syncs the internal rope AND clears
-                                // stale diagnostics before pushing fresh ones.
+                                // `reset` 会同步内部 rope，并在推入新诊断前先清掉过期诊断。
                                 set.reset(&rope);
                                 for diagnostic in published.diagnostics {
                                     set.push(diagnostic);
@@ -76,9 +74,8 @@ impl EditorPanel {
         self.current_script.as_ref()
     }
 
-    /// Track whether a script started here is executing. Driven by the host
-    /// (Workspace) when a run starts and completes, so the toolbar can switch
-    /// between Run and Stop.
+    /// 记录从这里启动的脚本是否正在执行。由宿主（Workspace）在运行开始与
+    /// 结束时驱动，工具栏据此在「运行 / 停止」之间切换。
     pub fn set_running(&mut self, running: bool, cx: &mut Context<Self>) {
         if self.running != running {
             self.running = running;
@@ -86,31 +83,30 @@ impl EditorPanel {
         }
     }
 
-    /// Whether the editor content differs from the script saved on disk.
+    /// 编辑器内容是否与磁盘上已保存的脚本不同。
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
 
-    /// Queue a script to be loaded on the next render (render has access to
-    /// the window, which `set_value` requires — subscribe callbacks do not).
+    /// 把脚本排进队列，等下一次渲染时加载（渲染才有 window 可用，
+    /// `set_value` 需要它——subscribe 回调拿不到）。
     pub fn queue_load(&mut self, script: Script, cx: &mut Context<Self>) {
         self.pending_load = Some(script);
         cx.notify();
     }
 
-    /// Load a script's content into the editor and switch the highlighter.
+    /// 把脚本内容载入编辑器并切换语法高亮。
     ///
-    /// Unsaved edits are intentionally *not* auto-saved here: switching away
-    /// discards them, which is what the "unsaved changes will be lost"
-    /// confirmation warns about.
+    /// 未保存的编辑**不会**在这里自动保存：切走即丢弃——「未保存的修改
+    /// 将会丢失」确认框警告的就是这件事。
     pub(super) fn load_script(
         &mut self,
         script: &Script,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // The list panel holds a stale snapshot, so always re-read from disk
-        // to pick up content saved since the list was built.
+        // 列表面板持有的是过期快照，所以总是从磁盘重读，拿列表构建之后
+        // 保存过的最新内容。
         let script = match script_store::read_script(&self.scripts_dir, &script.file_name) {
             Ok(fresh) => fresh,
             Err(_) => script.clone(),
@@ -118,7 +114,7 @@ impl EditorPanel {
         self.current_script = Some(script.clone());
         self.dirty = false;
 
-        // Sync the LSP document: close the old one, open the new one.
+        // 同步 LSP 文档：关旧的，开新的。
         let language_id = script.language.as_str();
         let uri = path_to_uri(&script.path);
         if let Some(client) = self.lsp.as_ref() {
@@ -135,8 +131,8 @@ impl EditorPanel {
         self.editor.update(cx, |state, cx| {
             state.set_value(content.as_str(), window, cx);
             state.set_highlighter(lang.as_str(), cx);
-            // The set's internal rope must match the new text for
-            // position -> offset mapping of incoming diagnostics.
+            // 诊断集的内部 rope 必须与新文本一致，后续诊断做
+            // position -> offset 映射才正确。
             let rope = state.text().clone();
             if let Some(set) = state.diagnostics_mut() {
                 set.reset(&rope);
@@ -145,14 +141,14 @@ impl EditorPanel {
         cx.notify();
     }
 
-    /// Run the currently loaded script (toolbar button / Cmd+Enter).
+    /// 运行当前加载的脚本（工具栏按钮 / Cmd+Enter）。
     pub fn run_current(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.running || self.current_script.is_none() {
             return;
         }
         if self.dirty {
-            // Unsaved edits: ask whether to save first. "No" runs the last
-            // saved version instead of the text currently in the editor.
+            // 有未保存的编辑：先问要不要保存。「否」直接运行磁盘上
+            // 最后保存的版本，而不是编辑器里的当前文本。
             let editor = cx.entity();
             window.open_alert_dialog(cx, move |alert, _, _| {
                 alert
@@ -186,7 +182,7 @@ impl EditorPanel {
         self.emit_run_edited(cx);
     }
 
-    /// Ask the host to run the text currently in the editor.
+    /// 请宿主运行编辑器当前文本。
     fn emit_run_edited(&mut self, cx: &mut Context<Self>) {
         let Some(script) = self.current_script.clone() else {
             return;
@@ -199,7 +195,7 @@ impl EditorPanel {
         });
     }
 
-    /// Ask the host to run the last version saved to disk, ignoring edits.
+    /// 请宿主运行磁盘上最后保存的版本，忽略未保存的编辑。
     fn emit_run_saved(&mut self, cx: &mut Context<Self>) {
         let Some(script) = self.current_script.clone() else {
             return;
@@ -211,7 +207,7 @@ impl EditorPanel {
         });
     }
 
-    /// Save the current script (toolbar button / Cmd+S).
+    /// 保存当前脚本（工具栏按钮 / Cmd+S）。
     pub fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if !self.dirty || self.current_script.is_none() {
             return;
@@ -220,7 +216,7 @@ impl EditorPanel {
         cx.notify();
     }
 
-    /// Write the editor content back to the script's file on disk.
+    /// 把编辑器内容写回脚本的磁盘文件。
     fn persist_current(&mut self, cx: &mut Context<Self>) {
         if !self.dirty {
             return;
@@ -234,7 +230,7 @@ impl EditorPanel {
             console.error(format!("保存脚本失败：{e}"));
             return;
         }
-        // Reflect the saved content back into the cached Script.
+        // 把已保存的内容同步回缓存的 Script。
         if let Some(s) = self.current_script.as_mut() {
             s.content = content;
         }

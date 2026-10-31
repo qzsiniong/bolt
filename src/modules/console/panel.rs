@@ -23,7 +23,7 @@ use gpui_kit::{
 use crate::console_channel::{ConsoleEntry, ConsoleLevel, ConsoleLog};
 use crate::ui::window::{WindowPin, WindowTitleBar};
 
-/// Maximum lines retained in the view; older entries are dropped.
+/// 视图里最多保留的行数；更旧的条目被丢弃。
 const MAX_ENTRIES: usize = 1000;
 
 /// 这个视图是被 dock 嵌着，还是自己占一个窗口。
@@ -33,6 +33,7 @@ pub(crate) enum Chrome {
     Windowed,
 }
 
+/// Console 面板：只读编辑器渲染输出，底部工具栏带等级筛选与清空。
 pub(crate) struct ConsolePanel {
     focus_handle: FocusHandle,
     log: ConsoleLog,
@@ -41,12 +42,11 @@ pub(crate) struct ConsolePanel {
     entries: Vec<ConsoleEntry>,
     editor: Entity<EditorState>,
     decorations: TextDecorationCollection,
-    /// Cached last rendered text to skip redundant set_value calls.
+    /// 缓存上次渲染的文本，跳过多余的 set_value 调用。
     last_text: String,
-    /// Whether the viewport follows new output. Cleared when the user scrolls
-    /// away from the bottom, restored when the bottom comes back into view.
+    /// 视口是否跟随新输出。用户滚离底部时清除，滚回底部时恢复。
     follow: bool,
-    /// `None` shows every level; `Some(level)` shows only that level.
+    /// `None` 显示全部等级；`Some(level)` 只显示该等级。
     filter: Option<ConsoleLevel>,
     filter_menu_open: bool,
     chrome: Chrome,
@@ -122,8 +122,7 @@ impl ConsolePanel {
         true
     }
 
-    /// Background loop: poll the shared buffer a few times a second and trigger
-    /// a re-render whenever new lines arrive. Exits when the view is dropped.
+    /// 后台循环：每秒数次轮询共享缓冲，有新行就触发重绘。视图 drop 时退出。
     async fn drain_loop(this: WeakEntity<Self>, cx: &mut AsyncApp) {
         loop {
             cx.background_executor()
@@ -164,7 +163,7 @@ impl ConsolePanel {
     }
 }
 
-/// Format an epoch-millis timestamp as local `HH:MM:SS`.
+/// 把 epoch 毫秒时间戳格式化为本地 `HH:MM:SS`。
 fn format_time(timestamp: i64) -> String {
     let secs = timestamp / 1000;
     let local = (secs.rem_euclid(86_400) + local_utc_offset_secs()).rem_euclid(86_400);
@@ -176,8 +175,8 @@ fn format_time(timestamp: i64) -> String {
     )
 }
 
-/// Local UTC offset in seconds, resolved once via `date +%z` (std has no
-/// timezone API). Falls back to 0 (UTC) when unavailable.
+/// 本地 UTC 偏移（秒），经 `date +%z` 一次性解析（std 没有时区 API）。
+/// 拿不到时回退 0（UTC）。
 fn local_utc_offset_secs() -> i64 {
     use std::sync::OnceLock;
     static OFFSET: OnceLock<i64> = OnceLock::new();
@@ -237,8 +236,8 @@ impl Focusable for ConsolePanel {
 
 impl Render for ConsolePanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Drain anything that arrived since the last poll too, so typing in
-        // the editor immediately surfaces pending output without waiting.
+        // 把上次轮询之后到达的输出也排空，这样编辑器里随便一动，积压的
+        // 输出立即出现，不用等下一轮轮询。
         self.poll();
 
         let theme = cx.theme();
@@ -246,7 +245,7 @@ impl Render for ConsolePanel {
         let muted_fg = theme.muted_foreground;
         let accent = theme.accent;
 
-        // Level filter dropdown trigger + popup.
+        // 等级筛选下拉的触发按钮 + 弹层。
         let filter_label = self.filter.map(ConsoleLevel::label).unwrap_or("全部等级");
         let mut filter_menu = div().flex().flex_col().py_1();
         let options: Vec<(Option<ConsoleLevel>, &str)> = std::iter::once((None, "全部等级"))
@@ -334,9 +333,9 @@ impl Render for ConsolePanel {
                     ),
             );
 
-        // Build the full text and a color decoration for each entry's byte
-        // range. A single readonly Editor gives native selection/copy, while
-        // TextDecoration keeps the per-level color coding.
+        // 拼出完整文本，并给每个条目的字节范围配一条颜色 decoration。
+        // 单个只读 Editor 就能获得原生的选择/复制，TextDecoration 负责按
+        // 等级着色。
         let filtered: Vec<&ConsoleEntry> = self
             .entries
             .iter()
@@ -364,18 +363,16 @@ impl Render for ConsolePanel {
                 },
             ));
         }
-        // Strip the trailing newline so copied text ends cleanly.
+        // 去掉末尾换行，复制出去的文本干净收尾。
         if full_text.ends_with('\n') {
             full_text.pop();
         }
 
         if full_text != self.last_text {
-            // `self.last_text` still matches what the editor holds, so its line
-            // count (counted the way the rope counts lines, where a trailing
-            // newline opens a new, empty line) can be compared against the
-            // viewport of the last painted frame: the view follows output only
-            // while that frame was at the bottom, which also resumes following
-            // when the user scrolls back down.
+            // `self.last_text` 仍与编辑器当前内容一致，所以它的行数（按
+            // rope 的行数口径——末尾换行会开出一个新的空行）可以和上一帧
+            // 绘制时的视口比较：只有上一帧停在底部时才跟随输出，同时这也
+            // 让用户滚回底部时恢复跟随。
             let total_lines = if self.last_text.is_empty() {
                 0
             } else {
@@ -383,7 +380,7 @@ impl Render for ConsolePanel {
             };
             self.follow = match self.editor.read(cx).visible_row_range() {
                 Some(range) => range.end >= total_lines,
-                // No layout yet: nothing has been scrolled away from.
+                // 还没有布局：说明还没有被滚离过。
                 None => true,
             };
 
@@ -393,14 +390,13 @@ impl Render for ConsolePanel {
             self.editor.update(cx, |s, cx| {
                 let previous_offset = s.scroll_offset();
                 s.set_value(&full_text, window, cx);
-                // Place the cursor at the end so the editor scrolls to the
-                // newest output. set_selected_range does not steal focus.
+                // 把光标放到末尾，编辑器随之滚到最新输出。set_selected_range
+                // 不会抢焦点。
                 s.set_selected_range(text_len..text_len, cx);
                 if !follow {
-                    // The user is reading older output: set_value resets the
-                    // scroll to the top and the caret-follow above scrolls to
-                    // the end, so the deferred offset is what puts the viewport
-                    // back where the user left it.
+                    // 用户在看旧输出：set_value 会把滚动重置到顶部，上面光标
+                    // 跟随又会滚到末尾，所以用先前记录的偏移把视口放回用户
+                    // 离开的位置。
                     s.set_scroll_offset(previous_offset, cx);
                 }
             });

@@ -1,5 +1,5 @@
-//! Language-server process management: binary discovery, the stdin writer and
-//! stdout reader threads, and inbound message dispatch.
+//! 语言服务器进程管理：可执行文件查找、stdin 写线程与 stdout 读线程，
+//! 以及入站消息分发。
 
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Write};
@@ -16,13 +16,12 @@ use serde_json::{Value, json};
 use super::client::Inner;
 use super::protocol::PublishedDiagnostics;
 
-/// Spawn `typescript-language-server --stdio` rooted at `scripts_dir` and start
-/// the reader/writer threads around it.
+/// 以 `scripts_dir` 为根启动 `typescript-language-server --stdio`，并在它周围
+/// 起读/写线程。
 ///
-/// Returns the shared state, the diagnostics channel, and the resolved server
-/// binary path (the caller uses it to locate the matching TypeScript package).
-/// `Err` carries the reason when the binary is missing or the process cannot be
-/// started — callers degrade gracefully to a syntax-highlighting-only editor.
+/// 返回共享状态、诊断通道，以及解析出的服务器可执行文件路径（调用方用它找到
+/// 配套的 TypeScript 包）。可执行文件缺失或进程起不来时 `Err` 带原因——调用方
+/// 会优雅降级成只有语法高亮的编辑器。
 pub(super) fn spawn_process(
     scripts_dir: &Path,
 ) -> Result<(Arc<Inner>, Receiver<PublishedDiagnostics>, PathBuf), String> {
@@ -34,10 +33,9 @@ pub(super) fn spawn_process(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    // The server script's shebang (`#!/usr/bin/env node`) needs `node` on
-    // PATH. When the app is launched from Finder the inherited PATH is
-    // minimal, so prepend the directory the server was found in (fnm/nvm
-    // version bin dirs contain `node` as well).
+    // 服务器脚本的 shebang 是 `#!/usr/bin/env node`，需要 PATH 里有 `node`。
+    // 从 Finder 启动时继承来的 PATH 很短，所以把找到服务器的那个目录前置进去
+    // （fnm/nvm 的版本 bin 目录里同样有 `node`）。
     if let Some(bin_dir) = server.parent() {
         let inherited = std::env::var("PATH").unwrap_or_default();
         command.env("PATH", format!("{}:{inherited}", bin_dir.display()));
@@ -67,7 +65,7 @@ pub(super) fn spawn_process(
         child: Mutex::new(Some(child)),
     });
 
-    // Writer thread: serialize framed messages into the server's stdin.
+    // 写线程：把已分帧的消息按序写进服务器的 stdin。
     std::thread::spawn(move || {
         let mut stdin = stdin;
         for frame in writer_rx.iter() {
@@ -80,13 +78,13 @@ pub(super) fn spawn_process(
         }
     });
 
-    // Reader thread: parse frames, dispatch responses/notifications.
+    // 读线程：拆帧，分发响应与通知。
     let reader_inner = inner.clone();
     let reply_tx = inner.writer_tx.clone();
     std::thread::spawn(move || {
         let mut reader = std::io::BufReader::new(stdout);
         loop {
-            // Read headers until the blank line.
+            // 一直读头部，直到空行为止。
             let mut content_length: Option<usize> = None;
             let mut line = String::new();
             loop {
@@ -125,10 +123,9 @@ fn mark_dead(inner: &Inner) {
     inner.alive.store(false, Ordering::SeqCst);
 }
 
-/// Locate the `typescript-language-server` binary. GUI launches inherit a
-/// minimal PATH (`/usr/bin:/bin`…), so besides the current PATH also probe
-/// the well-known locations of version managers (fnm, nvm, volta) and
-/// global npm prefixes.
+/// 找出 `typescript-language-server` 可执行文件。GUI 启动的进程继承的 PATH 很
+/// 短（`/usr/bin:/bin`…），所以除当前 PATH 外还要探版本管理器（fnm、nvm、
+/// volta）与 npm 全局前缀的常见位置。
 fn find_server_binary() -> Result<PathBuf, String> {
     const NAME: &str = "typescript-language-server";
     let mut dirs: Vec<PathBuf> = Vec::new();
@@ -141,14 +138,14 @@ fn find_server_binary() -> Result<PathBuf, String> {
     if let Some(home) = dirs::home_dir() {
         dirs.push(home.join(".npm-global/bin"));
         dirs.push(home.join(".volta/bin"));
-        // fnm: ~/.local/share/fnm/node-versions/<ver>/installation/bin
+        // fnm 的版本目录：~/.local/share/fnm/node-versions/<ver>/installation/bin
         let fnm_dir = std::env::var_os("FNM_DIR")
             .map(PathBuf::from)
             .or_else(|| Some(home.join(".local/share/fnm")));
         if let Some(fnm) = fnm_dir {
             push_version_bins(&fnm.join("node-versions"), "installation/bin", &mut dirs);
         }
-        // nvm: ~/.nvm/versions/node/<ver>/bin
+        // nvm 的版本目录：~/.nvm/versions/node/<ver>/bin
         push_version_bins(&home.join(".nvm/versions/node"), "bin", &mut dirs);
     }
 
@@ -161,7 +158,7 @@ fn find_server_binary() -> Result<PathBuf, String> {
         })
 }
 
-/// Add `<root>/<version>/<suffix>` for every version directory under `root`.
+/// 为 `root` 下每个版本目录补一个 `<root>/<version>/<suffix>`。
 fn push_version_bins(root: &Path, suffix: &str, dirs: &mut Vec<PathBuf>) {
     if let Ok(entries) = std::fs::read_dir(root) {
         for entry in entries.flatten() {
@@ -170,12 +167,12 @@ fn push_version_bins(root: &Path, suffix: &str, dirs: &mut Vec<PathBuf>) {
     }
 }
 
-/// Classify an inbound server message: response to our request, a server
-/// request (answered with a null result), or a notification.
+/// 给入站消息分类：对我们请求的响应、服务器发起的请求（回一个 null 结果），
+/// 或者是通知。
 fn dispatch(msg: Value, inner: &Inner, reply_tx: &Sender<String>) {
     let id = msg.get("id").and_then(Value::as_i64);
 
-    // Response to one of our requests.
+    // 我们某条请求的响应。
     if let Some(id) = id
         && msg.get("method").is_none()
     {
@@ -192,9 +189,8 @@ fn dispatch(msg: Value, inner: &Inner, reply_tx: &Sender<String>) {
     }
 
     match msg.get("method").and_then(Value::as_str) {
-        // Server-initiated request: reply with an empty result so the server
-        // is never left waiting (tsserver occasionally asks for
-        // configuration / capability registration).
+        // 服务器发起的请求：回一个空结果，别让它一直等着（tsserver 偶尔会来
+        // 问配置或能力注册）。
         Some(_) if id.is_some() => {
             let reply = json!({"jsonrpc": "2.0", "id": id, "result": null});
             let _ = reply_tx.send(format!(

@@ -1,7 +1,12 @@
+//! 脚本目录的读写：列出、读取、新建、删除、保存脚本文件。
+//!
+//! 这里只做「一个目录 ↔ 一组 [`Script`]」的文件操作，不持有状态。写操作失败一律
+//! 返回可读的错误字符串交给 UI 展示；列表读不到目录时退化成空表，不算错误。
+
 use super::script::{Language, Script};
 use std::path::{Path, PathBuf};
 
-/// Returns the scripts directory: `~/Library/Application Support/bolt/scripts/`.
+/// 脚本目录：`~/Library/Application Support/bolt/scripts/`。
 pub fn scripts_dir() -> PathBuf {
     let mut path = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
     path.push("bolt");
@@ -9,10 +14,12 @@ pub fn scripts_dir() -> PathBuf {
     path
 }
 
+/// 确保脚本目录存在（首次启动或目录被删后都走这里）。
 pub fn ensure_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create scripts dir: {e}"))
 }
 
+/// 列出目录下所有可识别的脚本，按名字排序。目录读不了时返回空表。
 pub fn list_scripts(dir: &Path) -> Vec<Script> {
     let mut scripts = Vec::new();
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -34,11 +41,16 @@ pub fn list_scripts(dir: &Path) -> Vec<Script> {
     scripts
 }
 
+/// 读一个脚本文件；文件不存在或读失败时报错。
 pub fn read_script(dir: &Path, file_name: &str) -> Result<Script, String> {
     let path = dir.join(file_name);
     Script::read(&path)
 }
 
+/// 按名字和语言新建脚本，写入一段起始模板。
+///
+/// 名字只允许字母数字（Unicode 语义，中文也算）、`_` 和 `-`——它直接拼成文件名，
+/// 放宽就等于允许路径穿越。
 pub fn create_script(dir: &Path, name: &str, language: Language) -> Result<Script, String> {
     if !name.is_empty()
         && name
@@ -64,6 +76,7 @@ pub fn create_script(dir: &Path, name: &str, language: Language) -> Result<Scrip
     Script::read(&path)
 }
 
+/// 删除脚本文件；文件本来就不在时报错，方便 UI 区分「删掉了」和「早没了」。
 pub fn delete_script(dir: &Path, file_name: &str) -> Result<(), String> {
     let path = dir.join(file_name);
     if !path.exists() {
@@ -72,6 +85,7 @@ pub fn delete_script(dir: &Path, file_name: &str) -> Result<(), String> {
     std::fs::remove_file(&path).map_err(|e| e.to_string())
 }
 
+/// 覆盖写入脚本内容。`file_name` 不做校验（调用方保证），也不建父目录。
 pub fn save_script(dir: &Path, file_name: &str, content: &str) -> Result<(), String> {
     let path = dir.join(file_name);
     std::fs::write(&path, content).map_err(|e| e.to_string())

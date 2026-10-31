@@ -1,5 +1,5 @@
-//! The scripts module: the script manager window (dock with script list,
-//! editor and console) plus one launcher item per script on disk.
+//! 脚本模块：脚本管理窗口（dock 布局，含脚本列表、编辑器与控制台），
+//! 磁盘上每个脚本对应一个 launcher item。
 
 pub(crate) mod panels;
 pub(crate) mod state;

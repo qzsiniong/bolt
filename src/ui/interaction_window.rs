@@ -1,9 +1,9 @@
-//! Always-on-top window that hosts the interaction UI for a running script.
+//! 常驻置顶窗口，承载运行中脚本的交互 UI。
 //!
-//! It renders one of three things: a standby notice (`requestFocus`), a yes/no
-//! question (`confirm`) or a progress bar (`typeStr` / `scanQr`). It is a pure
-//! view: buttons only emit [`InteractionEvent`], and the workspace owns the
-//! reply channels, so "answered" is tracked in exactly one place.
+//! 它只渲染三种东西之一：等待提示（`requestFocus`）、是/否确认（`confirm`）
+//! 或进度条（`typeStr` / `scanQr`）。它是一个纯视图：按钮只发出
+//! [`InteractionEvent`]，回复通道归 workspace 所有，这样「是否已回答」只有
+//! 一个地方在记。
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -15,27 +15,23 @@ use gpui_kit::{
 
 use crate::runtime::interaction::ProgressSnapshot;
 
-/// What the window should show right now.
+/// 窗口当前该显示什么。
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum InteractionState {
-    /// Nothing pending; the workspace closes the window in this state.
+    /// 没有待办；此状态下 workspace 会把窗口关掉。
     #[default]
     Idle,
-    Focus {
-        hint: String,
-    },
-    Confirm {
-        message: String,
-    },
-    Progress {
-        snapshot: ProgressSnapshot,
-    },
+    /// 等待用户切走窗口（`requestFocus`）。
+    Focus { hint: String },
+    /// 是/否确认（`confirm`）。
+    Confirm { message: String },
+    /// 进度展示（`typeStr` / `scanQr`），`total` 为 0 表示总量未知。
+    Progress { snapshot: ProgressSnapshot },
 }
 
 impl InteractionState {
-    /// Whether a window in this state should grab focus. Progress must NOT
-    /// steal focus or simulated keystrokes land on our own overlay; Focus and
-    /// Confirm need focus to drive standby-release and button clicks.
+    /// 处在该状态的窗口是否应该抢焦点。Progress 绝不能抢：否则模拟按键会落到
+    /// 我们自己的浮层上；Focus 和 Confirm 需要焦点来触发 standby 释放和按钮点击。
     pub fn wants_focus(&self) -> bool {
         !matches!(
             self,
@@ -44,7 +40,7 @@ impl InteractionState {
     }
 }
 
-/// Buttons emit these; the workspace sends the matching reply / cancels the run.
+/// 按钮发出这些事件；由 workspace 回相应答复 / 取消本次运行。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractionEvent {
     ConfirmYes,
@@ -52,19 +48,21 @@ pub enum InteractionEvent {
     Abort,
 }
 
+/// 承载脚本交互 UI 的置顶窗口视图。
 pub struct InteractionWindow {
     state: InteractionState,
 }
 
 impl InteractionWindow {
+    /// 以 [`InteractionState::Idle`] 建视图。
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self {
             state: InteractionState::Idle,
         }
     }
 
-    /// Replace what the window shows. No-op when unchanged, so the 50ms drain
-    /// loop does not repaint the same state over and over.
+    /// 换掉窗口显示的内容。状态没变时什么都不做，免得 50ms 的 drain 循环对
+    /// 同一个状态反复重绘。
     pub fn set_state(&mut self, state: InteractionState, cx: &mut Context<Self>) {
         if self.state != state {
             self.state = state;
@@ -72,6 +70,7 @@ impl InteractionWindow {
         }
     }
 
+    /// 当前状态（只读），workspace 据此决定是否聚焦、何时关窗。
     pub fn state(&self) -> &InteractionState {
         &self.state
     }
@@ -133,8 +132,7 @@ impl InteractionWindow {
                 };
                 let percent_str = format!("{:.0}%", percent);
 
-                // Speed: chars per second. 0ms guard avoids div-by-zero before
-                // the first tick is settled.
+                // 速度：每秒字符数。用 0ms 兜底，避免第一个 tick 结算前除零。
                 let speed = if snapshot.current > 0 && snapshot.elapsed_ms > 0 {
                     let chars_per_sec =
                         snapshot.current as f64 / (snapshot.elapsed_ms as f64 / 1000.0);
@@ -143,7 +141,7 @@ impl InteractionWindow {
                     String::new()
                 };
 
-                // Elapsed: always show seconds so the user sees the clock tick.
+                // 已用时间：始终精确到秒，用户才看得到秒数在跳。
                 let elapsed = human_duration_precise(snapshot.elapsed_ms);
                 let remaining = if snapshot.total == 0 || snapshot.current == 0 {
                     None
@@ -161,7 +159,7 @@ impl InteractionWindow {
                     Some(human_duration_eta(total_ms))
                 };
 
-                // Top row: label (left) · percent (right)
+                // 顶行：标题（左）· 百分比（右）
                 let top = div()
                     .flex()
                     .justify_between()
@@ -180,12 +178,12 @@ impl InteractionWindow {
                             .child(percent_str),
                     );
 
-                // Middle: progress bar
+                // 中间：进度条
                 let bar = Progress::new("interaction-progress")
                     .value(percent)
                     .loading(snapshot.total == 0);
 
-                // Bottom row: count + speed (left) · ETA info (right)
+                // 底行：计数 + 速度（左）· 耗时预估（右）
                 let bottom_right = match (total_est, remaining) {
                     (Some(total), Some(rem)) => {
                         format!("{} / {} ~ {}", elapsed, total, rem)
@@ -227,8 +225,8 @@ impl InteractionWindow {
     }
 
     fn buttons(&self, cx: &mut Context<Self>) -> AnyElement {
-        // Stop uses the full Lucide catalog (assets::IconName); the component
-        // enum only carries a fixed compatibility subset and has no SquareStop.
+        // 中止按钮用 Lucide 全量图标集（assets::IconName）：组件自带的枚举只有
+        // 一个固定的兼容子集，没有 SquareStop。
         let abort = Button::new("abort")
             .icon(gpui_kit::assets::IconName::SquareStop)
             .label("中止")
@@ -274,9 +272,9 @@ impl InteractionWindow {
 
 impl EventEmitter<InteractionEvent> for InteractionWindow {}
 
-/// Format a millisecond count as `X小时X分X秒`, always showing seconds.
+/// 把毫秒数格式化为 `X小时X分X秒`，秒永远显示。
 ///
-/// Used for the "已用" timer, which should visibly tick.
+/// 用于「已用」计时，它必须看得出在跳。
 fn human_duration_precise(ms: u64) -> String {
     let total_secs = ms / 1000;
     let h = total_secs / 3600;
@@ -291,12 +289,10 @@ fn human_duration_precise(ms: u64) -> String {
     }
 }
 
-/// Format a millisecond count as `X小时X分`.
+/// 把毫秒数格式化为 `X小时X分`。
 ///
-/// When the total is >= 60 seconds the trailing unit (seconds) is omitted to
-/// avoid UI jitter — remaining / total estimates fluctuate by a few seconds as
-/// the average settles, and a 1-second digit flipping is distracting on long
-/// operations. Below 60 seconds seconds are still shown.
+/// 总量 ≥ 60 秒时省掉末位的秒，避免 UI 抖动——剩多少 / 总共多久的估算在均值
+/// 收敛过程中会来回摆几秒，长任务上一个翻动的秒位很干扰。少于 60 秒仍然显示秒。
 fn human_duration_eta(ms: u64) -> String {
     let total_secs = ms / 1000;
     let h = total_secs / 3600;

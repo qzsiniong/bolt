@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// A temporary directory that is removed when dropped.
+/// drop 时自动删除的临时目录。
 ///
 /// 名字带 caller tag + 进程 id + 自增序号：同一个 tag 被多个测试复用时（并行跑）
 /// 也不会互相踩目录。
@@ -20,7 +20,7 @@ impl TempDir {
         Self(dir)
     }
 
-    /// Write `content` to `<dir>/<rel>`, creating parent directories.
+    /// 把 `content` 写到 `<dir>/<rel>`，父目录不存在则自动创建。
     pub fn write(&self, rel: &str, content: &str) {
         let path = self.0.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();

@@ -1,9 +1,8 @@
-//! Global hotkey registration and polling.
+//! 全局快捷键的注册与轮询。
 //!
-//! `global_hotkey` delivers presses on a crossbeam channel, so the app polls
-//! them from the same tick that drains launcher requests. Each registered
-//! hotkey carries a `HotKeyId` so one `poll_pressed` call can report which
-//! hotkey(s) fired — the app tick dispatches accordingly.
+//! `global_hotkey` 把按键事件发到 crossbeam channel，app 在排空 Launcher
+//! 请求的同一个 tick 里轮询它们。每个注册的快捷键都带一个 `HotKeyId`，
+//! 一次 `poll_pressed` 就能报告哪些快捷键触发了——由 app tick 分发处理。
 
 use std::sync::OnceLock;
 
@@ -18,7 +17,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 /// 事件会全被丢弃 —— 快捷键因此毫无反应。
 static HOTKEY_IDS: OnceLock<Vec<(u32, HotKeyId)>> = OnceLock::new();
 
-/// Distinguishes which of the app's registered hotkeys fired.
+/// 区分应用注册的快捷键中是哪一个触发的。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotKeyId {
     /// Alt+Space → 唤起 / 关闭 Launcher。
@@ -33,9 +32,8 @@ pub(super) type HotKeyRegistration = (HotKeyId, Result<(), String>);
 /// [`register`] 的返回值：管理器（None = 初始化失败）+ 每个快捷键的注册结果。
 pub(super) type HotKeyRegistrations = (Option<GlobalHotKeyManager>, Vec<HotKeyRegistration>);
 
-/// Register both built-in hotkeys (Alt+Space, Cmd+Shift+T) and keep the
-/// manager alive for the app lifetime. Returns per-hotkey registration
-/// results so the Console can report what went wrong.
+/// 注册全部内置快捷键（Alt+Space、Cmd+Shift+T），并让管理器活到整个应用
+/// 生命周期结束。返回每个快捷键的注册结果，Console 据此报告哪里出了问题。
 pub(super) fn register() -> HotKeyRegistrations {
     match GlobalHotKeyManager::new() {
         Ok(manager) => {
@@ -74,8 +72,8 @@ pub(super) fn register() -> HotKeyRegistrations {
     }
 }
 
-/// Return every `HotKeyId` whose hotkey was pressed since the last call.
-/// Each press is reported at most once — safe to call repeatedly from a tick.
+/// 返回自上次调用以来被按下的所有 `HotKeyId`。每次按键最多报告一次——
+/// 可以放心在 tick 里反复调用。
 pub(super) fn poll_pressed() -> Vec<HotKeyId> {
     let Some(ids) = HOTKEY_IDS.get() else {
         return Vec::new();

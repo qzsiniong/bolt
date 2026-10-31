@@ -1,6 +1,5 @@
-//! LSP wire vocabulary: the pushed-diagnostics payload, request timeouts, the
-//! `textDocument/definition` result normalization, and path <-> `file://` URI
-//! mapping.
+//! LSP 协议词汇：推送式诊断的载荷、请求超时、`textDocument/definition`
+//! 结果归一化，以及路径与 `file://` URI 的互转。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,18 +7,21 @@ use std::time::Duration;
 use lsp_types::LocationLink;
 use serde_json::{Value, json};
 
+/// 普通请求的超时上限：服务器不答就报错，别让编辑器一直等着。
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+/// 初始化另算：tsserver 首次启动要加载整个项目，给足时间。
 pub(super) const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Diagnostics pushed by the server via `textDocument/publishDiagnostics`.
+/// 服务器通过 `textDocument/publishDiagnostics` 推来的诊断。
 #[derive(Clone, Debug)]
 pub struct PublishedDiagnostics {
+    /// 文档的 `file://` URI。
     pub uri: String,
     pub diagnostics: Vec<lsp_types::Diagnostic>,
 }
 
-/// Normalize a textDocument/definition result (`Location`, `Location[]`,
-/// `LocationLink[]` or null) into `Vec<LocationLink>`.
+/// 把 `textDocument/definition` 的结果（`Location`、`Location[]`、
+/// `LocationLink[]` 或 null）统一成 `Vec<LocationLink>`。
 pub(super) fn location_links_from_value(value: Value) -> Vec<LocationLink> {
     match value {
         Value::Null => vec![],
@@ -29,11 +31,13 @@ pub(super) fn location_links_from_value(value: Value) -> Vec<LocationLink> {
     }
 }
 
+/// 把单个结果项转成 `LocationLink`：本身就是 link 的直接反序列化，普通
+/// `Location` 则用它的 uri + range 现场合成一个。
 fn link_from_value(value: &Value) -> Option<LocationLink> {
     if value.get("targetUri").is_some() {
         return serde_json::from_value::<LocationLink>(value.clone()).ok();
     }
-    // Plain Location -> synthesize a LocationLink.
+    // 普通 Location → 补成一个 LocationLink。
     if value.get("uri").is_some() {
         let range = value.get("range").cloned()?;
         return serde_json::from_value::<LocationLink>(json!({
@@ -46,8 +50,8 @@ fn link_from_value(value: &Value) -> Option<LocationLink> {
     None
 }
 
-/// Percent-encode a filesystem path into a `file://` URI (spaces in
-/// `Application Support` and similar must be encoded for lsp `Uri`).
+/// 把文件系统路径百分号编码成 `file://` URI（`Application Support` 这类路径里
+/// 的空格必须编码，否则 lsp 的 `Uri` 解析不了）。
 pub fn path_to_uri(path: &Path) -> String {
     let text = path.to_string_lossy();
     let mut uri = String::from("file://");
@@ -62,8 +66,8 @@ pub fn path_to_uri(path: &Path) -> String {
     uri
 }
 
-/// Parse a `file://` URI back to a filesystem path (best effort).
-#[allow(dead_code)] // used by tests; kept for future cross-file definition jumps
+/// 把 `file://` URI 解析回文件系统路径（尽力而为）。
+#[allow(dead_code)] // 目前只有测试用；留给后续的跨文件跳转
 pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
     let decoded: String = rest
