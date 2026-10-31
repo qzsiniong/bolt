@@ -19,6 +19,8 @@ pub(crate) mod manifest;
 pub(crate) mod ops;
 pub(crate) mod prefs;
 pub(crate) mod scaffold;
+#[cfg(test)]
+mod schema_tests;
 pub(crate) mod state;
 pub(crate) mod ui_window;
 

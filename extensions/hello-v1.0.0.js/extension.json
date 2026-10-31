@@ -1,4 +1,5 @@
 {
+  "$schema": "../extension.schema.json",
   "id": "hello",
   "name": "Hello",
   "version": "1.0.0",

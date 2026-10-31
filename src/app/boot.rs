@@ -43,6 +43,11 @@ pub(crate) fn run() {
     if let Err(e) = extension::ensure_dir(&extensions_dir) {
         console_channel.error(format!("创建扩展目录失败：{e}"));
     }
+    // 清单的 JSON Schema 摆在扩展根：插件的 extension.json 用 `$schema:
+    // "../extension.schema.json"` 就能拿到编辑器的补全与校验。
+    if let Err(e) = extension::ensure_schema(&extensions_dir) {
+        console_channel.warn(format!("写入 {} 失败：{e}", extension::SCHEMA_FILE));
+    }
     if extension::uses_bundled_extensions() {
         // 仓库目录就是工作树：不往里写示例，也没有「同步」这回事。
         console_channel.info(format!("扩展目录：{}", extensions_dir.display()));

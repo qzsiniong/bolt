@@ -9,7 +9,9 @@
 
 use std::path::{Path, PathBuf};
 
-pub use plux_js_manager::{MANIFEST_FILE, UI_ENTRY, UiActionKind, UiBuiltin};
+pub use plux_js_manager::{
+    EXTENSION_SCHEMA, MANIFEST_FILE, SCHEMA_FILE, UI_ENTRY, UiActionKind, UiBuiltin,
+};
 
 /// gpui-shell 自己的清单名。同时存在会让 gpui-shell 走严格清单路径，故禁止。
 pub const SHELL_MANIFEST_FILE: &str = "gpui-shell.json";
@@ -63,6 +65,17 @@ pub fn active_extensions_dir() -> PathBuf {
 
 pub fn ensure_dir(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))
+}
+
+/// 把清单的 JSON Schema 摆在扩展根目录（与插件目录同级）。
+///
+/// 放根上而不是每个插件里：所有插件的清单都用同一个相对路径
+/// `../extension.schema.json` 引用它，schema 升级时也就只有这一份要换。宿主
+/// 每次启动重写（内容没变则不动），所以 user 目录里的副本不会停在旧版本。
+///
+/// 它只是个编辑器提示文件：`scan` 只看目录，插件加载完全不读它。
+pub fn ensure_schema(dir: &Path) -> Result<(), String> {
+    crate::model::project_gen::write_if_changed(&dir.join(SCHEMA_FILE), EXTENSION_SCHEMA)
 }
 
 /// 扫描扩展根，返回可注册的插件目录与错误消息。
@@ -176,7 +189,8 @@ pub fn ensure_extension_data_dir(id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-const DEMO_MANIFEST: &str = r#"{
+pub(super) const DEMO_MANIFEST: &str = r#"{
+  "$schema": "../extension.schema.json",
   "id": "demo",
   "name": "演示插件",
   "description": "同时演示脚本命令与 UI 命令",

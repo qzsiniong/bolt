@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "bolt 扩展清单（extension.json）",
+  "description": "插件目录里的清单。目录名 `<id>-v<version>.js` 是 plux bundle 的唯一事实来源：id / version 可以整行省略（省略即取目录名），写了就必须与目录名逐字一致。宿主对未知字段宽容（忽略），本 schema 用 additionalProperties: false 把拼错的字段名标出来。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "本 schema 的路径，只给编辑器看，宿主忽略。宿主会把 schema 写到扩展根目录（`<extensions>/extension.schema.json`），所以插件里写 `../extension.schema.json` 即可。"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "maxLength": 64,
+      "markdownDescription": "插件标识。**省略时取目录名里的 id**，写了必须一致。只能用小写字母、数字和连字符，且以字母或数字开头。"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$",
+      "description": "语义化版本。省略时取目录名里的版本，写了必须一致。"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "展示名（扩展管理、Launcher 副标题）。省略时退回 id。"
+    },
+    "description": {
+      "type": "string",
+      "description": "插件说明，显示在扩展管理里。"
+    },
+    "entry": {
+      "type": "string",
+      "pattern": "\\.(js|ts)$",
+      "default": "index.js",
+      "description": "脚本命令入口，默认 index.js，只接受 .js / .ts。纯 UI 插件（没有脚本命令）不需要它，也不用在目录里放 index.js。"
+    },
+    "depends": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "必装依赖，每项形如 \"other@^1.0\"；不带 @ 表示任意版本。",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*(@.+)?$",
+        "description": "依赖的插件 id，可带 @版本要求。"
+      }
+    },
+    "optional_depends": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "可选依赖：装了才用，没装也能跑。",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*(@.+)?$",
+        "description": "依赖的插件 id，可带 @版本要求。"
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "default": [],
+      "markdownDescription": "脚本命令要申请的权限。**缺省一个都不给（fail-closed）**：没声明的危险 API 调用时直接抛错。\n\n- `fs` 读写文件、列目录\n- `net` 任意网络请求\n- `exec` 执行 shell 命令\n- `env` 读进程环境变量\n- `typeStr` 向焦点窗口注入键盘输入\n\n交互类 API（confirm / pickPath / scanQr / requestFocus）、`sleep`、`exit`、console 与定时器不需要声明。",
+      "items": {
+        "enum": ["fs", "net", "exec", "env", "typeStr"]
+      }
+    },
+    "commands": {
+      "type": "array",
+      "description": "命令数组，每条命令变成 Launcher 里的一条 item。省略时自动补一条 id 为 run、标题为插件展示名的脚本命令。",
+      "items": {
+        "$ref": "#/$defs/command"
+      }
+    }
+  },
+  "$defs": {
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "命令标识，插件内唯一。脚本命令里它就是入口模块要导出的函数名（也支持 export default 对象 / globalThis.plux.commands 挂载）。"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Launcher 里显示的标题。"
+        },
+        "description": {
+          "type": "string",
+          "description": "副标题；省略时显示「插件名 v版本」。"
+        },
+        "ui": {
+          "$ref": "#/$defs/ui"
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "给了 ui 块就是 UI 命令：宿主开一个原生窗口渲染它，脚本入口固定为同目录的 main.js（不可改名）。没有 ui 块就是脚本命令。",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "窗口标题（宿主自绘标题栏上显示）。省略时用命令标题。"
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 880,
+          "description": "初始宽度（逻辑像素）。小于宿主最小尺寸时以最小尺寸为准。"
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 720,
+          "description": "初始高度（逻辑像素）。小于宿主最小尺寸时以最小尺寸为准。"
+        },
+        "always_on_top": {
+          "type": "boolean",
+          "default": false,
+          "description": "开窗即上浮到 floating 层级。标题栏上的图钉仍可随时切换。"
+        },
+        "capabilities": {
+          "$ref": "#/$defs/capabilities"
+        },
+        "actions": {
+          "type": "array",
+          "default": [],
+          "description": "宿主标题栏右侧的自定义按钮，声明顺序即渲染顺序，图钉固定在最右。",
+          "items": {
+            "$ref": "#/$defs/action"
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "UI 命令的额外授权。读根、写根、storage、exit 由宿主固定授予；网络与子进程一律不授予。",
+      "properties": {
+        "clipboard": {
+          "type": "boolean",
+          "default": false,
+          "description": "UI 脚本能否读写剪贴板。"
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "标题栏上的一个按钮。`builtin` 与 `command` 必须恰好写一个。",
+      "properties": {
+        "builtin": {
+          "description": "宿主内建动作，即时生效。",
+          "oneOf": [
+            {
+              "const": "reload",
+              "title": "reload — 重新加载插件",
+              "description": "与扩展管理里的「重载」同一条路径：关闭该插件的所有 UI 窗口（包括按钮所在的这个），重开命令即用新代码。"
+            },
+            {
+              "const": "open_data_dir",
+              "title": "open_data_dir — 打开数据目录",
+              "description": "在访达中打开插件的私有数据目录（extensions-data/<id>/）。"
+            },
+            {
+              "const": "open_plugin_dir",
+              "title": "open_plugin_dir — 打开插件目录",
+              "description": "在访达中显示（选中）插件自己的目录。"
+            },
+            {
+              "const": "close_window",
+              "title": "close_window — 关闭窗口",
+              "description": "关闭当前窗口。"
+            }
+          ]
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "markdownDescription": "点击执行**本清单里的一条脚本命令**（`commands[*].id`）。必须存在，且不能指向另一条 UI 命令，否则清单被拒绝加载。\n\n它走插件运行时，输出与错误都进 Console——但**无法回写当前窗口的 UI**：窗口里的脚本视图与脚本命令是两套运行时。"
+        },
+        "icon": {
+          "type": "string",
+          "pattern": "^(?!.*\\.\\.)",
+          "description": "按钮图标：Lucide 图标名（zap、refresh-cw，见 lucide.dev/icons）或插件目录内的资产路径（icons/star.svg，带 / 或以 .svg 结尾即按路径处理）。不能含 `..`（否则清单被拒）。省略时用该动作的默认图标。"
+        },
+        "tooltip": {
+          "type": "string",
+          "description": "悬停提示文案。省略或空白时用该动作的默认文案（builtin 的中文名 / 命令标题）。"
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["builtin"],
+          "not": {
+            "required": ["command"]
+          }
+        },
+        {
+          "required": ["command"],
+          "not": {
+            "required": ["builtin"]
+          }
+        }
+      ]
+    }
+  }
+}

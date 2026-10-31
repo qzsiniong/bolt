@@ -250,6 +250,8 @@ fn manifest_json(spec: &ExtensionSpec) -> String {
     }
 
     let mut manifest = serde_json::json!({
+        // 编辑器提示：schema 由宿主写在扩展根目录（见 `ensure_schema`）。
+        "$schema": "../extension.schema.json",
         "id": spec.id.trim(),
         "name": name,
         "version": spec.version.trim(),

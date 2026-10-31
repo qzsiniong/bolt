@@ -17,6 +17,12 @@ use serde::Deserialize;
 
 /// 每个插件目录一份的清单文件名。
 pub const MANIFEST_FILE: &str = "extension.json";
+/// 清单的 JSON Schema 文件名。宿主把它放在**扩展根目录**（与插件目录同级），
+/// 于是每个插件里的清单都能用同一个相对路径 `../extension.schema.json` 引用。
+pub const SCHEMA_FILE: &str = "extension.schema.json";
+/// Schema 正文。唯一来源是仓库根的 `schemas/extension.schema.json`，编译期嵌入：
+/// 宿主写盘与测试都用这一份，避免运行时找不到文件。
+pub const EXTENSION_SCHEMA: &str = include_str!("../../../schemas/extension.schema.json");
 /// 脚本入口的默认名。
 pub const DEFAULT_ENTRY: &str = "index.js";
 /// UI 命令的入口文件名。gpui-shell 对没有 `gpui-shell.json` 的目录固定加载它，
@@ -822,5 +828,114 @@ mod tests {
         write_plugin(&tmp, "demo-v1.0.0.js", "{ not json", &["index.js"]);
         let err = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("bad json must fail");
         assert!(err.contains("解析"), "unexpected message: {err}");
+    }
+
+    fn schema() -> serde_json::Value {
+        serde_json::from_str(EXTENSION_SCHEMA).expect("schema must be valid JSON")
+    }
+
+    #[test]
+    fn schema_enum_matches_the_permission_list() {
+        let schema = schema();
+        let values: Vec<&str> = schema["properties"]["permissions"]["items"]["enum"]
+            .as_array()
+            .expect("permissions enum")
+            .iter()
+            .map(|value| value.as_str().expect("string"))
+            .collect();
+        // 清单里的权限名与 schema 的补全列表必须同一份，否则作者会照着 schema
+        // 写一个 `readFile` 之类根本不存在的名字。
+        assert_eq!(values, PERMISSIONS);
+    }
+
+    #[test]
+    fn schema_enum_matches_the_ui_builtins() {
+        let schema = schema();
+        let values: Vec<&str> = schema["$defs"]["action"]["properties"]["builtin"]["oneOf"]
+            .as_array()
+            .expect("builtin oneOf")
+            .iter()
+            .map(|option| option["const"].as_str().expect("const string"))
+            .collect();
+        assert_eq!(
+            values,
+            ["reload", "open_data_dir", "open_plugin_dir", "close_window"]
+        );
+
+        // snake_case 是清单里的写法，别在 schema 里抄成 Rust 的变体名。
+        for value in values {
+            let parsed: Result<UiBuiltin, _> =
+                serde_json::from_value(serde_json::Value::String(value.to_string()));
+            assert!(parsed.is_ok(), "schema 里的 `{value}` 解析不出 UiBuiltin");
+        }
+    }
+
+    #[test]
+    fn schema_declares_every_field_the_parser_reads() {
+        let schema = schema();
+        let mut manifest_fields: Vec<&str> = schema["properties"]
+            .as_object()
+            .expect("properties")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        manifest_fields.sort_unstable();
+        // PluginManifest 的字段 + `$schema` 自己（宿主忽略，只给编辑器）。
+        let mut expected = [
+            "$schema",
+            "commands",
+            "depends",
+            "description",
+            "entry",
+            "id",
+            "name",
+            "optional_depends",
+            "permissions",
+            "version",
+        ];
+        expected.sort_unstable();
+        assert_eq!(manifest_fields, expected);
+
+        assert_eq!(schema["additionalProperties"], serde_json::json!(false));
+        let command = &schema["$defs"]["command"];
+        assert_eq!(command["required"], serde_json::json!(["id", "title"]));
+        assert_eq!(
+            command["properties"]["ui"]["$ref"],
+            serde_json::json!("#/$defs/ui")
+        );
+    }
+
+    #[test]
+    fn schema_example_manifest_validates() {
+        // README 里的示例（含 ui.actions 的两种按钮与外观覆盖）必须符合 schema：
+        // 作者照着文档抄的时候，编辑器不该立刻标红。
+        let value: serde_json::Value = serde_json::from_str(
+            r#"{
+                "$schema": "../extension.schema.json",
+                "id": "demo", "name": "演示插件", "description": "同时演示脚本命令与 UI 命令",
+                "version": "1.0.0", "entry": "index.js",
+                "depends": ["other@^1.0"], "optional_depends": ["extra"],
+                "permissions": ["fs", "net"],
+                "commands": [
+                    { "id": "hello", "title": "打招呼", "description": "打印一行问候" },
+                    {
+                        "id": "panel", "title": "打开面板",
+                        "ui": {
+                            "title": "演示面板", "width": 480, "height": 320,
+                            "always_on_top": true,
+                            "capabilities": { "clipboard": true },
+                            "actions": [
+                                { "builtin": "reload", "icon": "zap", "tooltip": "重新加载" },
+                                { "command": "hello", "icon": "icons/star.svg" }
+                            ]
+                        }
+                    }
+                ]
+            }"#,
+        )
+        .expect("json");
+
+        let problems = crate::schema::problems(&schema(), &value);
+        assert!(problems.is_empty(), "{problems:#?}");
     }
 }

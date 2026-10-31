@@ -1,5 +1,16 @@
 {
 	"cSpell.words": [
 		"gpui"
+	],
+	// 插件清单的补全与校验。宿主也会把 schema 复制到 extensions/ 根目录，
+	// 插件里的 `$schema: "../extension.schema.json"` 指向的就是那一份；
+	// 这条映射让新 clone 在宿主跑过一次之前也有提示。
+	"json.schemas": [
+		{
+			"fileMatch": [
+				"/extensions/*/extension.json"
+			],
+			"url": "./schemas/extension.schema.json"
+		}
 	]
 }

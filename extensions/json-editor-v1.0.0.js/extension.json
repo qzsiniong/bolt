@@ -1,4 +1,5 @@
 {
+  "$schema": "../extension.schema.json",
   "id": "json-editor",
   "name": "JSON 编辑器",
   "description": "类 JSON 文本的查看 / 格式化 / 压缩 / 过滤",

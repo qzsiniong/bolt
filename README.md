@@ -208,6 +208,25 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 清单里出现 `ui` 命令时，插件目录必须提供 `main.js`——gpui-shell 对没有 `gpui-shell.json` 的目录固定加载它，不可改名。
 
+#### 编辑器提示（JSON Schema）
+
+清单的 schema 在 [schemas/extension.schema.json](schemas/extension.schema.json)（Draft 2020-12）。宿主每次启动把它写到**扩展根目录**（`<extensions>/extension.schema.json`，与插件目录同级），于是插件里的清单只加一行就能在 VS Code 等编辑器里拿到字段补全、枚举候选与校验：
+
+```json
+{
+  "$schema": "../extension.schema.json",
+  "id": "demo"
+}
+```
+
+- 宿主**不读** `$schema`（清单是宽松解析，未知字段直接忽略），删掉这一行不影响加载；
+- 「新建扩展」生成的清单已经带上它；仓库里的示例插件也带着（`.vscode/settings.json` 另有一条映射，clone 下来不改任何文件也有提示）；
+- schema 里 `additionalProperties: false`：字段名拼错（`alwaysOnTop` 这种）会当场标红。这类错误宿主是**静默忽略**的——写了不生效还不报错，交给编辑器发现最省事；
+- 枚举都是逐字对齐的：`permissions` 的五项、`actions[*].builtin` 的四种（各带标题与说明）、`capabilities` 的开关；`actions` 还强制「`builtin` / `command` 恰好写一个」；
+- 只有 `actions[*].icon` 没法把 1.9k+ 个 Lucide 名枚举进去，只校验「不含 `..`」：名字写错时按钮的图标会缺失（资产源解析不到，不会回退内置图标），这一点得靠肉眼或者试跑。
+
+`schema` 与解析器的一致性由测试盯着（`plux-js-manager` 的枚举对齐测试、`extensions/schema_tests.rs` 用脚手架输出与示例插件反查 schema），改清单结构时不会只改一边。
+
 #### 脚本命令怎么执行
 
 Launcher 里每条命令一条 item（id 是 `ext.<插件id>.<命令id>`，分组「扩展」）。选中脚本命令后，宿主在入口模块里按三档顺序找处理函数：
@@ -857,7 +876,8 @@ ctx.globals().set("console", console)?;
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`；模块转发源码与文件解析复用 `plux-js-manager` 的导出，与插件侧同一份实现）与内置模块 `modules/{bolt,typer,qr}` |
 | [src/lsp/](src/lsp) | 语言服务器：`client`（请求管道与文档同步）、`server`（子进程与读写线程）、`protocol`（线协议与 URI 映射）、`providers`（桥接编辑器四大 provider） |
 | [src/core/](src/core) | 与领域无关的通用基础设施：`storage`（使用记录的数据形状、错误与 `UsageStorage` 抽象）、`file_storage`（JSON 文件实现，缺失文件视为空表、保存时自动建目录）、`smart_rank`（按时间衰减打分的排序引擎 + 事件裁剪）。依赖方向单向：`smart_rank` → `storage` ← `file_storage` |
-| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS，四态就绪状态机）、`store`（跨线程执行入口 + 运行时健康状态）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）。不依赖 gpui，可单独测试 |
+| [crates/plux-js-manager/](crates/plux-js-manager) | 独立的 JS 插件 manager crate：`manifest`（`extension.json` 解析与校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每插件一条线程 + 常驻 QuickJS，四态就绪状态机）、`store`（跨线程执行入口 + 运行时健康状态）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）、`schema`（清单 schema 的极简校验器，供测试用）。不依赖 gpui，可单独测试 |
+| [schemas/extension.schema.json](schemas/extension.schema.json) | 清单的 JSON Schema（手写，`include_str!` 进二进制）：给编辑器补全/校验用，宿主启动时复制到扩展根目录，运行时不读 |
 | [src/console_channel.rs](src/console_channel.rs) | 跨线程 Console 输出：`ConsoleChannel` 是写入端，`ConsoleLog` 是引用计数的共享缓冲（1000 条、溢出丢最旧），读者用 `since(cursor)` 取增量；`Error` 级条目同步落盘 `bolt.log`（滚动 500 行）；调试构建下每条输出同时打到 stdout/stderr。跨层共享的叶子模块 |
 | [src/test_support.rs](src/test_support.rs) | `#[cfg(test)]` 共享测试脚手架（`TempDir`、`position`、`run_js` headless 运行器） |
 

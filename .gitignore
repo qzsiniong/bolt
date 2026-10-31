@@ -2,3 +2,5 @@
 .DS_Store
 .workbuddy/
 extensions/*/gpui-kit.d.ts
+# 宿主启动时把清单 schema 复制到扩展根（唯一定义在 schemas/ 里），别提交。
+extensions/extension.schema.json

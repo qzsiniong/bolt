@@ -15,6 +15,7 @@ pub mod loader;
 pub mod manager;
 pub mod manifest;
 pub mod meta;
+pub mod schema;
 pub mod store;
 pub mod value;
 
@@ -30,8 +31,9 @@ pub use fingerprint::dir_fingerprint;
 pub use loader::{forwarding_module_source, resolve_file};
 pub use manager::JsManager;
 pub use manifest::{
-    MANIFEST_FILE, PERMISSIONS, PLUGIN_FORMAT, PluginCommand, PluginManifest, PluginPackage,
-    UI_ENTRY, UiAction, UiActionKind, UiBuiltin, UiCapabilities, UiSpec,
+    EXTENSION_SCHEMA, MANIFEST_FILE, PERMISSIONS, PLUGIN_FORMAT, PluginCommand, PluginManifest,
+    PluginPackage, SCHEMA_FILE, UI_ENTRY, UiAction, UiActionKind, UiBuiltin, UiCapabilities,
+    UiSpec,
 };
 pub use meta::PluginMeta;
 pub use store::{DEFAULT_TIMEOUT, InvokeRequest, PluginStore, RuntimeState, bundle_key};
