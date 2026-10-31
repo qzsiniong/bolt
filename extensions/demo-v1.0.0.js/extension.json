@@ -1,0 +1,66 @@
+{
+  "$schema": "../extension.schema.json",
+  "id": "demo",
+  "name": "演示扩展",
+  "description": "完整演示扩展能力：脚本命令、权限、交互 API、UI 窗口与标题栏动作",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "permissions": ["fs", "net", "typeStr"],
+  "commands": [
+    {
+      "id": "hello",
+      "title": "打招呼",
+      "description": "命令上下文 ctx 与返回值"
+    },
+    {
+      "id": "counter",
+      "title": "点一下计数器",
+      "description": "模块级状态跨调用保留"
+    },
+    {
+      "id": "peek",
+      "title": "看一眼扩展目录",
+      "description": "fs 权限：列出并读取扩展自己的文件"
+    },
+    {
+      "id": "weather",
+      "title": "网络请求",
+      "description": "net 权限：异步 fetch（需联网）"
+    },
+    {
+      "id": "chat",
+      "title": "交互一下",
+      "description": "confirm / pickPath / typeStr 交互 API"
+    },
+    {
+      "id": "panel",
+      "title": "打开面板",
+      "description": "原生窗口：控件、剪贴板与标题栏动作",
+      "ui": {
+        "title": "演示面板",
+        "width": 640,
+        "height": 520,
+        "always_on_top": false,
+        "capabilities": { "clipboard": true },
+        "actions": [
+          {
+            "builtin": "reload",
+            "icon": "refresh-cw",
+            "tooltip": "重载扩展并关掉这个窗口"
+          },
+          {
+            "builtin": "open_data_dir",
+            "tooltip": "打开 localStorage 落盘的数据目录"
+          },
+          {
+            "builtin": "open_extension_dir",
+            "icon": "icons/star.svg",
+            "tooltip": "自定义图标：打开扩展目录"
+          },
+          { "builtin": "close_window" },
+          { "command": "hello", "icon": "message-circle" }
+        ]
+      }
+    }
+  ]
+}

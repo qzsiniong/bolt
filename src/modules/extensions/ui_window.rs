@@ -486,6 +486,20 @@ mod tests {
     /// 在 headless 窗口里真实加载一个扩展目录的入口脚本，构建并物化一次元素。
     fn check_loads(dir: &std::path::Path, cx: &mut gpui_kit::TestAppContext) {
         cx.update(gpui_shell::init);
+        // 与宿主同一套能力授予（见 open_extension_ui）：storage 固定给，剪贴板
+        // 按清单（内置示例都开了）。否则示例里用 localStorage 会在 check 时
+        // 报「storage is not granted」，而真实窗口里明明是好的。
+        let storage = crate::test_support::TempDir::new("ext-ui-storage");
+        gpui_shell::set_storage_path(storage.0.join("store.json"));
+        gpui_shell::set_capabilities(
+            gpui_shell::Capabilities::new()
+                .read_roots([dir.to_path_buf(), storage.0.clone()])
+                .write_roots([storage.0.clone()])
+                .storage(true)
+                .clipboard_read(true)
+                .clipboard_write(true)
+                .exit(true),
+        );
         let runtime = gpui_shell::ShellRuntime::new_isolated().expect("start shell runtime");
         let window = cx.add_window(|_, _| Empty);
         let mut context = VisualTestContext::from_window(window.into(), cx);

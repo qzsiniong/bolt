@@ -742,7 +742,7 @@ mod tests {
         assert!(report.errors.is_empty(), "{:?}", report.errors);
 
         let commands = host.commands();
-        assert_eq!(commands.len(), 2, "{commands:?}");
+        assert_eq!(commands.len(), 6, "{commands:?}");
         let hello = commands
             .iter()
             .find(|command| command.command_id == "hello")
@@ -757,6 +757,9 @@ mod tests {
             panel.ui.as_ref().map(|ui| ui.title.as_str()),
             Some("演示面板")
         );
+        // 标题栏动作：内建与脚本命令混排，带自定义图标与提示。
+        let actions = &panel.ui.as_ref().expect("ui spec").actions;
+        assert_eq!(actions.len(), 5, "{actions:?}");
 
         host.ensure_loaded(hello).expect("demo should load");
         let output = host

@@ -14,7 +14,9 @@
         "width": 880,
         "height": 720,
         "always_on_top": true,
-        "capabilities": { "clipboard": true }
+        "capabilities": {
+          "clipboard": true
+        }
       }
     }
   ]

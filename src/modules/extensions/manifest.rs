@@ -16,8 +16,36 @@ pub use plux_js_manager::{
 /// gpui-shell 自己的清单名。同时存在会让 gpui-shell 走严格清单路径，故禁止。
 pub const SHELL_MANIFEST_FILE: &str = "gpui-shell.json";
 
-/// 首次启动时生成的示例扩展目录（脚本命令 + UI 命令各一条）。
+/// 首次启动时落盘的示例扩展目录（脚本命令 + UI 命令 + 标题栏动作）。
+///
+/// 内容的唯一事实来源是仓库的 `extensions/demo-v1.0.0.js/`：用 `include_str!`
+/// 在编译期嵌进来，release 二进制找不到仓库也能写出同一样的一份；改示例后
+/// 重编译即同步。仓库形态（debug 构建）不落盘——仓库目录本身就是扩展目录。
 pub const DEMO_DIR: &str = "demo-v1.0.0.js";
+
+pub(super) const DEMO_MANIFEST: &str =
+    include_str!("../../../extensions/demo-v1.0.0.js/extension.json");
+
+/// 示例扩展的全部文件：`(扩展目录内的相对路径, 内容)`。
+const DEMO_FILES: &[(&str, &str)] = &[
+    (MANIFEST_FILE, DEMO_MANIFEST),
+    (
+        "index.js",
+        include_str!("../../../extensions/demo-v1.0.0.js/index.js"),
+    ),
+    (
+        UI_ENTRY,
+        include_str!("../../../extensions/demo-v1.0.0.js/main.js"),
+    ),
+    (
+        "jsconfig.json",
+        include_str!("../../../extensions/demo-v1.0.0.js/jsconfig.json"),
+    ),
+    (
+        "icons/star.svg",
+        include_str!("../../../extensions/demo-v1.0.0.js/icons/star.svg"),
+    ),
+];
 
 /// `~/Library/Application Support/bolt/extensions/`。
 pub fn extensions_dir() -> PathBuf {
@@ -189,127 +217,21 @@ pub fn ensure_extension_data_dir(id: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-pub(super) const DEMO_MANIFEST: &str = r#"{
-  "$schema": "../extension.schema.json",
-  "id": "demo",
-  "name": "演示扩展",
-  "description": "同时演示脚本命令与 UI 命令",
-  "version": "1.0.0",
-  "entry": "index.js",
-  "commands": [
-    { "id": "hello", "title": "打招呼", "description": "在 Console 里打印一行问候" },
-    {
-      "id": "panel",
-      "title": "打开面板",
-      "description": "在原生窗口里渲染一个计数器",
-      "ui": { "title": "演示面板", "width": 480, "height": 320 }
-    }
-  ]
-}
-"#;
-
-const DEMO_INDEX: &str = r#"// 脚本命令示例。
-//
-// 命令 id 就是入口模块里要导出的函数名；宿主按
-// 「具名导出 → `export default` 对象 → `globalThis.plux.commands`」三档查找。
-// 每条命令都在扩展自己的常驻运行时里执行，模块级状态会保留到下次调用。
-export function hello(ctx) {
-  const { id, version } = ctx.extension;
-  return `你好，这是 ${id} v${version} 的 ${ctx.command} 命令`;
-}
-"#;
-
-const DEMO_MAIN: &str = r##"// UI 命令示例：脚本只描述界面，渲染由宿主在 GPUI 主线程完成。
-//
-// 保存后窗口会自动热重载（debug 构建）。可用模块：`gpui-kit`、`gpui-base`、
-// `gpui-fps`。窗口置顶由宿主标题栏上的图钉控制（清单里的 always_on_top 只是
-// 初始状态）。
-import { View, div } from "gpui-kit";
-import { h_flex, v_flex, Button, Input, InputState } from "gpui-base";
-
-export default class DemoPanel extends View {
-  init() {
-    this.count = 0;
-    this.draft = InputState.new({ placeholder: "输入点什么…" });
-    this.draft.on("submit", (_event, cx) => this.echo(cx));
-  }
-
-  /// 把输入框内容弹成 toast（shell 自带的浮层，宿主窗口根是 ShellRoot 时可用）。
-  echo(cx) {
-    const text = this.draft.value().trim();
-    if (text === "") return;
-    window.push_toast({ title: `你输入了：${text}`, level: "info", id: "echo" });
-    this.draft.set_value("");
-    cx.notify();
-  }
-
-  render(cx) {
-    const colors = cx.theme().colors;
-    return v_flex()
-      .size_full()
-      .p(24)
-      .gap(12)
-      .bg(colors.background)
-      .child(div().text_size(16).font_semibold().text_color(colors.foreground).child("演示面板"))
-      .child(
-        div()
-          .text_size(12)
-          .text_color(colors.muted_foreground)
-          .child(`当前计数：${this.count}`),
-      )
-      .child(
-        h_flex()
-          .gap(8)
-          .items_center()
-          .child(this.button("inc", "加一", cx, () => (this.count += 1)))
-          .child(this.button("reset", "归零", cx, () => (this.count = 0))),
-      )
-      .child(
-        h_flex()
-          .gap(8)
-          .items_center()
-          .child(Input.new(this.draft).flex_1().h(28).px(8).border(1).border_color(colors.input).bg(colors.surface).text_size(12))
-          .child(this.button("echo", "回显", cx, (cx) => this.echo(cx))),
-      );
-  }
-
-  /// base 的 Button 不带任何视觉样式，样式由脚本写。
-  button(id, caption, cx, run) {
-    const colors = cx.theme().colors;
-    return Button.new(id)
-      .flex()
-      .items_center()
-      .justify_center()
-      .h(28)
-      .px(12)
-      .bg(colors.surface)
-      .text_color(colors.foreground)
-      .border(1)
-      .border_color(colors.border)
-      .rounded(6)
-      .hover((style) => style.bg(colors.muted))
-      .on_click((_event, cx) => {
-        run(cx);
-        cx.notify();
-      })
-      .child(caption);
-  }
-}
-"##;
-
-/// First-run convenience: write the `demo` extension when its directory is absent.
-/// An existing directory is left untouched (作者的改动不该被覆盖).
+/// First-run convenience: write the bundled demo extension when its directory
+/// is absent. An existing directory is left untouched (作者的改动不该被覆盖).
 pub fn ensure_demo_extension(extensions: &Path) -> Result<(), String> {
     let root = extensions.join(DEMO_DIR);
     if root.exists() {
         return Ok(());
     }
-    std::fs::create_dir_all(&root).map_err(|e| format!("create {}: {e}", root.display()))?;
-    std::fs::write(root.join(MANIFEST_FILE), DEMO_MANIFEST)
-        .map_err(|e| format!("write {MANIFEST_FILE}: {e}"))?;
-    std::fs::write(root.join("index.js"), DEMO_INDEX)
-        .map_err(|e| format!("write index.js: {e}"))?;
-    std::fs::write(root.join(UI_ENTRY), DEMO_MAIN).map_err(|e| format!("write {UI_ENTRY}: {e}"))?;
+    for (relative, content) in DEMO_FILES {
+        let path = root.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+        std::fs::write(&path, content).map_err(|e| format!("write {relative}: {e}"))?;
+    }
     Ok(())
 }
 
@@ -354,11 +276,18 @@ mod tests {
     fn demo_extension_is_written_once() {
         let tmp = TempDir::new("ext-demo");
         ensure_demo_extension(&tmp.0).expect("demo should be created");
-        let manifest = tmp.0.join(DEMO_DIR).join(MANIFEST_FILE);
-        assert!(manifest.is_file());
-        assert!(tmp.0.join(DEMO_DIR).join("index.js").is_file());
-        assert!(tmp.0.join(DEMO_DIR).join(UI_ENTRY).is_file());
+        // 每一个内嵌的文件都要落盘，包括子目录（icons/star.svg）。
+        for (relative, content) in DEMO_FILES {
+            let path = tmp.0.join(DEMO_DIR).join(relative);
+            assert!(path.is_file(), "{relative} 应该被写出来");
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                *content,
+                "{relative} 的内容应与内嵌副本一致"
+            );
+        }
 
+        let manifest = tmp.0.join(DEMO_DIR).join(MANIFEST_FILE);
         let custom = r#"{ "id": "demo", "version": "1.0.0" }"#;
         std::fs::write(&manifest, custom).unwrap();
         ensure_demo_extension(&tmp.0).expect("second call should be a no-op");

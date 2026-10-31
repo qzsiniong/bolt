@@ -14,9 +14,11 @@
 │   ├── demo-v1.0.0.js/              # 目录名 = <id>-v<version>.js
 │   │   ├── extension.json              # 清单（必填）
 │   │   ├── index.js                 # 脚本命令入口（默认 index.js，也支持 .ts）
-│   │   └── main.js                  # UI 命令入口（有 ui 命令时才需要）
+│   │   ├── main.js                  # UI 命令入口（有 ui 命令时才需要）
+│   │   ├── icons/star.svg           # 扩展自己的图标资产（可被标题栏动作与 svg() 引用）
+│   │   └── jsconfig.json            # 编辑器配置（checkJs + strict）
 │   └── json-editor-v1.0.0.js/
-└── extensions-data/demo/store.json  # 扩展私有数据（localStorage 落这里）
+└── extensions-data/demo/store.json  # 扩展私有数据（UI 的 localStorage 落这里）
 ```
 
 **目录名就是 bundle 标识**。plux-rs 的 `Bundle` 完全从目录名解析出 `id` / `version` / `format`，所以：
@@ -210,10 +212,12 @@ export async function hello({ command, extension, root, argv }) {
 
 ## 仓库自带扩展
 
-仓库的 `extensions/` 目录里放着随源码维护的扩展（目前是 `json-editor`）。用哪一份由构建类型决定：
+仓库的 `extensions/` 目录里放着随源码维护的扩展：`demo`（示例，完整演示
+脚本命令、权限、交互 API、UI 控件、剪贴板与标题栏动作）与 `json-editor`。
+用哪一份由构建类型决定：
 
-- **debug 构建**：直接把仓库 `extensions/` 当作扩展目录，不做复制，也不生成 `demo` 示例（不往工作树里写文件）。改完仓库里的扩展文件，下次唤出 Launcher 即生效（同版本内容变更会被识别并重载），UI 命令的 `main.js` 还会热重载。
-- **release 构建**：用用户数据目录，把仓库扩展播种进去（只复制尚不存在的目录，不覆盖用户改动），并首次生成 `demo` 示例。
+- **debug 构建**：直接把仓库 `extensions/` 当作扩展目录，不做复制，也不另写示例（`demo` 本来就在里面）。改完仓库里的扩展文件，下次唤出 Launcher 即生效（同版本内容变更会被识别并重载），UI 命令的 `main.js` 还会热重载。
+- **release 构建**：用用户数据目录，把仓库扩展播种进去（只复制尚不存在的目录，不覆盖用户改动）；找不到仓库目录时，首次启动会把编译期内嵌的 `demo` 副本写到数据目录——内容与仓库示例逐字一致（`include_str!` 编译期嵌入，改示例后重编译即同步）。
 
 ## UI 命令（gpui-shell）
 
@@ -282,5 +286,5 @@ export default class DemoPanel extends View {
 - **debug 构建**下保存 `main.js` 即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
 - `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
 - 一个扩展只保留一个 UI 窗口：再次执行同一条 UI 命令只是激活已有窗口。
-- 首次启动（用数据目录的形态，即 release 构建）会生成 `demo-v1.0.0.js` 示例：脚本命令 + UI 命令各一条，目录已存在则不动，可直接在 Launcher 里跑通全链路。
+- 首次启动（用数据目录的形态，即 release 构建）会落盘 `demo-v1.0.0.js` 示例：五条脚本命令（上下文 / 模块状态 / fs、net 权限 / 交互 API）+ 一条 UI 命令（控件、剪贴板、localStorage 与标题栏动作），目录已存在则不动，可直接在 Launcher 里跑通全链路。
 - **尚未桥接**：UI 命令目前不能调用普通脚本的宿主 API（`bolt` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。
