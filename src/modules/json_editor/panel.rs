@@ -5,16 +5,15 @@
 //! gets pretty-printed.
 
 use super::parsers;
-use crate::ui::window_pin::WindowPin;
+use crate::ui::window::{WindowPin, WindowTitleBar};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
-use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, TabSize};
 use gpui_kit::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement,
-    ParentElement, Render, Styled, Subscription, Window, div, px,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, IntoElement, ParentElement, Render,
+    Styled, Subscription, Window, div, px,
 };
 
 /// Net insertion of at least this many characters is treated as a paste —
@@ -132,8 +131,8 @@ impl JsonEditorPanel {
         Self {
             focus_handle: cx.focus_handle(),
             editor,
-            // 本窗口默认不置顶，与开窗时的窗口层级一致（unpinned）。
-            pin: cx.new(|_| WindowPin::new(false)),
+            // 图钉无状态：读窗口真实层级（本窗口开窗时不置顶）。
+            pin: cx.new(|_| WindowPin::new()),
             suppress: false,
             last_text,
             status: String::new(),
@@ -265,20 +264,9 @@ impl Render for JsonEditorPanel {
             .flex_col()
             .size_full()
             .bg(colors.background)
-            // 自绘标题栏：标题在左，置顶图钉在右上角（公共控件）。
-            // 对应开窗时的 `TitleBar::window_options()` 基底。
-            .child(
-                TitleBar::new()
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.foreground)
-                            .child("JSON 编辑器"),
-                    )
-                    .child(self.pin.clone()),
-            )
+            // 自绘标题栏：公共壳（标题 + 置顶图钉），对应开窗时的
+            // `WindowSpec` → `TitleBar::window_options()` 基底。
+            .child(WindowTitleBar::new("JSON 编辑器").pin(self.pin.clone()))
             .child(
                 Editor::new(&self.editor)
                     .flex_1()

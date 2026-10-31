@@ -5,7 +5,7 @@ use gpui_kit::{App, AppContext as _, Bounds, WindowBounds, WindowKind, WindowOpt
 use super::clipboard::{self, PinContent};
 use super::panel::PinWindow;
 use crate::app::shell::AppShell;
-use crate::ui::window_pin::set_window_level;
+use crate::ui::window::set_pinned;
 
 /// 在剪切板里读到有效内容时把它 pin 到桌面上。这是 Launcher 命令与
 /// 全局快捷键最终都会走到的入口。
@@ -55,14 +55,15 @@ pub(crate) fn open_pin(cx: &mut App, content: PinContent) {
             ..WindowOptions::default()
         },
         cx,
-        |window, cx| cx.new(|cx| PinWindow::new(content, window, cx)),
+        // 便签默认置顶，在创建视图之前就抬到 Floating 级别——与 `WindowSpec`
+        // 的语义一致（视图首帧读到的层级就是真值）。
+        |window, cx| {
+            set_pinned(window, true);
+            cx.new(|cx| PinWindow::new(content, window, cx))
+        },
     );
     match opened {
-        Ok((handle, _view)) => {
-            // 立刻抬到 Floating 级别（NSWindowFloatingLevel = 3），便签
-            // 就悬浮在所有普通应用窗口之上。复用已有的 set_window_level。
-            let _ = handle.update(cx, |_, window, _| set_window_level(window, true));
-        }
+        Ok((_handle, _view)) => {}
         Err(e) => {
             cx.global::<AppShell>()
                 .console_channel

@@ -12,6 +12,7 @@ use super::panels::{EditorPanel, ScriptListPanel};
 use crate::console_channel::ConsoleLog;
 use crate::modules::console::panel::ConsolePanel;
 use crate::runtime::run_service::{RunService, RunStateChanged};
+use crate::ui::window::{WindowPin, WindowTitleBar};
 
 gpui_kit::actions!(bolt, [SaveScript, RunScript, NewScript]);
 
@@ -19,6 +20,8 @@ gpui_kit::actions!(bolt, [SaveScript, RunScript, NewScript]);
 /// Script execution lives in the app-level [`RunService`], so this window can
 /// be closed without affecting runs started from the launcher.
 pub struct Workspace {
+    /// 标题栏右上角的置顶图钉（公共控件，读窗口真实层级）。
+    pin: Entity<WindowPin>,
     dock_area: Entity<DockArea>,
     script_list: Entity<ScriptListPanel>,
     editor: Entity<EditorPanel>,
@@ -119,6 +122,7 @@ impl Workspace {
         });
 
         Self {
+            pin: cx.new(|_| WindowPin::new()),
             dock_area,
             script_list,
             editor,
@@ -152,18 +156,35 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Keep the window title in sync with the loaded script.
+        // Keep the system-level window title in sync with the loaded script
+        // (Mission Control / Cmd+Tab). The on-screen title lives in the
+        // custom title bar below.
         let title = match self.editor.read(cx).current_script() {
             Some(script) => format!("Bolt — {}", script.file_name),
             None => "Bolt".to_string(),
         };
         window.set_window_title(&title);
 
+        // 展示层副标题：当前打开的脚本名（与系统级标题同一个信息源）。
+        let subtitle = self
+            .editor
+            .read(cx)
+            .current_script()
+            .map(|script| script.file_name.clone())
+            .unwrap_or_else(|| "未打开脚本".to_string());
+
         div()
             .size_full()
+            .flex()
+            .flex_col()
             .on_action(cx.listener(Self::on_save))
             .on_action(cx.listener(Self::on_run))
             .on_action(cx.listener(Self::on_new))
-            .child(self.dock_area.clone())
+            .child(
+                WindowTitleBar::new("Bolt")
+                    .subtitle(subtitle)
+                    .pin(self.pin.clone()),
+            )
+            .child(div().flex_1().min_h_0().child(self.dock_area.clone()))
     }
 }

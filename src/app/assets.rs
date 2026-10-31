@@ -49,6 +49,11 @@ impl AssetSource for ExtensionAssets {
         }
         // 越界或读失败都不算命中：交给下一个候选，最后回退到内置图标。
         for root in self.roots.lock().iter().rev() {
+            // 先做存在性预检：gpui-shell 每个根未命中都会打一条 "not found" 警告，
+            // 而宿主图标（标题栏按钮等）在扩展目录里必然找不到，预检可以免掉噪音。
+            if !root.join(path).is_file() {
+                continue;
+            }
             if let Ok(Some(bytes)) = gpui_shell::AppAssets::new(root.clone()).load(path) {
                 return Ok(Some(bytes));
             }
@@ -85,6 +90,21 @@ mod tests {
     #[test]
     fn builtin_icons_still_resolve() {
         let assets = ExtensionAssets::new();
+        let bytes = assets
+            .load("icons/trash.svg")
+            .expect("builtin icon should load")
+            .expect("builtin icon should exist");
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn builtin_icons_still_resolve_behind_an_extension_root() {
+        // 宿主图标（标题栏按钮）在扩展目录里找不到，必须回退到内置图标，
+        // 且预检不能把这种「根里没有」误判成加载失败。
+        let tmp = TempDir::new("assets-fallback");
+        let assets = ExtensionAssets::new();
+        assets.register_root(tmp.0.clone());
+
         let bytes = assets
             .load("icons/trash.svg")
             .expect("builtin icon should load")

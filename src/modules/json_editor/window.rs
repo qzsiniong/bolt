@@ -1,65 +1,34 @@
 //! JSON 编辑器窗口的开窗逻辑（单例）。
 
-use gpui_kit::component::TitleBar;
-use gpui_kit::{
-    App, AppContext as _, Bounds, TitlebarOptions, WindowBounds, WindowKind, WindowOptions, px,
-    size,
-};
+use gpui_kit::{App, AppContext as _};
 
 use super::panel::JsonEditorPanel;
 use super::state::JsonEditorState;
 use crate::app::shell::AppShell;
+use crate::ui::window::{WindowSpec, open_singleton};
 
 /// Open the native JSON editor window as a singleton — focus the existing
-/// handle if it's still alive, otherwise activate the app and create a fresh
-/// one. Mirrors the script manager's `open_manager`.
+/// handle if it's still alive, otherwise create a fresh one.
 pub(crate) fn open_json_editor(cx: &mut App) {
     open_json_editor_with(cx, String::new())
 }
 
 /// 同 [`open_json_editor`]，但以给定内容开窗（粘贴 JSON 时的入口）。已存在
 /// 的编辑器窗口被激活时**不**写入新内容（避免覆盖用户正在编辑的东西），
-/// 只有新开窗口才带初始内容。
+/// 只有新开窗口才带初始内容——这正是 [`open_singleton`] 的「已活即激活并
+/// 返回、不跑 build」语义。
 pub(crate) fn open_json_editor_with(cx: &mut App, content: String) {
-    cx.activate(true);
+    let spec = WindowSpec::new("JSON 编辑器")
+        .size(880., 720.)
+        .min_size(520., 380.)
+        .pinned(true);
 
     let existing = cx.global_mut::<JsonEditorState>().window.take();
-    if let Some(handle) = existing {
-        let alive = handle
-            .update(cx, |_, window, _| window.activate_window())
-            .is_ok();
-        if alive {
-            cx.global_mut::<JsonEditorState>().window = Some(handle);
-            return;
-        }
-    }
-
     let console = cx.global::<AppShell>().console_channel.clone();
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            size(px(880.), px(720.)),
-            cx,
-        ))),
-        kind: WindowKind::Normal,
-        window_min_size: Some(size(px(520.), px(380.))),
-        titlebar: Some(TitlebarOptions {
-            title: Some("JSON 编辑器".into()),
-            ..TitleBar::title_bar_options()
-        }),
-        is_resizable: true,
-        focus: true,
-        // 以 `TitleBar::window_options()` 为基底：标题栏由视图自绘（含右上角
-        // 置顶图钉），拖动/双击交给 `TitleBar` 自己处理，AppKit 不再把它当
-        // 系统拖动区。
-        ..TitleBar::window_options()
-    };
-
-    let opened = gpui_kit::open_window(options, cx, |window, cx| {
+    match open_singleton(&spec, cx, existing, |window, cx| {
         cx.new(|cx| JsonEditorPanel::new(window, cx, content))
-    });
-    match opened {
-        Ok((handle, _panel)) => {
+    }) {
+        Ok(handle) => {
             cx.global_mut::<JsonEditorState>().window = Some(handle);
         }
         Err(e) => {

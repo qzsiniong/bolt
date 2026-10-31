@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-pub use plux_js_manager::{MANIFEST_FILE, UI_ENTRY};
+pub use plux_js_manager::{MANIFEST_FILE, UI_ENTRY, UiActionKind, UiBuiltin};
 
 /// gpui-shell 自己的清单名。同时存在会让 gpui-shell 走严格清单路径，故禁止。
 pub const SHELL_MANIFEST_FILE: &str = "gpui-shell.json";

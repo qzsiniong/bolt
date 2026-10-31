@@ -111,6 +111,8 @@ pub struct UiSpec {
     /// true → 开窗即上浮到 floating 层级（置顶图钉仍可切换）。
     pub always_on_top: bool,
     pub capabilities: UiCapabilities,
+    /// 宿主标题栏右侧的自定义按钮（声明顺序即渲染顺序，图钉固定在最右）。
+    pub actions: Vec<UiAction>,
 }
 
 impl Default for UiSpec {
@@ -121,6 +123,7 @@ impl Default for UiSpec {
             height: 720.,
             always_on_top: false,
             capabilities: UiCapabilities::default(),
+            actions: Vec::new(),
         }
     }
 }
@@ -132,6 +135,52 @@ impl UiSpec {
             &command.title
         } else {
             &self.title
+        }
+    }
+}
+
+/// `ui.actions[*].builtin` 的合法值。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UiBuiltin {
+    /// 重新加载插件（与扩展管理里的「重载」同一条路径：会关闭该插件的
+    /// 所有 UI 窗口——包括按钮所在的这个——重开命令即用新代码）。
+    Reload,
+    /// 在访达中打开插件的私有数据目录。
+    OpenDataDir,
+    /// 在访达中显示（选中）插件目录。
+    OpenPluginDir,
+    /// 关闭当前窗口。
+    CloseWindow,
+}
+
+/// 标题栏右侧的自定义按钮：`builtin`（宿主内建动作）与 `command`（点击执行
+/// 本清单里的一条**脚本**命令）二选一，校验强制。注意 `command` 型按钮走
+/// 插件运行时执行，结果与错误都进 Console——它**无法**回写当前 gpui-shell
+/// 窗口的 UI（gpui-shell 尚未提供宿主→插件的事件通道）。
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct UiAction {
+    pub builtin: Option<UiBuiltin>,
+    pub command: Option<String>,
+}
+
+/// 一个按钮解析后的语义（[`UiAction::kind`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UiActionKind {
+    Builtin(UiBuiltin),
+    /// 引用的脚本命令 id。
+    Command(String),
+}
+
+impl UiAction {
+    /// `builtin` 与 `command` 必须恰好给一个。
+    pub fn kind(&self) -> Result<UiActionKind, String> {
+        match (&self.builtin, &self.command) {
+            (Some(builtin), None) => Ok(UiActionKind::Builtin(*builtin)),
+            (None, Some(command)) => Ok(UiActionKind::Command(command.clone())),
+            (Some(_), Some(_)) => Err("builtin 与 command 只能写一个".to_string()),
+            (None, None) => Err("builtin 与 command 必须写一个".to_string()),
         }
     }
 }
@@ -249,13 +298,36 @@ pub fn read(dir: &Path) -> Result<PluginPackage, String> {
             return Err(format!("命令 id 重复：{}", command.id));
         }
         seen.push(command.id.clone());
-        if let Some(ui) = &command.ui
-            && !(ui.width > 0. && ui.height > 0.)
-        {
-            return Err(format!(
-                "命令 `{}` 的窗口尺寸必须为正：{}×{}",
-                command.id, ui.width, ui.height
-            ));
+        if let Some(ui) = &command.ui {
+            if !(ui.width > 0. && ui.height > 0.) {
+                return Err(format!(
+                    "命令 `{}` 的窗口尺寸必须为正：{}×{}",
+                    command.id, ui.width, ui.height
+                ));
+            }
+            for (index, action) in ui.actions.iter().enumerate() {
+                let context = format!("命令 `{}` 的 ui.actions[{index}]", command.id);
+                match action
+                    .kind()
+                    .map_err(|error| format!("{context}：{error}"))?
+                {
+                    UiActionKind::Builtin(_) => {}
+                    UiActionKind::Command(target_id) => {
+                        let Some(target) = manifest
+                            .commands
+                            .iter()
+                            .find(|candidate| candidate.id == target_id)
+                        else {
+                            return Err(format!("{context}：command `{target_id}` 不存在于本清单"));
+                        };
+                        if target.is_ui() {
+                            return Err(format!(
+                                "{context}：command `{target_id}` 是 UI 命令，actions 只能触发脚本命令"
+                            ));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -482,7 +554,89 @@ mod tests {
         assert_eq!((ui.width, ui.height), (880., 720.));
         assert!(!ui.always_on_top);
         assert!(ui.capabilities.clipboard);
+        assert!(ui.actions.is_empty());
         assert!(package.main.is_some());
+    }
+
+    #[test]
+    fn ui_actions_parse_builtin_and_command() {
+        let tmp = TempDir::new("manifest-ui-actions");
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0",
+            "commands": [
+                {
+                    "id": "panel", "title": "面板",
+                    "ui": { "actions": [
+                        { "builtin": "reload" },
+                        { "builtin": "open_data_dir" },
+                        { "builtin": "open_plugin_dir" },
+                        { "builtin": "close_window" },
+                        { "command": "export" }
+                    ] }
+                },
+                { "id": "export", "title": "导出" }
+            ]
+        }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+
+        let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
+        let ui = package.manifest.commands[0].ui.as_ref().expect("ui block");
+        let kinds: Vec<UiActionKind> = ui
+            .actions
+            .iter()
+            .map(|action| action.kind().expect("valid action"))
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                UiActionKind::Builtin(UiBuiltin::Reload),
+                UiActionKind::Builtin(UiBuiltin::OpenDataDir),
+                UiActionKind::Builtin(UiBuiltin::OpenPluginDir),
+                UiActionKind::Builtin(UiBuiltin::CloseWindow),
+                UiActionKind::Command("export".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn ui_action_must_choose_exactly_one() {
+        let tmp = TempDir::new("manifest-ui-action-ambiguous");
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0",
+            "commands": [{ "id": "panel", "title": "面板", "ui": { "actions": [
+                { "builtin": "reload", "command": "run" }
+            ] } }]
+        }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("both fields");
+        assert!(error.contains("只能写一个"), "{error}");
+    }
+
+    #[test]
+    fn ui_action_command_must_reference_a_script_command() {
+        let tmp = TempDir::new("manifest-ui-action-command");
+        // 指向不存在的命令。
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0",
+            "commands": [{ "id": "panel", "title": "面板", "ui": { "actions": [
+                { "command": "missing" }
+            ] } }]
+        }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("missing command");
+        assert!(error.contains("不存在于本清单"), "{error}");
+
+        // 指向另一条 UI 命令也不行：actions 只能触发脚本命令。
+        let manifest = r#"{
+            "id": "demo", "version": "1.0.0",
+            "commands": [
+                { "id": "panel", "title": "面板", "ui": { "actions": [ { "command": "other-ui" } ] } },
+                { "id": "other-ui", "title": "另一个窗口", "ui": {} }
+            ]
+        }"#;
+        write_plugin(&tmp, "demo-v1.0.0.js", manifest, &["index.js", "main.js"]);
+        let error = read(&tmp.0.join("demo-v1.0.0.js")).expect_err("ui command target");
+        assert!(error.contains("只能触发脚本命令"), "{error}");
     }
 
     #[test]

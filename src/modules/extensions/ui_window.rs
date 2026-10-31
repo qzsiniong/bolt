@@ -23,48 +23,106 @@ use std::rc::Rc;
 
 // 显式导入：`gpui_kit::*` 会把 gpui 的 `#[gpui::test]` 宏带进作用域，令下面
 // `mod tests` 里的 `#[test]` 变成递归展开。
+use super::actions::ActionSubject;
+use super::exec;
 use super::host::CommandTarget;
-use super::manifest::{ensure_extension_data_dir, extension_data_dir};
+use super::manifest::{UiActionKind, UiBuiltin, ensure_extension_data_dir, extension_data_dir};
+use super::ops;
 use super::state::ExtensionsState;
 use crate::app::shell::AppShell;
-use crate::ui::window_pin::{WindowPin, set_window_level};
-use gpui_kit::component::{ActiveTheme as _, TitleBar};
+use crate::ui::window::{WindowPin, WindowSpec, WindowTitleBar, button_with_tooltip, set_pinned};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::{
-    App, AppContext as _, Bounds, Context, Entity, FontWeight, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, TitlebarOptions, Window, WindowBounds, WindowKind,
-    WindowOptions, div, px, size,
+    AnyElement, App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
+    SharedString, Styled as _, Window, div, px,
 };
 
 /// UI 命令窗口的最小尺寸；不会超过清单声明的尺寸。
 const EXTENSION_WINDOW_MIN_SIZE: (f32, f32) = (560., 420.);
 
-/// 扩展窗口的宿主外壳：宿主自绘标题栏（插件名 + 置顶图钉）+ 脚本视图。
+/// 扩展窗口的宿主外壳：宿主自绘标题栏（插件名 + 自定义动作按钮 + 置顶图钉）
+/// + 脚本视图。
 struct ExtensionChrome {
     shell_root: Entity<gpui_shell::ShellRoot>,
     name: SharedString,
     pin: Entity<WindowPin>,
+    /// 清单 `ui.actions` 解析出的按钮，声明顺序即渲染顺序（图钉固定最右）。
+    actions: Vec<ChromeAction>,
+    /// builtin 动作与 command 动作都以它为操作对象（重载 / 开目录 / 跑命令）。
+    subject: ActionSubject,
+}
+
+/// 标题栏右侧的一个动作按钮。
+#[derive(Clone, Debug)]
+enum ChromeAction {
+    Builtin(UiBuiltin),
+    /// 点击执行该脚本命令（走 plux 运行时；输出进 Console，无法回写本窗口 UI）。
+    Command(Box<CommandTarget>),
+}
+
+impl ExtensionChrome {
+    /// 右侧动作按钮行；`None` = 清单没声明 actions，标题栏只有图钉。
+    fn action_buttons(&self, window: &Window, cx: &Context<Self>) -> Option<AnyElement> {
+        if self.actions.is_empty() {
+            return None;
+        }
+        let mut row = div().flex().items_center().gap(px(4.)).flex_shrink_0();
+        for (index, action) in self.actions.iter().enumerate() {
+            let (icon, tooltip) = match action {
+                ChromeAction::Builtin(UiBuiltin::Reload) => (IconName::RefreshCw, "重新加载插件"),
+                ChromeAction::Builtin(UiBuiltin::OpenDataDir) => {
+                    (IconName::FolderOpen, "打开数据目录")
+                }
+                ChromeAction::Builtin(UiBuiltin::OpenPluginDir) => {
+                    (IconName::Folder, "打开插件目录")
+                }
+                ChromeAction::Builtin(UiBuiltin::CloseWindow) => (IconName::X, "关闭窗口"),
+                ChromeAction::Command(target) => (IconName::Play, target.title.as_str()),
+            };
+            row = row.child(button_with_tooltip(
+                ("ext-ui-action-tooltip", index),
+                Button::new(("ext-ui-action", index))
+                    .icon(icon)
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.run_action(index, window, cx);
+                    })),
+                tooltip,
+                window,
+            ));
+        }
+        Some(row.into_any_element())
+    }
+
+    /// 点击动作按钮的统一分发。builtin 复用扩展管理的 ops（本来就写 Console）；
+    /// `close_window` 不写（窗口随即销毁，写了也看不见）。
+    fn run_action(&self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.actions[index] {
+            ChromeAction::Builtin(UiBuiltin::Reload) => ops::reload(cx, &self.subject),
+            ChromeAction::Builtin(UiBuiltin::OpenDataDir) => ops::open_data_dir(cx, &self.subject),
+            ChromeAction::Builtin(UiBuiltin::OpenPluginDir) => ops::reveal(cx, &self.subject),
+            ChromeAction::Builtin(UiBuiltin::CloseWindow) => window.remove_window(),
+            ChromeAction::Command(target) => exec::run_command(cx, (**target).clone()),
+        }
+    }
 }
 
 impl Render for ExtensionChrome {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let actions_row = self.action_buttons(window, cx);
+        let mut bar = WindowTitleBar::new(self.name.clone());
+        if let Some(row) = actions_row {
+            bar = bar.trailing(row);
+        }
         div()
             .flex()
             .flex_col()
             .size_full()
-            .child(
-                TitleBar::new()
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.foreground)
-                            .child(self.name.clone()),
-                    )
-                    // 右上角置顶图钉：公共控件自带按钮、状态与层级同步。
-                    .child(self.pin.clone()),
-            )
+            // 宿主自绘标题栏：公共壳（插件名 + 自定义动作按钮 + 置顶图钉）。
+            .child(bar.pin(self.pin.clone()))
             // flex_1：标题栏以下整块都是插件的渲染区。渲染 `content()` 而不是
             // `shell_root` 本身：窗口根已经是外层 `ShellRoot`，脚本视图直接当它的
             // content 少一层；且每帧重新读取，热重载替换 content 后立刻生效。
@@ -179,42 +237,66 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     let title = format!("{name} — Bolt");
     let load_console = console.clone();
     let window_size = (ui.width, ui.height);
-    let options = WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-            None,
-            size(px(window_size.0), px(window_size.1)),
-            cx,
-        ))),
-        // 统一开普通窗口：置顶用 `set_window_level` 直接改层级（PopUp 是
-        // 非激活面板，形态上与普通窗口结构性不同，不适合来回切换）。
-        kind: WindowKind::Normal,
-        window_min_size: Some(size(
-            px(EXTENSION_WINDOW_MIN_SIZE.0.min(window_size.0)),
-            px(EXTENSION_WINDOW_MIN_SIZE.1.min(window_size.1)),
-        )),
-        titlebar: Some(TitlebarOptions {
-            title: Some(title.into()),
-            ..TitleBar::title_bar_options()
-        }),
-        is_resizable: true,
-        focus: true,
-        // `TitleBar::window_options()` 一并给出「自绘标题栏自己处理拖动与双击、
-        // AppKit 不再把它当系统拖动区」的开窗参数。
-        ..TitleBar::window_options()
+    // 清单 ui.actions → 标题栏按钮。command 型按 (plugin_id, command_id) 回
+    // 宿主清单里查 target（校验已保证存在且是脚本命令；这里查不到就跳过并
+    // 留 warn，不让一个坏按钮挡住整个窗口）。
+    let chrome_actions: Vec<ChromeAction> = {
+        let commands = cx.global::<ExtensionsState>().host.borrow().commands();
+        let command_id = target.command_id.clone();
+        ui.actions
+            .iter()
+            .filter_map(|action| match action.kind() {
+                Ok(UiActionKind::Builtin(builtin)) => Some(ChromeAction::Builtin(builtin)),
+                Ok(UiActionKind::Command(action_command)) => commands
+                    .iter()
+                    .find(|candidate| {
+                        candidate.plugin_id == plugin_id
+                            && candidate.command_id == action_command
+                    })
+                    .map(|candidate| ChromeAction::Command(Box::new(candidate.clone())))
+                    .or_else(|| {
+                        console.warn(format!(
+                            "命令 {plugin_id}.{command_id} 的 ui.actions 引用了未知命令 `{action_command}`，已忽略"
+                        ));
+                        None
+                    }),
+                Err(error) => {
+                    console.warn(format!(
+                        "命令 {plugin_id}.{command_id} 的 ui.actions 被忽略：{error}"
+                    ));
+                    None
+                }
+            })
+            .collect()
     };
-
+    let subject = ActionSubject::from_target(&target);
     // 非激活态开出的普通窗口会被压在别的应用后面，显式激活一次。
     cx.activate(true);
+    // 根视图必须是 ShellRoot（见模块头部说明），只能裸 `cx.open_window`——
+    // `gpui_kit::open_window` 会包 base::Root，脚本侧的 tooltip/toast/dialog
+    // 会静默失效。开窗参数仍统一走 `WindowSpec::to_options`。
+    let spec = WindowSpec::new(title.clone())
+        .size(window_size.0, window_size.1)
+        .min_size(
+            EXTENSION_WINDOW_MIN_SIZE.0.min(window_size.0),
+            EXTENSION_WINDOW_MIN_SIZE.1.min(window_size.1),
+        )
+        .pinned(pinned);
     let chrome_name: SharedString = name.clone().into();
-    let opened = cx.open_window(options, move |window, cx| {
+    let opened = cx.open_window(spec.to_options(cx), move |window, cx| {
+        // 清单声明置顶：创建视图之前抬层级，`WindowPin` 首帧读到的就是真值。
+        if pinned {
+            set_pinned(window, true);
+        }
         let shell_root = load_shell_root(&runtime, &root, &load_console, window, cx);
-        let pin = cx.new(|_| WindowPin::new(pinned));
+        let pin = cx.new(|_| WindowPin::new());
         let chrome = cx.new(|_| ExtensionChrome {
             shell_root,
             name: chrome_name,
             pin,
+            actions: chrome_actions,
+            subject,
         });
-        // 根视图必须是 ShellRoot（见模块头部说明），chrome 只能作为它的 content。
         cx.new(|cx| gpui_shell::ShellRoot::new(chrome.into(), window, cx))
     });
     let handle = match opened {
@@ -224,11 +306,6 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
             return;
         }
     };
-
-    // 清单声明置顶：开窗即上浮到 floating 层级。
-    if pinned {
-        let _ = handle.update(cx, |_, window, _| set_window_level(window, true));
-    }
 
     cx.global_mut::<ExtensionsState>()
         .ui_windows

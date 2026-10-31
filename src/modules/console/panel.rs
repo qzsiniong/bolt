@@ -10,7 +10,6 @@ use gpui_kit::HighlightStyle;
 use gpui_kit::base::dock::PanelEvent;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Disableable;
-use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{BasePanel, Panel};
 use gpui_kit::component::input::{Editor, EditorState, TextDecoration, TextDecorationCollection};
@@ -22,7 +21,7 @@ use gpui_kit::{
 };
 
 use crate::console_channel::{ConsoleEntry, ConsoleLevel, ConsoleLog};
-use crate::ui::window_pin::{WindowPin, set_window_level};
+use crate::ui::window::{WindowPin, WindowTitleBar};
 
 /// Maximum lines retained in the view; older entries are dropped.
 const MAX_ENTRIES: usize = 1000;
@@ -86,16 +85,11 @@ impl ConsolePanel {
         // 1000 条，更早的已经被裁掉）。之后按游标取增量。
         let entries = log.entries();
         let cursor = log.revision();
-        // 独立窗口**默认置顶**：调试时它就是个常驻仪表盘，被编辑器/浏览器盖住
-        // 就失去了意义。窗口层级是 NSWindow 的运行时消息（见 `window_pin`），
-        // 所以在这里抬层级、图钉以同一状态初始化，两者不会漂移。
-        //
+        // 独立窗口有标题栏与置顶图钉：图钉无状态、读窗口真实层级，开窗侧
+        // （`WindowSpec.pinned(true)`）已在创建视图之前把层级抬到 floating。
         // dock 面板跟着管理器窗口走，没有自己的层级，也就不创建图钉。
         let windowed = chrome == Chrome::Windowed;
-        if windowed {
-            set_window_level(window, true);
-        }
-        let pin = windowed.then(|| cx.new(|_| WindowPin::new(true)));
+        let pin = windowed.then(|| cx.new(|_| WindowPin::new()));
         Self {
             focus_handle: cx.focus_handle(),
             log,
@@ -160,32 +154,13 @@ impl ConsolePanel {
     }
 
     /// 独立窗口的标题栏（dock 形态由 dock 自己画标签，用不到）。
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let colors = cx.theme().colors;
+    fn header(&self) -> AnyElement {
         let count = self.entries.len();
-        TitleBar::new()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.foreground)
-                            .child("Console"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(colors.muted_foreground)
-                            .child(format!("{count} 条输出")),
-                    ),
-            )
-            // 右上角置顶图钉：标题栏右侧由它自己 justify_end 贴边。
-            .when_some(self.pin.clone(), |bar, pin| bar.child(pin))
-            .into_any_element()
+        let mut bar = WindowTitleBar::new("Console").subtitle(format!("{count} 条输出"));
+        if let Some(pin) = self.pin.clone() {
+            bar = bar.pin(pin);
+        }
+        bar.into_any_element()
     }
 }
 
@@ -434,7 +409,7 @@ impl Render for ConsolePanel {
 
         let mut root = div().size_full().flex().flex_col();
         if self.chrome == Chrome::Windowed {
-            root = root.child(self.header(cx));
+            root = root.child(self.header());
         }
         root.child(toolbar)
             .child(

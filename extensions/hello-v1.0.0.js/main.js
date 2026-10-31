@@ -24,6 +24,6 @@ export default class JsonEditor extends View {
 		return v_flex()
 			.size_full()
 			.bg(colors.background)
-			.child("hello world");
+			.child("@@@hello world@");
 	}
 }

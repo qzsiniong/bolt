@@ -90,7 +90,25 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 窗口工具栏与面板一致（等级筛选 + `Clear`）。`Clear` 只清当前视图：缓冲里仍有历史，之后再开窗口还能看到它们。
 
-独立窗口的标题栏右上角有**置顶图钉**（复用 [`WindowPin`](src/ui/window_pin.rs)），并且**默认就置顶**：调试时它是个常驻仪表盘，被编辑器或浏览器盖住就没用了。点一下图钉落到普通层级，再点抬回 floating。层级是 NSWindow 的运行时消息，切换不重建窗口；dock 里的面板跟着脚本管理器窗口走，没有自己的层级，所以没有图钉。置顶状态不跨「关窗再开」保留——每次开窗都回到默认的置顶。
+独立窗口的标题栏是[统一窗口壳](#窗口与标题栏)的 `WindowTitleBar`（标题 + 「N 条输出」副标题 + 置顶图钉），并且**默认就置顶**：调试时它是个常驻仪表盘，被编辑器或浏览器盖住就没用了。点一下图钉落到普通层级，再点抬回 floating。层级是 NSWindow 的运行时消息，切换不重建窗口；dock 里的面板跟着脚本管理器窗口走，没有自己的层级，所以没有图钉。置顶状态不跨「关窗再开」保留——每次开窗都回到默认的置顶。
+
+### 窗口与标题栏
+
+所有带标题栏的内容窗口（脚本管理器、Console、JSON 编辑器、扩展管理、新建扩展、扩展 UI 窗口）共用 [`src/ui/window/`](src/ui/window) 一套壳：
+
+- **`WindowTitleBar`**：自绘标题栏构建器（13px 标题 + 可选 11px 副标题竖排 + 右侧控件），内部包 gpui-component 的 `TitleBar`——拖动、双击跟随系统设置、红绿灯让位都由它处理，本层只统一长相。
+- **`WindowPin`**：置顶图钉，**无自有状态**——渲染读 NSWindow 真实层级，点击翻转层级。「窗口是否置顶」只有这一个真相，图标显示的状态不可能与真实层级漂移。
+- **`WindowSpec` / `open_singleton`**：开窗样板收敛（激活已有 / 失效重建 + 尺寸/最小尺寸/系统标题）。「默认置顶」只在开窗参数 `WindowSpec.pinned(...)` 声明一处，开窗时、创建视图之前就把层级抬上去。
+- **`level`**：唯一的 NSWindow 层级 FFI（置顶 = floating 层级 3），便签的圆按钮图钉也共用这一份。
+
+| 窗口 | 默认置顶 | 说明 |
+| --- | --- | --- |
+| Console | **是** | 调试时的常驻仪表盘 |
+| 脚本管理器 | 否 | 主窗口，置顶会挡别的应用 |
+| JSON 编辑器 / 扩展管理 / 新建扩展 | 否 | 普通内容窗口 |
+| 扩展 UI 窗口 | `ui.always_on_top`（默认否） | 插件清单决定 |
+
+**不参与统一壳的窗口**（各有结构性理由，别顺手改造）：Launcher（无边框 Floating 面板、toggle 语义）、通知与取色（PopUp + FFI 改 styleMask 的特殊窗口）、交互提示浮窗（PopUp 非激活面板，系统标题栏）、便签（borderless，保留黑底圆形按钮视觉，但置顶状态共用同一份层级真相）。
 
 ### 插件（plux-rs）
 
@@ -164,6 +182,12 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 | `width` / `height` | `880` / `720` | 初始窗口尺寸，必须为正；小于宿主最小尺寸时以最小尺寸为准 |
 | `always_on_top` | `false` | 开窗即上浮到 floating 层级（标题栏上的图钉仍可随时切换） |
 | `capabilities.clipboard` | `false` | UI 命令能否读写剪贴板 |
+| `actions` | `[]` | 宿主标题栏右侧的自定义按钮，每项 `{"builtin": "reload" \| "open_data_dir" \| "open_plugin_dir" \| "close_window"}` 或 `{"command": "<脚本命令id>"}`；声明顺序即渲染顺序，图钉固定在最右 |
+
+`actions` 的两种按钮：
+
+- **`builtin`**：宿主内建动作，即时生效。`reload` 走扩展管理同一条「重载」路径——**会关闭该插件的所有 UI 窗口（包括按钮所在的这个）**，重开命令即用新代码；`open_data_dir` / `open_plugin_dir` 拉起访达；`close_window` 关掉当前窗口。
+- **`command`**：点击执行本清单里的一条**脚本命令**（必须存在且不能指向另一条 UI 命令，否则清单被拒绝加载）。它走插件运行时，输出与错误都进 Console——但**无法回写当前窗口的 UI**：gpui-shell 还没有宿主→插件的事件通道，窗口里的脚本视图与脚本命令是两套运行时。
 
 清单里出现 `ui` 命令时，插件目录必须提供 `main.js`——gpui-shell 对没有 `gpui-shell.json` 的目录固定加载它，不可改名。
 
@@ -323,7 +347,7 @@ export default class DemoPanel extends View {
 - 窗口根就是 gpui-shell 的 `ShellRoot`，所以脚本能用 shell 自带的浮层与焦点能力：`window.open_dialog(...)`、`window.open_sheet(...)`、`window.push_toast({ title, level })`、`window.open_url(url)`、`cx.read_from_clipboard()` 等。
 - 数据目录：`~/Library/Application Support/bolt/extensions-data/<id>/store.json`（`localStorage` 落在这里）。
 - **权限由宿主按 `ui` 块构建**：宿主始终授予「读插件目录 + 读/写自己的数据目录 + `storage` + `exit`」；`ui.capabilities.clipboard`（默认 `false`）额外开关读写剪贴板。UI 命令不经 `bolt` 模块，不适用 `permissions` 声明。整体信任模型（哪些代码默认拿什么、边界在哪）见[信任模型](docs/trust-model.md)。
-- **宿主自绘标题栏**：每个 UI 命令的窗口顶部由宿主提供一条标题栏（插件名 + 右上角置顶图钉），下方才是插件自己的界面。插件脚本无需也无法自绘这一区域。
+- **宿主自绘标题栏**：每个 UI 命令的窗口顶部由宿主提供一条标题栏（插件名 + 右上角置顶图钉，图钉左边可放 `ui.actions` 声明的按钮），下方才是插件自己的界面。插件脚本无需也无法自绘这一区域。
 - 首次加载会在插件目录自动生成 `gpui-kit.d.ts`；放一个 `jsconfig.json` 就能在 VSCode 里得到补全与类型检查。
 - **debug 构建**下保存 `main.js` 即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
 - `svg("icons/x.svg")` 相对**插件目录**解析（不是相对当前文件），插件目录里的同名文件会遮蔽内置 Lucide 图标。
@@ -810,7 +834,7 @@ ctx.globals().set("console", console)?;
 | [src/main.rs](src/main.rs) | 入口：仅 `mod` 声明 + `app::boot::run()` |
 | [src/app/](src/app) | 进程装配与窗口生命周期：`boot`（启动序列）、`shell`（AppShell 全局状态与共享服务）、`hotkey`（全局热键注册与轮询）、`launcher/`（应用主 UI：通用命令面板 + `LauncherItem`/`Module` 契约，不知道具体模块；拆成 `item` 契约、`collect` 收集排序、`filter` 查询/粘贴过滤、`actions` 动作构建、`list` 自绘列表（悬停不选中、单击选中、双击执行）、`panel` Cmd+K 浮层、`mod` 主视图与键盘分流；搜索框是宿主自己的 `Input`，类型 token、Cmd+V 粘贴识别、文本过滤与 ↑↓/Enter/Esc 键盘分流都在宿主侧完成）、`windows`（Launcher 窗口单例与被确认 item 的分发）、`assets`（内置图标 + 扩展目录的复合资源源）、`shell_log`（gpui-shell 的 tracing → Console 缓冲） |
 | [src/modules/](src/modules) | 内容模块，各自实现 `Module` trait 为 Launcher 提供 items：`apps/`（应用启动器：bundle 扫描、`InfoPlist.strings` 本地化解析、图标缓存、可编辑别名表）、`scripts/`（脚本管理器窗口 + 每条脚本一条运行命令）、`json_editor/`（原生 JSON 编辑器窗口）、`pin/`（「Pin 剪贴板」便签：把剪贴板图片/文本固定为桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板；`clipboard.rs` 只做 pin 专属的一层转换——把宿主公共的 `PasteContent` 转成便签展示类型，并给出便签尺寸）、`console/`（`panel` 是 Console 视图：脚本管理器的 dock 面板与独立窗口共用同一个组件，`chrome` 决定要不要自己画标题栏；`window` 是独立窗口的开窗逻辑（单例），`mod` 提供 Launcher 里的「Console」命令）、`extensions/`（插件：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接 + 插件清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表持久化、`actions` 插件级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载等落地操作、`manager/` 扩展管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘）。模块自己的窗口单例与专属资源放各自的 `state.rs`（Global） |
-| [src/ui/](src/ui) | 跨模块共享 UI 与纯前端逻辑：`interaction_window`（宿主交互浮层）、`window_pin`（置顶图钉公共控件）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`clipboard/`（NSPasteboard 读取与内容识别：`mod` 类型与 peek/read 入口、`files` Finder 文件条目、`html` 富文本转纯文本、`image` 格式与尺寸识别；`read_paste_content` 供 Launcher Cmd+V 与 pin 共用） |
+| [src/ui/](src/ui) | 跨模块共享 UI 与纯前端逻辑：`window/`（统一窗口壳：`title_bar` 自绘标题栏构建器、`pin` 无状态置顶图钉、`open` 开窗样板与默认置顶、`level` NSWindow 层级 FFI）、`interaction_window`（宿主交互浮层）、`editor_ops`（不依赖 gpui 上下文的纯文本编辑操作）、`clipboard/`（NSPasteboard 读取与内容识别：`mod` 类型与 peek/read 入口、`files` Finder 文件条目、`html` 富文本转纯文本、`image` 格式与尺寸识别；`read_paste_content` 供 Launcher Cmd+V 与 pin 共用） |
 | [src/model/](src/model) | 领域数据与磁盘布局：`script`、`script_store`、`project_gen` |
 | [src/runtime/](src/runtime) | 执行链路：`runner`（普通脚本的 QuickJS 运行 + 插件命令的 `run_plugin`）、`interaction`（宿主交互桥）、`interaction_window_manager`（待命/进度/确认浮窗与 pickPath 选择器的状态机）、`run_service`（应用级运行服务：任务队列、取消与状态广播，`RunTask` 分脚本与插件两种）、`ts_transform`（swc 类型擦除） |
 | [src/host/](src/host) | 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`；模块转发源码与文件解析复用 `plux-js-manager` 的导出，与插件侧同一份实现）与内置模块 `modules/{bolt,typer,qr}` |

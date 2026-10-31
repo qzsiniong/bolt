@@ -181,6 +181,7 @@ mod tests {
                     height: 320.,
                     always_on_top: false,
                     capabilities: UiCapabilities::default(),
+                    actions: Vec::new(),
                 }),
             ),
         ];

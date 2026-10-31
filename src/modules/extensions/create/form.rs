@@ -8,12 +8,11 @@ use std::path::PathBuf;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Disableable as _;
-use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Context, Entity, FontWeight, Hsla, IntoElement,
-    ParentElement as _, Render, Styled as _, Subscription, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Entity, Hsla, IntoElement, ParentElement as _,
+    Render, Styled as _, Subscription, Window, div, px,
 };
 
 use super::super::manifest::{active_extensions_dir, uses_bundled_extensions};
@@ -22,8 +21,11 @@ use super::super::scaffold::{self, ExtensionSpec, Field, SpecError, Template};
 use super::super::state::ExtensionsState;
 use crate::app::windows;
 use crate::ui::mac_ffi;
+use crate::ui::window::{WindowPin, WindowTitleBar};
 
 pub(crate) struct CreateExtensionView {
+    /// 标题栏右上角的置顶图钉（公共控件，读窗口真实层级）。
+    pin: Entity<WindowPin>,
     id: Entity<InputState>,
     name: Entity<InputState>,
     version: Entity<InputState>,
@@ -47,6 +49,7 @@ impl CreateExtensionView {
         });
 
         let mut view = Self {
+            pin: cx.new(|_| WindowPin::new()),
             id,
             name,
             version,
@@ -145,16 +148,9 @@ impl CreateExtensionView {
 
     // ── 渲染 ────────────────────────────────────────────────────────────
 
-    fn header(&self, cx: &Context<Self>) -> AnyElement {
-        let colors = cx.theme().colors;
-        TitleBar::new()
-            .child(
-                div()
-                    .text_size(px(13.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(colors.foreground)
-                    .child("新建扩展"),
-            )
+    fn header(&self, _cx: &Context<Self>) -> AnyElement {
+        WindowTitleBar::new("新建扩展")
+            .pin(self.pin.clone())
             .into_any_element()
     }
 

@@ -2,6 +2,7 @@
   "id": "hello",
   "name": "Hello",
   "version": "1.0.0",
+  "permissions": ["typeStr"],
   "commands": [
     {
       "id": "ui",
@@ -11,7 +12,14 @@
         "width": 180,
         "height": 120,
         "always_on_top": true,
-        "capabilities": { "clipboard": true }
+        "capabilities": { "clipboard": true },
+        "actions": [
+            { "builtin": "reload" },
+            { "builtin": "open_data_dir" },
+            { "builtin": "open_plugin_dir" },
+            { "builtin": "close_window" },
+            { "command": "sayHello" }
+        ]
       }
     },
     {

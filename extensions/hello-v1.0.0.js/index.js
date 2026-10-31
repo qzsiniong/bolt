@@ -1,11 +1,15 @@
-import { typeStr } from 'bolt';
+import { typeStr, confirm } from 'bolt';
 
-export function sayHello({ command, plugin, root, argv }) {
+let count = 0;
+
+export async function sayHello({ command, plugin, root, argv }) {
   console.log("xxx")
 
-  typeStr("123", 1000, 'typeStrtypeStrtypeStr')
+  // typeStr("123", 1000, 'typeStrtypeStrtypeStr')
+  //
+  const r = await confirm(`count: ${count++}`)
 
-  console.info("info")
+  console.info("info", r)
 
   // command: "hello"       plugin: { id: "demo", version: "1.0.0" }
   // root: 插件目录绝对路径   argv: 调用时传入的参数数组

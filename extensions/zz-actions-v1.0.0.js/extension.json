@@ -1,0 +1,22 @@
+{
+  "id": "zz-actions",
+  "name": "动作测试",
+  "version": "1.0.0",
+  "commands": [
+    {
+      "id": "panel",
+      "title": "动作面板",
+      "ui": {
+        "title": "动作测试",
+        "width": 420,
+        "height": 220,
+        "always_on_top": true,
+        "actions": [
+          { "builtin": "reload" },
+          { "builtin": "open_data_dir" },
+          { "builtin": "close_window" }
+        ]
+      }
+    }
+  ]
+}

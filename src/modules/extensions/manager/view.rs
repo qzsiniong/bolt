@@ -4,12 +4,12 @@
 //! 点「刷新」、以及任何一次操作之后。状态变化（禁用/卸载/新建）通过
 //! `AppShell::items_revision` 传进来，这时也只重取一次内存快照。
 
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{ActiveTheme as _, IconName, Sizable};
 use gpui_kit::{
-    AnyElement, App, Context, FontWeight, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window, div, px,
+    AnyElement, App, AppContext as _, Context, Entity, FontWeight, Hsla, InteractiveElement as _,
+    IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px,
 };
 use plux_js_manager::RuntimeState;
 use plux_rs::Bundle;
@@ -20,11 +20,14 @@ use super::super::manifest::{active_extensions_dir, extension_data_dir};
 use super::super::report_to_console;
 use super::super::state::ExtensionsState;
 use crate::app::shell::AppShell;
+use crate::ui::window::{WindowPin, WindowTitleBar};
 
 pub(crate) struct PluginManagerView {
     entries: Vec<PluginEntry>,
     selected: Option<Bundle>,
     status: String,
+    /// 标题栏右上角的置顶图钉（公共控件，读窗口真实层级）。
+    pin: Entity<WindowPin>,
     /// 上次看到的 items 版本号：外部操作（Launcher 动作、新建扩展）改过状态后
     /// 靠它决定要不要重取快照。
     seen_revision: u64,
@@ -36,6 +39,7 @@ impl PluginManagerView {
             entries: Vec::new(),
             selected: None,
             status: String::new(),
+            pin: cx.new(|_| WindowPin::new()),
             seen_revision: 0,
         };
         view.refresh(cx);
@@ -91,43 +95,28 @@ impl PluginManagerView {
     // ── 渲染 ────────────────────────────────────────────────────────────
 
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let colors = cx.theme().colors;
-        TitleBar::new()
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(colors.foreground)
-                            .child("扩展管理"),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(colors.muted_foreground)
-                            .child(self.status.clone()),
-                    ),
-            )
-            .child(div().flex_1())
-            .child(
+        WindowTitleBar::new("扩展管理")
+            .subtitle(self.status.clone())
+            // 右侧控件按声明顺序水平排列（公共壳自己包行容器）。
+            .trailing(
                 Button::new("ext-manager-new")
-                    .label("新建扩展")
-                    .primary()
-                    .compact()
+                    .icon(IconName::Plus)
+                    .small()
+                    .ghost()
+                    .tooltip("新建扩展")
                     .on_click(cx.listener(|_, _, _, cx| {
                         crate::modules::extensions::create::window::open_create(cx)
                     })),
             )
-            .child(
+            .trailing(
                 Button::new("ext-manager-refresh")
-                    .label("刷新")
+                    .icon(IconName::RefreshCw)
+                    .small()
                     .ghost()
-                    .compact()
+                    .tooltip("刷新")
                     .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
             )
+            .pin(self.pin.clone())
             .into_any_element()
     }
 

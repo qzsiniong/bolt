@@ -1,10 +1,11 @@
 //! 脚本管理器窗口的开窗逻辑（单例）。
 
-use gpui_kit::{App, AppContext as _, WindowOptions};
+use gpui_kit::{App, AppContext as _};
 
 use super::state::ScriptsState;
 use super::workspace::Workspace;
 use crate::app::shell::AppShell;
+use crate::ui::window::{WindowSpec, open_spec};
 
 /// Open the manager window as a singleton: focus the existing one (and
 /// optionally start its new-script flow), or create a fresh one.
@@ -44,7 +45,10 @@ pub(crate) fn open_manager(cx: &mut App, new_script: bool) {
             shell.console_channel.clone(),
         )
     };
-    let opened = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+    // 不设 size：沿用系统默认的开窗位置与尺寸（原来 `WindowOptions::default()`
+    // 的行为）。激活已有窗口要带副作用（触发新建脚本流程），所以不走
+    // `open_singleton`，自管既有句柄、只用 `open_spec` 开新窗。
+    let opened = open_spec(&WindowSpec::new("Bolt"), cx, |window, cx| {
         cx.new(|cx| Workspace::new(window, cx, lsp, console_log, run_service))
     });
     match opened {

@@ -245,5 +245,19 @@ pub(crate) fn run() {
             });
 
             // No window at startup: the app idles until Alt+Space.
+            // TEMP-VERIFY
+            if std::env::var("BOLT_OPEN_EXT_UI").is_ok() {
+                let target = {
+                    let state = cx.global::<crate::modules::extensions::state::ExtensionsState>();
+                    state.host.borrow_mut().refresh();
+                    let commands = state.host.borrow().commands();
+                    commands
+                        .into_iter()
+                        .find(|t| t.ui.as_ref().is_some_and(|ui| ui.title == "动作测试"))
+                };
+                if let Some(target) = target {
+                    crate::modules::extensions::ui_window::open_plugin_ui(cx, target);
+                }
+            }
         });
 }

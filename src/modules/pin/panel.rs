@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 
 use super::clipboard::{self, PinContent};
-use crate::ui::window_pin::{move_window_origin, set_window_level};
+use crate::ui::window::{is_pinned, move_origin, set_pinned};
 
 /// 悬停操作菜单的右上角小按钮的图标名 / 提示语 / 点击回调。
 #[derive(Clone, Debug)]
@@ -31,8 +31,6 @@ pub struct PinWindow {
     content: PinContent,
     /// 是否处于悬浮态（鼠标在窗口内），控制右上角操作菜单显隐。
     hovered: bool,
-    /// 是否已经置顶。运行时用户可点右上角图标切换。
-    pinned: bool,
     /// 图片缩放倍率（滚轮调整，10%–800%）。文本不缩放。
     zoom: f32,
 }
@@ -42,7 +40,6 @@ impl PinWindow {
         Self {
             content,
             hovered: false,
-            pinned: true,
             zoom: 1.,
         }
     }
@@ -100,7 +97,7 @@ impl PinWindow {
             let fy = cursor.y / old.size.height;
             let dx = fx * (old.size.width - px(w));
             let dy = fy * (old.size.height - px(h));
-            move_window_origin(window, dx.to_f64(), dy.to_f64());
+            move_origin(window, dx.to_f64(), dy.to_f64());
         }
         cx.notify();
     }
@@ -119,8 +116,8 @@ impl PinWindow {
             PanelAction::Close => window.remove_window(),
             PanelAction::Copy => self.copy_to_clipboard(cx),
             PanelAction::TogglePin => {
-                self.pinned = !self.pinned;
-                set_window_level(window, self.pinned);
+                // 状态唯一真相是窗口层级：不置顶的字段，读了再翻。
+                set_pinned(window, !is_pinned(window));
             }
             PanelAction::Save => self.save_to_disk(cx),
         }
@@ -189,7 +186,7 @@ impl PinWindow {
 }
 
 impl Render for PinWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = cx.theme().colors;
 
         // 根容器：背景跟主题保持一致，内部再按内容类型给自己的底。
@@ -255,7 +252,7 @@ impl Render for PinWindow {
 
         // 右上角操作菜单（悬停时浮现）。
         let hover_buttons = if self.hovered {
-            Some(self.action_buttons(cx))
+            Some(self.action_buttons(window, cx))
         } else {
             None
         };
@@ -319,7 +316,7 @@ impl Render for PinWindow {
 }
 
 impl PinWindow {
-    fn action_buttons(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn action_buttons(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         // macshot 风格：半透明黑色圆角底 + 白色图标，悬停/按下加深。
         // 直接给 `Button` 用 `.bg()` 无效——Button 渲染时按 variant 重设背景
         // 与前景（button.rs L717-L719），只能用 `custom` variant 传颜色。
@@ -363,12 +360,13 @@ impl PinWindow {
             (PanelAction::Save, IconName::Download, "保存"),
             (
                 PanelAction::TogglePin,
-                if self.pinned {
+                // 置顶与否读窗口真实层级，不自持状态（与图钉同一真相）。
+                if is_pinned(window) {
                     IconName::PinOff
                 } else {
                     IconName::Pin
                 },
-                if self.pinned {
+                if is_pinned(window) {
                     "取消置顶"
                 } else {
                     "置顶"
