@@ -178,8 +178,8 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 | 字段 | 默认 | 说明 |
 | --- | --- | --- |
-| `title` | 同命令标题 | 窗口标题、宿主自绘标题栏上显示的名字 |
-| `width` / `height` | `880` / `720` | 初始窗口尺寸，必须为正；小于宿主最小尺寸时以最小尺寸为准 |
+| `title` | 同命令标题 | 窗口标题：既是系统窗口标题，也是宿主自绘标题栏上的主标题。插件名作为副标题跟在后面（与主标题相同时不重复） |
+| `width` / `height` | `880` / `720` | 初始窗口尺寸，必须为正。小于宿主最小尺寸时以最小尺寸为准——**宽度还要放得下标题栏右侧的按钮**（每个动作约占 30pt，图钉常驻），否则图钉会被裁出窗口 |
 | `always_on_top` | `false` | 开窗即上浮到 floating 层级（标题栏上的图钉仍可随时切换） |
 | `capabilities.clipboard` | `false` | UI 命令能否读写剪贴板 |
 | `actions` | `[]` | 宿主标题栏右侧的自定义按钮，每项 `{"builtin": "reload" \| "open_data_dir" \| "open_plugin_dir" \| "close_window"}` 或 `{"command": "<脚本命令id>"}`，可再加 `icon` / `tooltip`；声明顺序即渲染顺序，图钉固定在最右 |

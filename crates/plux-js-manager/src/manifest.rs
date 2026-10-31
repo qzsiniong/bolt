@@ -135,10 +135,10 @@ impl Default for UiSpec {
 }
 
 impl UiSpec {
-    /// 窗口标题：清单没写就用命令标题。
-    pub fn display_title<'a>(&'a self, command: &'a PluginCommand) -> &'a str {
-        if self.title.is_empty() {
-            &command.title
+    /// 窗口标题：清单写了 `ui.title` 就用它，没写（或只有空白）回退到命令标题。
+    pub fn display_title<'a>(&'a self, command_title: &'a str) -> &'a str {
+        if self.title.trim().is_empty() {
+            command_title
         } else {
             &self.title
         }
@@ -595,12 +595,28 @@ mod tests {
         let package = read(&tmp.0.join("demo-v1.0.0.js")).expect("should load");
         let command = &package.manifest.commands[0];
         let ui = command.ui.as_ref().expect("ui block");
-        assert_eq!(ui.display_title(command), "面板");
+        assert_eq!(ui.display_title(&command.title), "面板");
         assert_eq!((ui.width, ui.height), (880., 720.));
         assert!(!ui.always_on_top);
         assert!(ui.capabilities.clipboard);
         assert!(ui.actions.is_empty());
         assert!(package.main.is_some());
+    }
+
+    #[test]
+    fn ui_title_overrides_the_command_title() {
+        let ui = UiSpec {
+            title: "UI窗口".to_string(),
+            ..UiSpec::default()
+        };
+        assert_eq!(ui.display_title("命令标题"), "UI窗口");
+
+        // 只写空白等于没写：不能因为一个空格就让标题栏空着。
+        let ui = UiSpec {
+            title: "   ".to_string(),
+            ..UiSpec::default()
+        };
+        assert_eq!(ui.display_title("命令标题"), "命令标题");
     }
 
     #[test]

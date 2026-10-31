@@ -42,11 +42,31 @@ use gpui_kit::{
 /// UI 命令窗口的最小尺寸；不会超过清单声明的尺寸。
 const EXTENSION_WINDOW_MIN_SIZE: (f32, f32) = (560., 420.);
 
-/// 扩展窗口的宿主外壳：宿主自绘标题栏（插件名 + 自定义动作按钮 + 置顶图钉）
-/// + 脚本视图。
+/// 标题栏右侧每个控件（动作按钮、图钉）占的宽度：`Button::small` 的图标按钮
+/// 约 26pt + 4pt 间距（实测值，改按钮尺寸要跟着改）。
+const CHROME_CONTROL_WIDTH: f32 = 30.;
+/// 标题栏左侧的固定开销：macOS 红绿灯留白 80 + 标题块（标题 + 副标题）约
+/// 92pt + 控件行内边距。
+const CHROME_LEADING_WIDTH: f32 = 176.;
+
+/// 宿主 chrome 需要的最小窗口宽度。
+///
+/// `TitleBar` 内部的 `#bar` 是 `flex_shrink_0`（gpui-component 里写死的），窄到
+/// 放不下时它不会收缩，而是让右侧控件溢出窗口——图钉首当其冲（排最后）。所以
+/// 宽度得由宿主兜底：动作按钮越多，窗口越宽。
+fn chrome_min_width(actions: usize) -> f32 {
+    // `+ 1` 是置顶图钉。
+    CHROME_LEADING_WIDTH + (actions + 1) as f32 * CHROME_CONTROL_WIDTH
+}
+
+/// 扩展窗口的宿主外壳：宿主自绘标题栏（窗口标题 + 插件名 + 自定义动作按钮 +
+/// 置顶图钉）+ 脚本视图。
 struct ExtensionChrome {
     shell_root: Entity<gpui_shell::ShellRoot>,
-    name: SharedString,
+    /// 主标题：清单 `ui.title`，没写时回退到命令标题。
+    title: SharedString,
+    /// 副标题：插件名，一眼看出这个窗口是谁开的。
+    plugin: SharedString,
     pin: Entity<WindowPin>,
     /// 清单 `ui.actions` 解析出的按钮，声明顺序即渲染顺序（图钉固定最右）。
     actions: Vec<ChromeAction>,
@@ -130,7 +150,11 @@ impl ExtensionChrome {
 impl Render for ExtensionChrome {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let actions_row = self.action_buttons(cx);
-        let mut bar = WindowTitleBar::new(self.name.clone());
+        let mut bar = WindowTitleBar::new(self.title.clone());
+        // 插件名当副标题；与主标题相同时不重复（脚手架模板默认就把它俩写成一样）。
+        if self.plugin != self.title {
+            bar = bar.subtitle(self.plugin.clone());
+        }
         if let Some(row) = actions_row {
             bar = bar.trailing(row);
         }
@@ -138,7 +162,7 @@ impl Render for ExtensionChrome {
             .flex()
             .flex_col()
             .size_full()
-            // 宿主自绘标题栏：公共壳（插件名 + 自定义动作按钮 + 置顶图钉）。
+            // 宿主自绘标题栏：公共壳（标题 + 插件名 + 自定义动作按钮 + 置顶图钉）。
             .child(bar.pin(self.pin.clone()))
             // flex_1：标题栏以下整块都是插件的渲染区。渲染 `content()` 而不是
             // `shell_root` 本身：窗口根已经是外层 `ShellRoot`，脚本视图直接当它的
@@ -250,8 +274,10 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
         .register_root(target.root.clone());
 
     let root = target.root.clone();
-    let name = target.plugin_name.clone();
-    let title = format!("{name} — Bolt");
+    let plugin = target.plugin_name.clone();
+    // 窗口标题 = 清单的 `ui.title`（省略时回退到命令标题）。它同时是自绘标题栏
+    // 的主标题与系统窗口标题——插件名退到副标题，不再顶替窗口标题。
+    let title = ui.display_title(&target.title).to_string();
     let load_console = console.clone();
     let window_size = (ui.width, ui.height);
     // 清单 ui.actions → 标题栏按钮。command 型按 (plugin_id, command_id) 回
@@ -321,14 +347,22 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     // 根视图必须是 ShellRoot（见模块头部说明），只能裸 `cx.open_window`——
     // `gpui_kit::open_window` 会包 base::Root，脚本侧的 tooltip/toast/dialog
     // 会静默失效。开窗参数仍统一走 `WindowSpec::to_options`。
+    // 清单要的尺寸小于 chrome 需要的宽度时以 chrome 为准：否则标题栏右侧那排
+    // 按钮（先是最右的图钉）会被裁掉。
+    let min_size = (
+        EXTENSION_WINDOW_MIN_SIZE
+            .0
+            .min(window_size.0)
+            .max(chrome_min_width(chrome_actions.len())),
+        EXTENSION_WINDOW_MIN_SIZE.1.min(window_size.1),
+    );
+    let size = (window_size.0.max(min_size.0), window_size.1.max(min_size.1));
     let spec = WindowSpec::new(title.clone())
-        .size(window_size.0, window_size.1)
-        .min_size(
-            EXTENSION_WINDOW_MIN_SIZE.0.min(window_size.0),
-            EXTENSION_WINDOW_MIN_SIZE.1.min(window_size.1),
-        )
+        .size(size.0, size.1)
+        .min_size(min_size.0, min_size.1)
         .pinned(pinned);
-    let chrome_name: SharedString = name.clone().into();
+    let chrome_title: SharedString = title.clone().into();
+    let chrome_plugin: SharedString = plugin.clone().into();
     let opened = cx.open_window(spec.to_options(cx), move |window, cx| {
         // 清单声明置顶：创建视图之前抬层级，`WindowPin` 首帧读到的就是真值。
         if pinned {
@@ -338,7 +372,8 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
         let pin = cx.new(|_| WindowPin::new());
         let chrome = cx.new(|_| ExtensionChrome {
             shell_root,
-            name: chrome_name,
+            title: chrome_title,
+            plugin: chrome_plugin,
             pin,
             actions: chrome_actions,
             subject,
@@ -348,7 +383,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
     let handle = match opened {
         Ok(handle) => handle,
         Err(e) => {
-            console.error(format!("无法打开插件窗口 {name}：{e}"));
+            console.error(format!("无法打开插件窗口 {title}：{e}"));
             return;
         }
     };
@@ -357,7 +392,7 @@ pub(crate) fn open_plugin_ui(cx: &mut App, target: CommandTarget) {
         .ui_windows
         .insert(target.root.clone(), handle.into());
     console.info(format!(
-        "已打开插件窗口 {name}（{plugin_id} · {}{}）",
+        "已打开插件窗口「{title}」（{plugin_id} · {}{}）",
         target.command_id,
         if pinned { " · 置顶" } else { "" }
     ));
@@ -431,6 +466,21 @@ mod tests {
     fn first_lines_truncates_and_marks() {
         assert_eq!(first_lines("a\nb", 3), "a\nb");
         assert_eq!(first_lines("a\nb\nc", 2), "a\nb\n…");
+    }
+
+    #[test]
+    fn chrome_min_width_covers_the_title_bar_controls() {
+        use super::{CHROME_CONTROL_WIDTH, chrome_min_width};
+
+        // 每多一个动作按钮，最小宽度就多一份控件宽度。
+        assert_eq!(
+            chrome_min_width(1) - chrome_min_width(0),
+            CHROME_CONTROL_WIDTH
+        );
+        // 至少要放得下 macOS 红绿灯 + 标题 + 图钉。
+        assert!(chrome_min_width(0) >= 200., "{}", chrome_min_width(0));
+        // 5 个动作 + 图钉在清单声明的 280 宽窗口里放不下（实测被裁的正是图钉）。
+        assert!(chrome_min_width(5) > 280.);
     }
 
     /// 在 headless 窗口里真实加载一个插件目录的入口脚本，构建并物化一次元素。
