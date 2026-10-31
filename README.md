@@ -45,7 +45,7 @@ cargo test --workspace               # 全部测试
 | [脚本 API](docs/script-api.md) | 普通脚本可用的运行时能力：`console`、定时器、`bolt` 内置模块、宿主交互 API |
 | [脚本目录与快捷键](docs/scripts.md) | 磁盘布局与自动生成的类型声明；编辑器快捷键与多光标列选 |
 | [在 Rust 侧扩展 JS 能力](docs/host-modules.md) | `HostModule` 框架：注册 Rust 模块供脚本 `import`，`.d.ts` 自动生成 |
-| [代码结构与架构要点](docs/architecture.md) | `src/` 领域分层、各目录职责与贯穿性设计决策 |
+| [代码结构与架构](docs/architecture.md) | 架构总览图、`src/` 领域分层、各目录职责与贯穿性设计决策 |
 | [环境要求与构建](docs/build.md) | 依赖、构建命令、打包 `.app`、菜单栏托盘、首次构建注意事项 |
 | [信任模型](docs/trust-model.md) | 哪些代码默认拿什么权限、边界在哪 |
 
