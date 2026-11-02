@@ -294,97 +294,214 @@ fn preferred_languages() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
 
-    #[test]
-    fn fill_names_is_noop_on_other_platforms() {
-        #[cfg(not(target_os = "macos"))]
-        {
-            let mut apps: Vec<crate::modules::apps::scan::AppEntry> = Vec::new();
-            fill_display_names_and_keywords(&mut apps);
-            assert!(apps.is_empty());
+    // ---------- 测试夹具：在临时目录里合成一个最小可解析的 .app ----------
+
+    /// XML plist 形式的 Info.plist / InfoPlist.strings 正文。
+    ///
+    /// `NSDictionary dictionaryWithContentsOfFile:` 按内容嗅探格式，不认扩展
+    /// 名，所以 .strings 文件里写 XML plist 也能正常解析；这样测试里不用
+    /// 手写 UTF-16 的旧式 strings 格式。
+    #[cfg(target_os = "macos")]
+    fn plist(dict_entries: &[(&str, &str)]) -> String {
+        let mut body = String::new();
+        for (key, value) in dict_entries {
+            body.push_str(&format!("<key>{key}</key><string>{value}</string>"));
+        }
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\
+             <plist version=\"1.0\"><dict>{body}</dict></plist>"
+        )
+    }
+
+    /// URL schemes 的 CFBundleURLTypes 正文（单条 type，插在 dict 内部）。
+    #[cfg(target_os = "macos")]
+    fn url_types(schemes: &[&str]) -> String {
+        let list: Vec<String> = schemes.iter().map(|s| format!("<string>{s}</string>")).collect();
+        format!(
+            "<key>CFBundleURLTypes</key><array><dict>\
+             <key>CFBundleURLSchemes</key><array>{}</array>\
+             </dict></array>",
+            list.concat()
+        )
+    }
+
+    /// plist 字符串条目 + 额外原始 XML（如 url_types）合成完整 Info.plist。
+    #[cfg(target_os = "macos")]
+    fn info_plist_xml(entries: &[(&str, &str)], extra: &str) -> String {
+        let mut body: Vec<String> = entries
+            .iter()
+            .map(|(k, v)| format!("<key>{k}</key><string>{v}</string>"))
+            .collect();
+        body.push(extra.to_string());
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\
+             <plist version=\"1.0\"><dict>{}</dict></plist>",
+            body.concat()
+        )
+    }
+
+    /// 在临时目录合成 `Contents/Info.plist` + `Resources/<lang>.lproj/`。
+    /// lproj 传 `(语言名, Option<InfoPlist.strings 正文>)`——None 表示目录
+    /// 存在但里面没有 strings 文件（企业微信的 zh-Hans 就是这种形态）。
+    /// 返回 .app 路径；目录前缀带进程 id，测试可并行。
+    #[cfg(target_os = "macos")]
+    fn make_fake_app(
+        tag: &str,
+        app_name: &str,
+        info_plist: &str,
+        lprojs: &[(&str, Option<&str>)],
+    ) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "bolt-names-test-{}-{}-{tag}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ));
+        let contents = dir.join(app_name).join("Contents");
+        std::fs::create_dir_all(&contents).unwrap();
+        std::fs::write(contents.join("Info.plist"), info_plist).unwrap();
+        for (lang, strings) in lprojs {
+            let lproj = contents.join("Resources").join(format!("{lang}.lproj"));
+            std::fs::create_dir_all(&lproj).unwrap();
+            if let Some(s) = strings {
+                std::fs::write(lproj.join("InfoPlist.strings"), s).unwrap();
+            }
+        }
+        dir.join(app_name)
+    }
+
+    /// 固定语言列表：与跑测试的机器的系统语言无关，CI 上才稳定。
+    #[cfg(target_os = "macos")]
+    const LANGS: &[&str] = &["zh-Hans", "Base", "en"];
+
+    #[cfg(target_os = "macos")]
+    fn cleanup(path: &Path) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::remove_dir_all(parent);
         }
     }
 
+    // ---------- bundle_info：受控语言，逐项断言 ----------
+
     #[cfg(target_os = "macos")]
     #[test]
-    fn wechat_gets_localized_name_and_url_schemes() {
-        use crate::modules::apps::scan::AppEntry;
-        let mut apps = vec![AppEntry {
-            path: PathBuf::from("/Applications/WeChat.app"),
-            name: "WeChat".to_string(),
-            original_name: "WeChat".to_string(),
-            subtitle: "应用".to_string(),
-            keywords: Vec::new(),
-        }];
-        fill_display_names_and_keywords(&mut apps);
+    fn wechat_bundle_info_reads_localization_schemes_and_id() {
+        let app = make_fake_app(
+            "wechat",
+            "WeChat.app",
+            &info_plist_xml(
+                &[
+                    ("CFBundleName", "WeChat"),
+                    ("CFBundleDisplayName", "WeChat"),
+                    ("CFBundleIdentifier", "com.tencent.xinWeChat"),
+                ],
+                &url_types(&["wechat", "weixin", "xweixin"]),
+            ),
+            &[
+                ("zh-Hans", Some(&plist(&[("CFBundleDisplayName", "微信")]))),
+                ("en", None),
+            ],
+        );
+        let info = bundle_info(&app, &LANGS.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .expect("假 bundle 应能解析");
 
-        // 本地化显示名：zh-Hans.lproj 里是「微信」。
-        assert_eq!(apps[0].name, "微信");
-        // original_name 不应该被覆盖。
-        assert_eq!(apps[0].original_name, "WeChat");
-        // bundle id 应包含 com.tencent.xinWeChat。
-        assert!(
-            apps[0]
-                .keywords
-                .iter()
-                .any(|k| k == "com.tencent.xinWeChat"),
-            "缺少 bundle id：{:?}",
-            apps[0].keywords
-        );
-        // URL schemes 应包含 wechat / weixin / xweixin。
-        let schemes: Vec<&str> = apps[0]
-            .keywords
-            .iter()
-            .filter(|k| !k.contains('.'))
-            .map(|s| s.as_str())
-            .collect();
-        assert!(
-            schemes.contains(&"wechat"),
-            "缺少 wechat scheme：{:?}",
-            schemes
-        );
-        assert!(
-            schemes.contains(&"weixin"),
-            "缺少 weixin scheme：{:?}",
-            schemes
-        );
+        assert_eq!(info.display_name.as_deref(), Some("微信"));
+        assert_eq!(info.bundle_id.as_deref(), Some("com.tencent.xinWeChat"));
+        // raw_names：Info.plist 原始名 + lproj 覆盖名都在，供搜索兜底。
+        assert!(info.raw_names.contains(&"WeChat".to_string()));
+        assert!(info.raw_names.contains(&"微信".to_string()));
+        for scheme in ["wechat", "weixin", "xweixin"] {
+            assert!(info.url_schemes.contains(&scheme.to_string()));
+        }
+        cleanup(&app);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn safari_keeps_filename_without_localization() {
-        use crate::modules::apps::scan::AppEntry;
-        let mut apps = vec![AppEntry {
-            path: PathBuf::from("/Applications/Safari.app"),
-            name: "Safari".to_string(),
-            original_name: "Safari".to_string(),
-            subtitle: "系统应用".to_string(),
-            keywords: Vec::new(),
-        }];
-        fill_display_names_and_keywords(&mut apps);
-
-        // Safari 没有 InfoPlist.strings 的覆盖，应保持 Safari。
-        assert_eq!(apps[0].name, "Safari");
-        // 有 bundle id。
-        assert!(
-            apps[0].keywords.iter().any(|k| k == "com.apple.Safari"),
-            "缺少 bundle id：{:?}",
-            apps[0].keywords
+    fn wecom_base_lproj_wins_over_en_when_zh_hans_is_empty() {
+        // 企业微信的形态：zh-Hans.lproj 目录存在但没有 InfoPlist.strings，
+        // Base.lproj 有中文、en.lproj 有英文。Base 必须先于 en 命中。
+        let app = make_fake_app(
+            "wecom",
+            "企业微信.app",
+            &plist(&[
+                ("CFBundleName", "WeCom"),
+                ("CFBundleDisplayName", "WeCom"),
+                ("CFBundleIdentifier", "com.tencent.WeWorkMac"),
+            ]),
+            &[
+                ("zh-Hans", None),
+                ("Base", Some(&plist(&[("CFBundleDisplayName", "企业微信")]))),
+                ("en", Some(&plist(&[("CFBundleDisplayName", "WeCom")]))),
+            ],
         );
+        let info = bundle_info(&app, &LANGS.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .expect("假 bundle 应能解析");
+
+        assert_eq!(info.display_name.as_deref(), Some("企业微信"));
+        assert_eq!(info.bundle_id.as_deref(), Some("com.tencent.WeWorkMac"));
+        // zh-Hans 命中失败后 Base 生效；en 的覆盖值也进了 raw_names。
+        assert!(info.raw_names.contains(&"WeCom".to_string()));
+        assert!(info.raw_names.contains(&"企业微信".to_string()));
+        cleanup(&app);
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn wecom_uses_base_lproj_chinese_name() {
-        // 企业微信：zh-Hans.lproj 目录存在但 InfoPlist.strings 不在里面，
-        // en.lproj 有英文覆盖 WeCom，Base.lproj 有中文"企业微信"。
-        // Base 优先于 en，所以应该命中 Base 的中文版本。
+    fn bundle_without_localization_falls_back_to_info_plist_name() {
+        let app = make_fake_app(
+            "safari",
+            "Safari.app",
+            &plist(&[
+                ("CFBundleName", "Safari"),
+                ("CFBundleIdentifier", "com.apple.Safari"),
+            ]),
+            &[],
+        );
+        let info = bundle_info(&app, &LANGS.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+            .expect("假 bundle 应能解析");
+
+        // 没有任何 InfoPlist.strings：display_name 回退到 Info.plist 原始名。
+        assert_eq!(info.display_name.as_deref(), Some("Safari"));
+        assert_eq!(info.bundle_id.as_deref(), Some("com.apple.Safari"));
+        assert!(info.url_schemes.is_empty());
+        cleanup(&app);
+    }
+
+    // ---------- fill_display_names_and_keywords：集成路径 ----------
+    //
+    // 这里走真实 preferred_languages()（系统语言，CI 上是 en-US），所以只断言
+    // 与语言无关的部分：bundle id、schemes、静态别名、original_name 不被覆盖。
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn fill_adds_bundle_id_schemes_and_aliases() {
         use crate::modules::apps::scan::AppEntry;
+        let app = make_fake_app(
+            "fill-wecom",
+            "企业微信.app",
+            &plist(&[
+                ("CFBundleName", "WeCom"),
+                ("CFBundleDisplayName", "WeCom"),
+                ("CFBundleIdentifier", "com.tencent.WeWorkMac"),
+            ]),
+            &[
+                ("zh-Hans", None),
+                ("Base", Some(&plist(&[("CFBundleDisplayName", "企业微信")]))),
+            ],
+        );
         let mut apps = vec![AppEntry {
-            path: PathBuf::from("/Applications/企业微信.app"),
+            path: app.clone(),
             name: "企业微信".to_string(),
             original_name: "企业微信".to_string(),
             subtitle: "应用".to_string(),
@@ -392,28 +509,26 @@ mod tests {
         }];
         fill_display_names_and_keywords(&mut apps);
 
-        assert_eq!(apps[0].name, "企业微信");
+        // original_name 不被覆盖；显示名一定非空（本地化名或原始名兜底）。
+        assert_eq!(apps[0].original_name, "企业微信");
+        assert!(!apps[0].name.is_empty(), "显示名不应为空");
+        // bundle id + 静态别名（weixin 来自 default-aliases.json，与语言无关）。
         assert!(
-            apps[0]
-                .keywords
-                .iter()
-                .any(|k| k == "com.tencent.WeWorkMac"),
+            apps[0].keywords.iter().any(|k| k == "com.tencent.WeWorkMac"),
             "缺少 bundle id：{:?}",
             apps[0].keywords
         );
-        // raw_names：Info.plist 原始 CFBundleDisplayName 是 WeCom，
-        // 必须进 keywords，这样搜 wecom 也能命中。
-        assert!(
-            apps[0].keywords.iter().any(|k| k == "WeCom"),
-            "缺少 WeCom raw_name：{:?}",
-            apps[0].keywords
-        );
-        // 静态别名：weixin 不在 Info.plist 里，但用户经常混用，
-        // 必须能搜到企业微信。
         assert!(
             apps[0].keywords.iter().any(|k| k == "weixin"),
             "缺少 weixin 静态别名：{:?}",
             apps[0].keywords
         );
+        // raw_names：Info.plist 原始英文名必须可搜。
+        assert!(
+            apps[0].keywords.iter().any(|k| k == "WeCom"),
+            "缺少 WeCom raw_name：{:?}",
+            apps[0].keywords
+        );
+        cleanup(&app);
     }
 }
