@@ -743,8 +743,6 @@ dependencies = [
  "cexpr",
  "clang-sys",
  "itertools 0.13.0",
- "log",
- "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -6868,16 +6866,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "primefield"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7118,7 +7106,6 @@ name = "quickjs-jit-sys"
 version = "0.12.11"
 source = "git+https://github.com/longbridge/quickjs-jit?rev=96593cd7a54440ac060a391b8baea7e9a3cf1393#96593cd7a54440ac060a391b8baea7e9a3cf1393"
 dependencies = [
- "bindgen",
  "cc",
 ]
 

@@ -38,10 +38,15 @@ crossbeam-channel = "0.5"
 # 0.14 → 0.12：由下面的 [patch.crates-io] 指向 gpui-kit 的 `rquickjs` 兼容
 # facade（它 `pub use quickjs_jit::*`），让脚本引擎与 gpui-shell 的扩展运行时
 # 共用同一个 QuickJS，避免两套 QuickJS C 静态库的重复符号冲突。
+#
+# ⚠️ 不要开 `bindgen` feature：它会传染到 quickjs-jit-sys（feature 统一），
+# 让所有平台改为「libclang 编译时现场生成绑定」。macOS 上恰好生成 u32 枚举
+# 所以能过；Windows 的 MSVC 把 C 枚举生成为 i32，与 quickjs-jit-runtime 按
+# u32 写死的用法冲突，97 个 E0308/E0425 直接编译失败。默认的预生成绑定
+# （sys/src/bindings/）各平台都是 u32 且常量齐全，不开发行版 bindgen。
 rquickjs = { version = "0.12", features = [
 	"loader",
 	"macro",
-	"bindgen",
 	"futures",
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
