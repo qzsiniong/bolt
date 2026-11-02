@@ -6,6 +6,7 @@ use gpui_kit::ImageFormat;
 use gpui_kit::base::input::InlineTokenSpan;
 
 use super::item::LauncherItem;
+use crate::app::pinyin;
 use crate::ui::clipboard::{PasteContent, PendingPaste};
 
 /// 把 token 覆盖的字节区间从文本里剥掉，剩下的手输片段拼空格。
@@ -53,6 +54,10 @@ pub(crate) fn matches_query_terms(query: &str, fields: &[&str]) -> bool {
 
 /// item 是否命中查询：见 [`matches_query_terms`]，参与字段是
 /// title、id、subtitle、keywords（逐字段 OR，逐词 AND）。
+///
+/// 含汉字的字段会先经 [`pinyin::variants`] 派生出「全拼」与「首字母」
+/// 两个额外 haystack（「微信」可被 `weixin` / `wx` 命中）。派生只发生在
+/// 这里，不回写 `item.keywords`——那是用户可编辑的数据。
 fn matches_query(item: &LauncherItem, query: &str) -> bool {
     if query.trim().is_empty() {
         return true;
@@ -65,6 +70,17 @@ fn matches_query(item: &LauncherItem, query: &str) -> bool {
         fields.push(subtitle);
     }
     fields.extend(item.keywords.iter().map(String::as_str));
+
+    // 拼音变体持有在本地，再以引用追加进 fields；owned 不再变长后推引用，
+    // 借用检查是安全的。纯 ASCII 字段返回 None，不会产生重复 haystack。
+    let mut variants: Vec<(String, String)> = Vec::new();
+    for field in &fields {
+        if let Some(variant) = pinyin::variants(field) {
+            variants.push(variant);
+        }
+    }
+    fields.extend(variants.iter().flat_map(|(full, initials)| [full.as_str(), initials.as_str()]));
+
     matches_query_terms(query, &fields)
 }
 
@@ -208,6 +224,35 @@ mod tests {
         // 只有空白 = 没输入：匹配一切，而不是匹配空串。
         assert_eq!(visible_indices(&items, "   ", None), vec![0]);
         assert_eq!(visible_indices(&items, "\u{3000}", None), vec![0]);
+    }
+
+    #[test]
+    fn hanzi_fields_match_pinyin_queries() {
+        let mut it = item("wecom", "应用");
+        it.title = "企业微信".into();
+        let items = vec![it];
+
+        // 全拼（连写，子串命中）与首字母都能命中中文标题。
+        assert_eq!(visible_indices(&items, "weixin", None), vec![0]);
+        assert_eq!(visible_indices(&items, "qiyeweixin", None), vec![0]);
+        assert_eq!(visible_indices(&items, "wx", None), vec![0]);
+        assert_eq!(visible_indices(&items, "qywx", None), vec![0]);
+        // 拼音 + 汉字跨词 AND 照常生效。
+        assert_eq!(visible_indices(&items, "企业 weixin", None), vec![0]);
+        assert!(visible_indices(&items, "wxyz", None).is_empty());
+    }
+
+    #[test]
+    fn chinese_keywords_match_pinyin_queries() {
+        let mut it = item("console", "内置");
+        it.title = "控制台".into();
+        it.keywords = vec!["微信".into(), "wechat".into()];
+        let items = vec![it];
+
+        assert_eq!(visible_indices(&items, "weixin", None), vec![0]);
+        assert_eq!(visible_indices(&items, "wx", None), vec![0]);
+        // 关键词原有的 ASCII 匹配不受影响。
+        assert_eq!(visible_indices(&items, "wechat", None), vec![0]);
     }
 
     #[test]

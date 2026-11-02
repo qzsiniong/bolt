@@ -5,6 +5,7 @@ pub(crate) mod boot;
 mod hotkey;
 pub(crate) mod keywords;
 pub(crate) mod launcher;
+pub(crate) mod pinyin;
 pub(crate) mod shell;
 mod shell_log;
 pub(crate) mod tray;
