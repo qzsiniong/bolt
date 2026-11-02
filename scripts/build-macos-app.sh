@@ -6,6 +6,9 @@
 #   ./scripts/build-macos-app.sh           # 编译 + 打包
 #   ./scripts/build-macos-app.sh --sign    # 额外做 ad-hoc 签名（可自运行，绕过 Gatekeeper）
 #   ./scripts/build-macos-app.sh --clean   # 先清理再编译
+#   ./scripts/build-macos-app.sh --universal
+#                                          # arm64 + x86_64 各编一份，lipo 合成
+#                                          # 通用二进制（CI release 用）
 #
 # 需要：cargo（nightly 或 stable 都行）。签名可选：需要 Xcode command line tools。
 set -euo pipefail
@@ -19,10 +22,12 @@ ENTITLEMENTS_SRC="$ROOT/packaging/macos/entitlements.plist"
 
 SIGN=0
 CLEAN=0
+UNIVERSAL=0
 for arg in "$@"; do
     case "$arg" in
-        --sign)  SIGN=1 ;;
-        --clean) CLEAN=1 ;;
+        --sign)      SIGN=1 ;;
+        --clean)     CLEAN=1 ;;
+        --universal) UNIVERSAL=1 ;;
         *) echo "未知参数：$arg"; exit 1 ;;
     esac
 done
@@ -34,8 +39,19 @@ if [ "$CLEAN" = "1" ]; then
     cargo clean
 fi
 
-echo "==> cargo build --release"
-cargo build --release
+if [ "$UNIVERSAL" = "1" ]; then
+    echo "==> cargo build --release（universal：arm64 + x86_64）"
+    cargo build --release --target aarch64-apple-darwin
+    cargo build --release --target x86_64-apple-darwin
+    echo "==> lipo 合成通用二进制"
+    lipo -create \
+        -output "$ROOT/target/release/$BINARY_NAME" \
+        "$ROOT/target/aarch64-apple-darwin/release/$BINARY_NAME" \
+        "$ROOT/target/x86_64-apple-darwin/release/$BINARY_NAME"
+else
+    echo "==> cargo build --release"
+    cargo build --release
+fi
 
 # --- 组装 .app 目录结构 ---
 APP_DIR="$ROOT/target/release/$APP_NAME.app"
@@ -52,6 +68,13 @@ chmod +x "$MACOS_DIR/$BINARY_NAME"
 
 echo "==> 复制 Info.plist"
 cp "$PLIST_SRC" "$CONTENTS/Info.plist"
+# 版本号不手写进 Info.plist：打包时从根 Cargo.toml 读出来注入，保证
+# tag / Cargo.toml / Finder 显示的三处一致（release.yml 会校验前两者）。
+APP_VERSION="$(cargo metadata --no-deps --format-version 1 \
+    | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="bolt"))')"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $APP_VERSION" "$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $APP_VERSION" "$CONTENTS/Info.plist"
+echo "    版本：$APP_VERSION"
 # 写入 PkgInfo（APPL + 四个空格，AppKit 应用的标配）
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 

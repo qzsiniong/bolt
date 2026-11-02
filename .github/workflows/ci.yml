@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # release.yml 复用这套检查：打 tag 后先跑完整 CI 再打包。
+  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

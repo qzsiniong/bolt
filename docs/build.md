@@ -76,6 +76,19 @@ scripts/
 | `LSUIElement` | `true` | 后台代理应用：Dock 不显示、不在 Cmd+Tab 列表，窗口由托盘 / 快捷键唤起 |
 | `LSMinimumSystemVersion` | `12.0` | 最低 macOS 版本 |
 
+脚本支持 `--universal`（arm64 + x86_64 各编一份后 lipo 合成）与 `--sign`（ad-hoc 签名）；版本号**不手写**进 Info.plist——打包时从根 `Cargo.toml` 读出并注入 `CFBundleShortVersionString` / `CFBundleVersion`。
+
+### 发布（GitHub Actions）
+
+[.github/workflows/release.yml](../.github/workflows/release.yml)：打 `v*` tag（如 `v0.1.0`）自动打包发布；`workflow_dispatch` 手动触发只出 artifact、不发 Release（先试跑流水线用）。
+
+流水线：复用 `ci.yml` 全量检查 → 校验 tag 与根 `Cargo.toml` 的 version 一致 → 双平台打包：
+
+- **macOS**：`build-macos-app.sh --universal --sign` → dmg（`Bolt_<版本>_macos_universal.dmg`）。
+- **Windows**：`cargo build --release` → zip 便携包（`Bolt_<版本>_windows_x64.zip`）。
+
+两个产物汇成一份 **draft Release**（带自动生成 notes），到 Releases 页面点 Publish 才可见。发布物均未签名/未公证，说明文案已写入 Release notes。
+
 > **注意**：不要加 `LSBackgroundOnly`——它会禁止应用创建任何窗口（Launcher / 脚本管理器都弹不出来）。`LSUIElement` 才是「无 Dock 图标但能开窗」的正确键。
 
 ### 菜单栏托盘

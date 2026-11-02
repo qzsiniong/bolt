@@ -1,0 +1,145 @@
+name: Release
+
+# 打 tag（如 v0.1.0）即打包发布 macOS + Windows 产物；
+# workflow_dispatch 只打包并上传 workflow artifact，不创建 Release（用来先试跑流水线）。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 打包前先把 ci.yml 那套测试跑一遍（tag 指向的提交必须是通过测试的提交）
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  verify:
+    name: 校验版本号
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: tag 与根 Cargo.toml 的 version 一致
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="bolt") | .version')"
+          echo "ref=${GITHUB_REF}  tag=${GITHUB_REF_NAME}  Cargo.toml=${ver}"
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+            echo "手动触发：跳过 tag 校验"
+            exit 0
+          fi
+          if [[ "${GITHUB_REF_NAME#v}" != "${ver}" ]]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与根 Cargo.toml 的 version ${ver} 不一致（打包出的 .app 版本号注入自后者）"
+            exit 1
+          fi
+
+  build:
+    name: 打包 ${{ matrix.name }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS（universal：arm64 + x86_64）
+            platform: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows（x64，zip 便携包）
+            platform: windows-latest
+            targets: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 打包产物名用根包版本，与 verify 校验的是同一处。
+      - name: 读版本号
+        id: version
+        shell: bash
+        run: |
+          ver="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="bolt") | .version')"
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      # --- macOS：universal 二进制 → .app（ad-hoc 签名）→ dmg ---
+      - name: 打包 .app 并生成 dmg
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-macos-app.sh --universal --sign
+          hdiutil create \
+            -volname "Bolt" \
+            -srcfolder target/release/Bolt.app \
+            -ov -format UDZO \
+            "Bolt_${{ steps.version.outputs.version }}_macos_universal.dmg"
+
+      # --- Windows：release exe → zip 便携包（未配 NSIS，先出绿色版） ---
+      - name: 打包 Windows zip
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          cargo build --release
+          $stage = "Bolt_${{ steps.version.outputs.version }}_windows_x64"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item target/release/bolt.exe "$stage/Bolt.exe"
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+
+      - name: 上传 workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bolt-${{ matrix.platform }}
+          path: |
+            Bolt_*.dmg
+            Bolt_*.zip
+          if-no-files-found: error
+
+  # 汇总两份产物，建/更新 draft Release（需要到 Releases 页面点一次 Publish）。
+  release:
+    name: 创建 Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: 创建 draft Release 并上传
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ls -la dist
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Bolt ${GITHUB_REF_NAME}" \
+            --notes "$(cat <<'EOF'
+          下载对应平台产物即可：
+
+          - macOS：`Bolt_*_macos_universal.dmg`（arm64 + x86_64 通用）。**未签名/未公证**（仅 ad-hoc 签名），首次打开若被 Gatekeeper 拦截，右键 →「打开」，或执行 `xattr -cr /Applications/Bolt.app`。
+          - Windows：`Bolt_*_windows_x64.zip`（便携包，解压即用）。**未签名**，SmartScreen 会提示「未知发布者」，选「更多信息 → 仍要运行」。
+
+          首次运行需要系统授权：辅助功能（typeStr 注入按键）与屏幕录制（scanQr 截屏），首次调用对应 API 时系统会自动弹窗。
+          EOF
+          )" \
+            --draft \
+            --generate-notes \
+            dist/*
