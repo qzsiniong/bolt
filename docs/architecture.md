@@ -57,6 +57,15 @@
 | `extensions/` | 扩展：`manifest` 目录扫描与播种、`host` 与注册表对接 + 清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表、`actions` 扩展级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载、`manager/` 管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘 |
 | `color_picker/` | 屏幕取色：覆盖鼠标所在显示器的透明浮窗 + 全屏放大镜拾色，复制 HEX 色值 |
 
+### 平台边界
+
+[src/platform/](../src/platform) 是宿主唯一允许出现平台差异的地方：
+
+- `mod.rs` — 与平台无关的部分：`open_in_background` / `reveal_in_background` 的工作线程与回调调度（**GPUI 回调里只能用它们打开/选中路径**，原因见「窗口与系统集成」）、废纸篓的文件系统回退 `move_to_trash`、剪贴板写入 `copy_text` 的公共入口。
+- `macos.rs` — `/usr/bin/open`、NSPasteboard、`NSFileManager` 废纸篓、三处 `/Applications`、`CGDisplay` 坐标翻转。
+- `windows.rs` — `open` / `trash` / `arboard` 三个 crate + `explorer /select,`、开始菜单扫描根、`cmd /C`。
+- `unsupported.rs` — 其余平台：明确报错，不静默成功。
+
 ### 跨模块 UI
 
 [src/ui/](../src/ui) 放不属于任何单一模块的前端逻辑：
@@ -123,8 +132,7 @@
 - **卸载就是注销 + 移废纸篓**：先注销运行时再动磁盘，没有扩展间依赖需要考虑。
 
 ### 窗口与系统集成
-
-- **别在 GPUI 回调里同步激活别的 App**：窗口事件处理器跑在 `App::update` 里（App 已被借用），此时同步调 `-[NSWorkspace selectFile:…]` 之类的「切前台」API，AppKit 可能在自己的调用栈里派发回 `windowDidResignKey` / 激活回调，GPUI 再借一次 App → `RefCell already borrowed` 直接 abort（`cargo run` 里表现为 `failed to initiate panic, error 3`）。全项目只有一对入口：`mac_ffi::reveal_in_background`（选中）与 `mac_ffi::open_in_background`（打开），底层都是 `/usr/bin/open`（激活交给子进程与 launchd），线程与结果回调由它们内部管。四个调用点（扩展动作、新建扩展窗口、脚本列表、应用/脚本的 Cmd+K）都走这一对。
+- **别在 GPUI 回调里同步激活别的 App**：窗口事件处理器跑在 `App::update` 里（App 已被借用），此时同步调「切前台」API（macOS 的 `-[NSWorkspace selectFile:…]`），AppKit 可能在自己的调用栈里派发回 `windowDidResignKey` / 激活回调，GPUI 再借一次 App → `RefCell already borrowed` 直接 abort（`cargo run` 里表现为 `failed to initiate panic, error 3`）。全项目只有一对入口：`platform::reveal_in_background`（选中）与 `platform::open_in_background`（打开），线程与结果回调由它们内部管。四个调用点（扩展动作、新建扩展窗口、脚本列表、应用/脚本的 Cmd+K）都走这一对。
 - **标题栏尺寸决定窗口最小宽度**：gpui-component 的 TitleBar 内部是 `flex_shrink_0`，内容超宽只溢出、不收缩；所以窗口宽度必须满足 `176 + 30 × 按钮数` 的下限，否则图钉会被裁掉。
 
 ### 语言服务
@@ -132,10 +140,31 @@
 - **LSP 客户端**：`std::process` 启动子进程，用阻塞线程做 stdin 写入与 stdout 帧解析，与 GPUI 的 `background_spawn` 协作，不引入 tokio。子进程会注入 PATH，保证从 Finder 启动时也能找到 `node`。
 - **补全修正**：`typescript-language-server` 返回的候选带全量列表且无 `text_edit`，provider 侧按光标前缀过滤并补齐 `text_edit` 范围，避免成员访问时点号被替换吞掉。
 
+## 平台支持
+
+宿主代码不写 `#[cfg(target_os)]`，平台差异全部收在 [src/platform/](../src/platform)：`mod.rs` 放与平台无关的部分（工作线程调度、废纸篓的文件系统回退），`macos.rs` / `windows.rs` 各自实现同一组 `imp::*`，都没有时退到 `unsupported.rs`（返回明确错误，不假装成功）。
+
+| 能力 | macOS | Windows |
+| --- | --- | --- |
+| Launcher / 搜索 / 脚本 / 扩展 / 管理窗口 | ✅ | ✅ |
+| 全局快捷键 | `Alt+Space` / `Cmd+Shift+T` | `Ctrl+Alt+Space` / `Ctrl+Shift+T`（Alt+Space 是系统菜单，占用） |
+| 打开路径 / 在文件管理器中显示 | `/usr/bin/open`（`-R` 选中） | `ShellExecuteW`（`open` crate）/ `explorer /select,` |
+| 文本剪贴板 | NSPasteboard（原始 `msg_send!`） | `arboard` |
+| 图片剪贴板 / 文件剪贴板 | ✅ | ⏳ 未接（只读文本） |
+| 应用扫描 | `/Applications` 三处 `.app` | 开始菜单两处 `.lnk` / `.exe` |
+| 应用图标 / 本地化名 | `NSWorkspace` + `Info.plist` | ⏳ 退到文件名 + 默认图标 |
+| 卸载到废纸篓 | `NSFileManager trashItemAtURL:` | `trash` crate（`IFileOperation`，带回滚站） |
+| 通知卡片 | ✅（贴在光标所在屏底部） | ✅（固定在主显示器底部） |
+| 窗口置顶 / 光标所在屏 | ✅ | ⏳ 暂缺（no-op） |
+| 托盘菜单 | `NSStatusItem` | ⏳ 未做 |
+| 屏幕取色 | ✅ | ⏳ 模块在非 macOS 下不编译，不进 Launcher |
+
+`cargo check` 只能验证当前平台的分支——Windows 分支由 CI（`.github/workflows/ci.yml` 的 `windows` job）编译，运行时行为需要真机验收。
+
 ## 新增一个模块
 
 1. 在 `modules/` 下建目录，实现 `Module` trait（产出 `LauncherItem`，动作走 `LauncherAction`）。
 2. 加进 `default_modules()`。
 3. 需要脱离 gpui 单测的部分（如运行时）放 `crates/` 下独立 crate。
 
-分组规则一句话：`app` 管进程装配与 Launcher 主 UI，`modules` 放内容模块，`ui` 放跨模块共享控件与纯前端逻辑，`runtime` 放执行链路，`host` 放宿主扩展框架及原生实现，`core` 放与领域无关、可单独测试的通用设施；能脱离 gpui 独立编译的组件进 `crates/`（扩展运行时、Console 通道、类型擦除、LSP 客户端、脚本领域模型）。
+分组规则一句话：`app` 管进程装配与 Launcher 主 UI，`modules` 放内容模块，`ui` 放跨模块共享控件与纯前端逻辑，`platform` 放平台边界（打开路径、剪贴板、废纸篓、应用目录、shell 调用），`runtime` 放执行链路，`host` 放宿主扩展框架及原生实现，`core` 放与领域无关、可单独测试的通用设施；能脱离 gpui 独立编译的组件进 `crates/`（扩展运行时、Console 通道、类型擦除、LSP 客户端、脚本领域模型）。

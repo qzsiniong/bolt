@@ -89,11 +89,6 @@ impl PinContent {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn read_clipboard(_console: &ConsoleChannel) -> Option<PinContent> {
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

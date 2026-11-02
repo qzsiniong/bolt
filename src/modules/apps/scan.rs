@@ -28,25 +28,37 @@ pub(crate) struct ScanRoot {
     pub(crate) label: &'static str,
 }
 
-/// 默认扫描三处标准目录。
+/// 默认扫描根目录。macOS 是三处 `/Applications` 系，Windows 是开始菜单的
+/// 两个 `Programs` 目录（当前用户 + 所有用户）。
 pub(crate) fn default_roots() -> Vec<ScanRoot> {
-    let mut roots = vec![
-        ScanRoot {
-            path: PathBuf::from("/Applications"),
-            label: "应用",
-        },
-        ScanRoot {
-            path: PathBuf::from("/System/Applications"),
-            label: "系统应用",
-        },
-    ];
-    if let Some(home) = dirs::home_dir() {
-        roots.push(ScanRoot {
-            path: home.join("Applications"),
-            label: "用户应用",
-        });
+    crate::platform::app_roots()
+        .into_iter()
+        .map(|(path, label)| ScanRoot { path, label })
+        .collect()
+}
+
+/// 目录项是不是一个「应用」，是则返回去掉后缀的基名。
+///
+/// macOS 的应用是 `.app` 包目录（叶子，不再深入）；Windows 的开始菜单里是
+/// `.lnk` 快捷方式文件（同目录下可能还有 `.url`，这里先只认 `.lnk` 与 `.exe`）。
+#[cfg(target_os = "macos")]
+fn app_stem<'a>(file_type: &std::fs::FileType, name: &'a str) -> Option<&'a str> {
+    (file_type.is_dir() && name.ends_with(".app")).then(|| name.trim_end_matches(".app"))
+}
+
+#[cfg(target_os = "windows")]
+fn app_stem<'a>(file_type: &std::fs::FileType, name: &'a str) -> Option<&'a str> {
+    if !file_type.is_file() || name.len() <= 4 {
+        return None;
     }
-    roots
+    // 后缀比较不区分大小写：开始菜单里 `.lnk` / `.LNK` 都出现过。
+    let suffix = name[name.len() - 4..].to_ascii_lowercase();
+    (suffix == ".lnk" || suffix == ".exe").then(|| &name[..name.len() - 4])
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn app_stem<'a>(file_type: &std::fs::FileType, name: &'a str) -> Option<&'a str> {
+    (file_type.is_dir() && name.ends_with(".app")).then(|| name.trim_end_matches(".app"))
 }
 
 /// 递归扫描所有根目录；不进入 `.app` 内部，跳过隐藏目录与符号链接目录
@@ -75,7 +87,7 @@ fn collect(
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        if !file_type.is_dir() || file_type.is_symlink() {
+        if file_type.is_symlink() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -83,25 +95,27 @@ fn collect(
             continue;
         }
         let path = entry.path();
-        if name.ends_with(".app") {
+        if let Some(stem) = app_stem(&file_type, &name) {
             // canonicalize：同一个 App 可能出现在多个根（或经软链），去重。
             let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
             if !seen.insert(canonical.clone()) {
                 continue;
             }
             out.push(AppEntry {
-                name: name.trim_end_matches(".app").to_string(),
-                original_name: name.trim_end_matches(".app").to_string(),
+                name: stem.to_string(),
+                original_name: stem.to_string(),
                 // 副标题用原始路径算：canonicalize 会把 /var 解析成 /private/var，
                 // 与扫描根的字符串前缀对不上。
                 subtitle: subtitle_for(&path, root, label),
                 path: canonical,
                 keywords: Vec::new(),
             });
-            // .app 是叶子：绝不进入 Contents 内部找嵌套的 .app。
+            // 应用是叶子：绝不进入 `.app`/安装目录内部再找嵌套应用。
             continue;
         }
-        collect(&path, root, label, seen, out);
+        if file_type.is_dir() {
+            collect(&path, root, label, seen, out);
+        }
     }
 }
 

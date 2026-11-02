@@ -35,7 +35,7 @@ pub(crate) struct ScreenSnapshot {
 /// 返回 Err（本次中止，授权后下次生效）。
 pub(crate) fn capture_all() -> Result<Vec<ScreenSnapshot>, String> {
     if !ensure_capture_access() {
-        crate::ui::mac_ffi::notify("屏幕取色", PERMISSION_HINT);
+        crate::ui::notify_window::notify("屏幕取色", PERMISSION_HINT);
         return Err("缺少屏幕录制权限".to_string());
     }
 
@@ -62,7 +62,7 @@ pub(crate) fn capture_all() -> Result<Vec<ScreenSnapshot>, String> {
             Ok(img) => img,
             Err(e) => {
                 // 单屏失败容忍：跳过该屏，其余屏幕继续。
-                crate::ui::mac_ffi::notify("屏幕取色", &format!("一块显示器截屏失败：{e}"));
+                crate::ui::notify_window::notify("屏幕取色", &format!("一块显示器截屏失败：{e}"));
                 continue;
             }
         };

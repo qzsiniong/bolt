@@ -12,6 +12,9 @@
 
 use std::path::{Path, PathBuf};
 
+// 文件形态的读取只有 macOS 用；其余平台保留代码（file:// URL 归一化是纯逻辑，
+// 有测试盯着），但不参与编译期的死代码检查。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod files;
 mod html;
 mod image;
@@ -264,7 +267,21 @@ pub(crate) fn read_paste_content(console: &ConsoleChannel) -> Option<PasteConten
     None
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows：走 `arboard` 读纯文本（HTML 富文本与文件形态暂未接，见下）。
+///
+/// 位图暂不支持——`arboard` 给的是裸 RGBA，要变成 gpui 能解码的通道得自己编码
+/// PNG；这一步留到平台适配的第二阶段，当前只保证文本粘贴链路完整。
+#[cfg(target_os = "windows")]
+pub(crate) fn read_paste_content(_console: &ConsoleChannel) -> Option<PasteContent> {
+    let mut clipboard = arboard::Clipboard::new().ok()?;
+    let text = clipboard.get_text().ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(classify_text(text))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn read_paste_content(_console: &ConsoleChannel) -> Option<PasteContent> {
     None
 }
@@ -338,7 +355,13 @@ pub(crate) fn peek_paste(_console: &ConsoleChannel) -> Option<PendingPaste> {
     None
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows：与 [`read_paste_content`] 同一套判定（只读文本，不读位图）。
+#[cfg(target_os = "windows")]
+pub(crate) fn peek_paste(_console: &ConsoleChannel) -> Option<PendingPaste> {
+    read_paste_content(_console).map(PendingPaste::Ready)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn peek_paste(_console: &ConsoleChannel) -> Option<PendingPaste> {
     None
 }

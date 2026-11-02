@@ -20,7 +20,8 @@ use super::super::report_to_console;
 use super::super::scaffold::{self, ExtensionSpec, Field, SpecError, Template};
 use super::super::state::ExtensionsState;
 use crate::app::windows;
-use crate::ui::mac_ffi;
+use crate::platform;
+use crate::ui::notify_window;
 use crate::ui::window::{WindowPin, WindowTitleBar};
 
 pub(crate) struct CreateExtensionView {
@@ -400,9 +401,9 @@ impl CreateExtensionView {
                             // 处理器里同步激活别的 App（会重入 GPUI 的 App 借用）。
                             .on_click(cx.listener(move |_, _, _, _| {
                                 let target = root.clone();
-                                mac_ffi::reveal_in_background(root.clone(), move |result| {
+                                platform::reveal_in_background(root.clone(), move |result| {
                                     if let Err(error) = result {
-                                        mac_ffi::notify(
+                                        notify_window::notify(
                                             "Bolt",
                                             &format!("无法显示 {}：{error}", target.display()),
                                         );

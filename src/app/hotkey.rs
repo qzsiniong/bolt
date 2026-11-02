@@ -20,11 +20,61 @@ static HOTKEY_IDS: OnceLock<Vec<(u32, HotKeyId)>> = OnceLock::new();
 /// 区分应用注册的快捷键中是哪一个触发的。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HotKeyId {
-    /// Alt+Space → 唤起 / 关闭 Launcher。
+    /// Alt+Space（Windows: Ctrl+Alt+Space）→ 唤起 / 关闭 Launcher。
     Launcher,
-    /// Cmd+Shift+T → Pin 当前剪切板内容。
+    /// Cmd+Shift+T（Windows: Ctrl+Shift+T）→ Pin 当前剪切板内容。
     PinClipboard,
 }
+
+// 默认键位按平台分开：
+//
+// - macOS 的 Alt+Space 无主，直接用；Cmd+Shift+T 也不会撞系统键。
+// - Windows 的 Alt+Space 是窗口系统菜单（SC_KEYMENU），注册不上；SUPER 就是
+//   Win 键，Win+Shift+T 与系统快捷键冲突的概率高。所以换成 Ctrl+Alt+Space /
+//   Ctrl+Shift+T。
+//
+// 写成函数而不是 const：`Modifiers::SUPER | Modifiers::SHIFT` 是 bitflags 的
+// 运算符重载，不是 const 表达式。
+#[cfg(target_os = "macos")]
+fn launcher_keys() -> (Modifiers, Code) {
+    (Modifiers::ALT, Code::Space)
+}
+#[cfg(target_os = "macos")]
+fn pin_keys() -> (Modifiers, Code) {
+    (Modifiers::SUPER | Modifiers::SHIFT, Code::KeyT)
+}
+
+#[cfg(target_os = "windows")]
+fn launcher_keys() -> (Modifiers, Code) {
+    (Modifiers::CONTROL | Modifiers::ALT, Code::Space)
+}
+#[cfg(target_os = "windows")]
+fn pin_keys() -> (Modifiers, Code) {
+    (Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyT)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn launcher_keys() -> (Modifiers, Code) {
+    (Modifiers::ALT, Code::Space)
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn pin_keys() -> (Modifiers, Code) {
+    (Modifiers::SUPER | Modifiers::SHIFT, Code::KeyT)
+}
+
+/// 唤起 Launcher 的快捷键，给界面文案（托盘 tooltip、Console、文档）用。
+pub(crate) const LAUNCHER_HINT: &str = if cfg!(target_os = "windows") {
+    "Ctrl+Alt+Space"
+} else {
+    "Alt+Space"
+};
+
+/// Pin 剪切板的快捷键，用途同上。
+pub(crate) const PIN_HINT: &str = if cfg!(target_os = "windows") {
+    "Ctrl+Shift+T"
+} else {
+    "Cmd+Shift+T"
+};
 
 /// 单个快捷键的注册结果：`HotKeyId` 配上它注册成功或失败的原因。
 pub(super) type HotKeyRegistration = (HotKeyId, Result<(), String>);
@@ -37,14 +87,16 @@ pub(super) type HotKeyRegistrations = (Option<GlobalHotKeyManager>, Vec<HotKeyRe
 pub(super) fn register() -> HotKeyRegistrations {
     match GlobalHotKeyManager::new() {
         Ok(manager) => {
+            let (launcher_mods, launcher_code) = launcher_keys();
+            let (pin_mods, pin_code) = pin_keys();
             let registrations = vec![
                 (
                     HotKeyId::Launcher,
-                    HotKey::new(Some(Modifiers::ALT), Code::Space),
+                    HotKey::new(Some(launcher_mods), launcher_code),
                 ),
                 (
                     HotKeyId::PinClipboard,
-                    HotKey::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyT),
+                    HotKey::new(Some(pin_mods), pin_code),
                 ),
             ];
             let mut results = Vec::with_capacity(registrations.len());

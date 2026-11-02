@@ -18,7 +18,8 @@ use gpui_kit::{App, Image, ImageFormat, ImageSource};
 use crate::app::launcher::{ItemAction, LauncherAction, LauncherIcon, LauncherItem, Module};
 use crate::app::shell::AppShell;
 use crate::app::windows;
-use crate::ui::mac_ffi;
+use crate::platform;
+use crate::ui::notify_window;
 use scan::AppEntry;
 
 /// 启动后先等一会儿再补图标：让应用完成启动、全局快捷键的事件 tap 挂上
@@ -197,7 +198,7 @@ fn item_for(app: AppEntry, icons: &HashMap<PathBuf, Vec<u8>>) -> LauncherItem {
             title: "在 Finder 中显示".to_string(),
             shortcut: None,
             // 投递到工作线程：`open` 不该卡 UI 帧，也不该在 GPUI 回调里同步激活
-            // 别的 App（见 mac_ffi::reveal_in_background 的注释）。
+            // 别的 App（见 platform::reveal_in_background 的注释）。
             run: Arc::new({
                 let display = reveal_path
                     .file_name()
@@ -205,10 +206,16 @@ fn item_for(app: AppEntry, icons: &HashMap<PathBuf, Vec<u8>>) -> LauncherItem {
                     .unwrap_or_default();
                 move |_| {
                     let display = display.clone();
-                    mac_ffi::reveal_in_background(reveal_path.clone(), move |result| match result {
-                        Ok(()) => mac_ffi::notify("Bolt", &format!("已在 Finder 中显示 {display}")),
-                        Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
-                    })
+                    platform::reveal_in_background(
+                        reveal_path.clone(),
+                        move |result| match result {
+                            Ok(()) => notify_window::notify(
+                                "Bolt",
+                                &format!("已在 Finder 中显示 {display}"),
+                            ),
+                            Err(e) => notify_window::notify("Bolt", &format!("显示失败：{e}")),
+                        },
+                    )
                 }
             }),
             dialog: None,
@@ -216,9 +223,9 @@ fn item_for(app: AppEntry, icons: &HashMap<PathBuf, Vec<u8>>) -> LauncherItem {
         ItemAction {
             title: "复制路径".to_string(),
             shortcut: None,
-            run: Arc::new(move |_| match mac_ffi::copy_text(&copy_path) {
-                Ok(()) => mac_ffi::notify("Bolt", "路径已复制到剪贴板"),
-                Err(e) => mac_ffi::notify("Bolt", &format!("复制失败：{e}")),
+            run: Arc::new(move |_| match platform::copy_text(&copy_path) {
+                Ok(()) => notify_window::notify("Bolt", "路径已复制到剪贴板"),
+                Err(e) => notify_window::notify("Bolt", &format!("复制失败：{e}")),
             }),
             dialog: None,
         },
@@ -238,17 +245,16 @@ fn item_for(app: AppEntry, icons: &HashMap<PathBuf, Vec<u8>>) -> LauncherItem {
 }
 
 /// 启动应用。使用频率计数由 launcher 统一处理（主回车确认时按 item.id）。
+///
+/// 走 [`platform::open_in_background`]：默认程序（macOS `open`、Windows
+/// `ShellExecute`）在工作线程里调，不占 UI 帧；结果回调只写 Console。
 fn launch(cx: &mut App, path: &Path, name: &str) {
     let console = cx.global::<AppShell>().console_channel.clone();
-
-    match std::process::Command::new("open").arg(path).status() {
-        Ok(status) if status.success() => console.info(format!("已启动应用：{name}")),
-        Ok(status) => console.warn(format!(
-            "启动应用 {name} 失败：open 退出码 {:?}",
-            status.code()
-        )),
-        Err(e) => console.error(format!("启动应用 {name} 失败：{e}")),
-    }
+    let display = name.to_string();
+    platform::open_in_background(path.to_path_buf(), move |result| match result {
+        Ok(()) => console.info(format!("已启动应用：{display}")),
+        Err(e) => console.error(format!("启动应用 {display} 失败：{e}")),
+    });
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

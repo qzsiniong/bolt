@@ -63,7 +63,6 @@ global-hotkey = "0.8"
 # typeStr uses enigo for cross-platform keyboard simulation.
 # scanQr needs CoreGraphics for the screen-capture permission check.
 enigo = "0.6"
-core-graphics = "0.24"
 xcap = { version = "0.9", default-features = false, features = ["image"] }
 rqrr = "0.11"
 image = { version = "0.25", default-features = false }
@@ -117,6 +116,24 @@ gpui-base = "0.7.3"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 raw-window-handle = "0.6"
+# 显示器枚举 / 光标所在屏 / 截屏权限探测（取色器、二维码截屏、通知卡片的定位）。
+core-graphics = "0.24"
+
+# Windows 侧的平台实现（见 `src/platform/windows.rs`）。按 API 域最小开特性：
+# Shell（ShellExecuteW / 废纸篓）、窗口消息（HWND 前后台）、GDI（显示器与光标）。
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+	"Win32_Foundation",
+	"Win32_Graphics_Gdi",
+	"Win32_UI_Shell",
+	"Win32_UI_WindowsAndMessaging",
+] }
+# 默认程序打开路径（ShellExecute 语义）与系统回收站（IFileOperation）。
+open = "5"
+trash = "5"
+# 文本 / 图片剪贴板。macOS 侧不用它：它依赖 objc2-app-kit（objc2 0.5），会与
+# 我们直接用的 objc2 0.6 打架，所以 macOS 走 `ui/mac_ffi.rs` 的原始消息。
+arboard = "3"
 
 # quickjs-jit 的 JIT 在 opt-level = 0 下慢约 3 倍（上游建议）。
 [profile.dev.package.quickjs-jit-sys]

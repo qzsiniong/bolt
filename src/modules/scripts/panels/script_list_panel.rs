@@ -18,7 +18,7 @@ use gpui_kit::{
 
 use super::editor::EditorPanel;
 use crate::app::shell::AppShell;
-use crate::ui::mac_ffi;
+use crate::platform;
 use bolt_model::script::{Language, Script};
 use bolt_model::script_store;
 
@@ -187,7 +187,7 @@ impl ScriptListPanel {
     /// 在 Finder 中打开脚本目录。
     fn reveal_scripts_dir(&mut self, cx: &mut Context<Self>) {
         let console = cx.global::<AppShell>().console_channel.clone();
-        mac_ffi::open_in_background(self.scripts_dir.clone(), move |result| {
+        platform::open_in_background(self.scripts_dir.clone(), move |result| {
             if let Err(e) = result {
                 console.warn(format!("打开脚本目录失败：{e}"));
             }
@@ -197,7 +197,7 @@ impl ScriptListPanel {
     /// 在 Finder 中选中一个脚本文件。
     fn reveal_script(&mut self, file_name: String, cx: &mut Context<Self>) {
         let console = cx.global::<AppShell>().console_channel.clone();
-        mac_ffi::reveal_in_background(self.scripts_dir.join(file_name), move |result| {
+        platform::reveal_in_background(self.scripts_dir.join(file_name), move |result| {
             if let Err(e) = result {
                 console.warn(format!("在 Finder 中显示脚本失败：{e}"));
             }

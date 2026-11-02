@@ -30,6 +30,22 @@ cargo test -p bolt-lsp           # 只跑 LSP 客户端
 
 工程是 cargo workspace：根包 `bolt` 是应用本体，[crates/](../crates) 下是脱离 gpui 可独立编译、单独测试的组件（切分标准与清单见 [architecture.md](architecture.md)）：[bolt-extensions](../crates/bolt-extensions)（JS 扩展注册表与运行时，通用可复用、不含宿主业务逻辑）、`bolt-console`（Console 输出通道）、`bolt-ts`（swc 类型擦除）、`bolt-lsp`（LSP 客户端）、`bolt-model`（脚本领域模型与数据目录）。`[patch]` / `[profile]` 只在 workspace 根生效。
 
+### 平台支持与 CI
+
+macOS 是主开发平台，Windows 正在适配（能力矩阵见 [architecture.md](architecture.md#平台支持)）。平台差异全部收在 [src/platform/](../src/platform)，宿主代码里不再出现 `#[cfg(target_os)]`。
+
+- **本地只能验证当前平台**：`cargo check` 不会编译别的平台分支，而 Windows 目标需要 MSVC/SDK，macOS 机器交叉编译不了 QuickJS 这类 C 依赖。
+- **Windows 分支由 CI 编译**：`.github/workflows/ci.yml` 的 `windows` job 跑 `cargo check` + `clippy`；`macos` job 跑 `cargo test` + `clippy -D warnings`。
+- **运行时行为要真机验收**：托盘、置顶、光标所在屏、剪贴板这些没有单测，只能人工确认。
+
+构建命令（两个平台一致）：
+
+```bash
+cargo run
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
 ### 依赖说明（无本地补丁）
 
 项目**不再对 gpui-kit 生态打本地补丁**：Launcher 主搜索框与 Cmd+K 动作面板都用原生能力实现——搜索框是宿主自己的 `Input`（类型 token、粘贴识别、二次过滤全在宿主侧），列表是自绘的 `list` 模块（悬停不选中、单击选中、双击执行），所以不需要 `Command::searchable(false)` 这类绕过手段，也不需要 cargo-patch-crate 与 `patches/` 目录。
@@ -92,7 +108,7 @@ scripts/
 
 **QuickJS-JIT 签名要求**：`entitlements.plist` 里声明了 `com.apple.security.cs.allow-unsigned-executable-memory`，因为 QuickJS-JIT 在进程内动态生成机器码。没有这个 entitlement，签名后的 App 一跑脚本就会 `SIGKILL`。
 
-应用启动时会依次完成：**先建 Console 缓冲**（第一时间创建，启动期任何失败都进 Console 而不是只到 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库扩展）→ 生成 `demo` 示例扩展（目录已存在则不动）→ 装配扩展宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher）。
+应用启动时会依次完成：**先建 Console 缓冲**（第一时间创建，启动期任何失败都进 Console 而不是只到 stderr——`.app` 双击启动时 stderr 用户看不到）→ 创建脚本目录、确定扩展目录（debug 直接用仓库 `extensions/`，release 用数据目录并播种仓库扩展）→ 生成 `demo` 示例扩展（目录已存在则不动）→ 装配扩展宿主与 JS 运行时环境 → 注册内置 HostModule 并生成项目文件 → 启动语言服务 → 初始化 gpui-shell 运行时 → 注册全局热键后台待命（不打开窗口，按 `Alt + Space` 唤起 Launcher；Windows 上是 `Ctrl + Alt + Space`，见 [src/app/hotkey.rs](../src/app/hotkey.rs)）。
 
 `eprintln!` 只保留给「Console 本身还没建立」之前的兜底；此后所有启动期与运行期错误都走 `ConsoleChannel`（共享缓冲，容量 1000、溢出丢最旧；视图打开前的条目会留着，打开后一并显示；调试构建下还会同时打到终端）。`Error` 级条目另外同步落盘到数据目录的 `bolt.log`（滚动保留最近 500 行）——用户若从不打开 Console，日志文件就是启动失败唯一的出路。
 

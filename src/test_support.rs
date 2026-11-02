@@ -37,11 +37,6 @@ impl Drop for TempDir {
     }
 }
 
-/// 构造 LSP 位置。
-pub fn position(line: u32, character: u32) -> lsp_types::Position {
-    lsp_types::Position { line, character }
-}
-
 /// 用真实 runner（注册全部内建 host 模块）跑一段 JS，返回 Console 里的行。
 /// host 层测试靠它端到端走一遍公开的 `import { … } from 'bolt'` 路径。
 pub fn run_js(code: &str, scripts_dir: &Path) -> Vec<String> {

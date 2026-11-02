@@ -79,7 +79,11 @@ fn matches_query(item: &LauncherItem, query: &str) -> bool {
             variants.push(variant);
         }
     }
-    fields.extend(variants.iter().flat_map(|(full, initials)| [full.as_str(), initials.as_str()]));
+    fields.extend(
+        variants
+            .iter()
+            .flat_map(|(full, initials)| [full.as_str(), initials.as_str()]),
+    );
 
     matches_query_terms(query, &fields)
 }

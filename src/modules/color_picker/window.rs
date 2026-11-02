@@ -20,7 +20,8 @@ use std::sync::Arc;
 
 use crate::app::shell::AppShell;
 use crate::modules::color_picker::capture::{self, ScreenSnapshot};
-use crate::ui::mac_ffi::{copy_text, notify};
+use crate::platform::copy_text;
+use crate::ui::notify_window::notify;
 
 /// 网格边长（奇数，中心格 = 光标下的像素）：滚轮可调范围与默认起点。
 const GRID_MIN: usize = 15;

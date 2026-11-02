@@ -139,6 +139,12 @@ pub struct ConsoleChannel {
     mirror: bool,
 }
 
+impl Default for ConsoleChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConsoleChannel {
     /// 建一个既不落盘也不镜像到终端的通道。测试与嵌入场景用；生产走
     /// [`new_with_error_log`]。

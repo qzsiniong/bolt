@@ -12,7 +12,8 @@ use super::state::ExtensionsState;
 use super::{report_to_console, ui_window};
 use crate::app::shell::AppShell;
 use crate::app::windows;
-use crate::ui::mac_ffi;
+use crate::platform;
+use crate::ui::notify_window;
 
 /// 启用 / 禁用。禁用 = 不注册、不加载，Launcher 里命令直接消失。
 pub(crate) fn set_enabled(cx: &mut App, subject: &ActionSubject, enabled: bool) {
@@ -72,13 +73,13 @@ pub(crate) fn reload(cx: &mut App, subject: &ActionSubject) {
 
 /// 在 Finder 中显示扩展目录（选中那一层）。
 ///
-/// 拉起 Finder 的动作**放到工作线程**（`mac_ffi::reveal_in_background` 内部起
+/// 拉起 Finder 的动作**放到工作线程**（`platform::reveal_in_background` 内部起
 /// 线程）：调用方是 GPUI 的点击处理器，在里面同步激活别的 App 会让 AppKit 在
 /// 自己的调用栈里就把失焦回调派发回来，GPUI 随即再借一次 App → 直接 abort。
 pub(crate) fn reveal(cx: &App, subject: &ActionSubject) {
     let root = subject.root.clone();
     let console = console(cx).clone();
-    mac_ffi::reveal_in_background(root.clone(), move |result| {
+    platform::reveal_in_background(root.clone(), move |result| {
         if let Err(error) = result {
             console.warn(format!("无法在 Finder 中显示 {}：{error}", root.display()));
         }
@@ -99,7 +100,7 @@ pub(crate) fn open_data_dir(cx: &App, subject: &ActionSubject) {
         }
     };
     let console = console(cx).clone();
-    mac_ffi::open_in_background(dir.clone(), move |result| {
+    platform::open_in_background(dir.clone(), move |result| {
         if let Err(error) = result {
             console.warn(format!("无法打开 {}：{error}", dir.display()));
         }
@@ -122,15 +123,15 @@ pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
         return;
     }
 
-    let moved = match mac_ffi::trash_item(&subject.root) {
+    let moved = match platform::trash_item(&subject.root) {
         Ok(()) => Ok(format!("已移到废纸篓：{}", subject.root.display())),
         Err(error) => {
-            // NSFileManager 失败（权限、远程卷）时退回纯 fs 重命名；仍失败就
-            // **不删**，让用户自己处理——删用户文件不是"尽力而为"的操作。
-            let fallback = dirs::home_dir()
-                .map(|home| home.join(".Trash"))
+            // 系统废纸篓失败（权限、远程卷）时退回纯 fs 重命名；平台没有可写的
+            // 废纸篓目录（Windows 的回收站不是普通目录）或回退也失败，就**不删**，
+            // 让用户自己处理——删用户文件不是"尽力而为"的操作。
+            let fallback = platform::trash_dir()
                 .ok_or_else(|| error.clone())
-                .and_then(|trash| mac_ffi::move_to_trash(&subject.root, &trash));
+                .and_then(|trash| platform::move_to_trash(&subject.root, &trash));
             match fallback {
                 Ok(target) => Ok(format!(
                     "系统废纸篓不可用（{error}），已移到 {}",
@@ -155,7 +156,7 @@ pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
     match moved {
         Ok(message) => {
             console(cx).info(format!("卸载扩展 {}：{message}", subject.label()));
-            mac_ffi::notify(
+            notify_window::notify(
                 "Bolt",
                 &format!(
                     "已卸载扩展 {}{}",

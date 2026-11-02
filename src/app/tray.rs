@@ -16,7 +16,9 @@
 use std::sync::OnceLock;
 
 use crossbeam_channel::{Receiver, Sender};
+#[cfg(target_os = "macos")]
 use objc2::runtime::{AnyClass, AnyObject};
+#[cfg(target_os = "macos")]
 use objc2::{class, msg_send};
 
 use bolt_console::ConsoleChannel;
@@ -45,6 +47,7 @@ pub(crate) fn command_channel() -> Receiver<TrayCommand> {
     rx
 }
 
+#[cfg(target_os = "macos")]
 fn post(cmd: TrayCommand) {
     if let Some(tx) = TRAY_TX.get() {
         let _ = tx.send(cmd);
@@ -85,7 +88,10 @@ pub(crate) fn init(console: &ConsoleChannel) {
             if !image.is_null() {
                 let _: () = msg_send![button, setImage: image];
             }
-            let tooltip = crate::ui::mac_ffi::ns_string("Bolt — Alt+Space 唤起");
+            let tooltip = crate::ui::mac_ffi::ns_string(&format!(
+                "Bolt — {} 唤起",
+                super::hotkey::LAUNCHER_HINT
+            ));
             if !tooltip.is_null() {
                 let _: () = msg_send![button, setToolTip: tooltip];
             }

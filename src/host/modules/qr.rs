@@ -4,7 +4,6 @@
 //! 然后解出第一个能读通的二维码。返回的文本是什么意思由调用方决定——本模块
 //! 只负责把它取出来。
 
-use core_graphics::access::ScreenCaptureAccess;
 use image::GrayImage;
 use image::imageops::{FilterType, grayscale, resize};
 use rqrr::PreparedImage;
@@ -16,13 +15,32 @@ use crate::runtime::interaction::InteractionBridge;
 /// 解码耗时保持稳定。
 const MAX_CAPTURE_WIDTH: u32 = 1600;
 
-const CAPTURE_ACCESS_HINT: &str = "识别二维码需要「屏幕录制」权限：请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Bolt（修改后需重启应用）";
-
 /// 本进程是否有截屏权限。缺权限时顺带向系统申请一次。取色器模块共用。
+///
+/// 只有 macOS 有「屏幕录制」这道显式授权；Windows 的截屏走的是普通桌面访问，
+/// 不存在单独开关。
+#[cfg(target_os = "macos")]
 pub(crate) fn ensure_capture_access() -> bool {
+    use core_graphics::access::ScreenCaptureAccess;
     let access = ScreenCaptureAccess;
     access.preflight() || access.request()
 }
+
+#[cfg(target_os = "windows")]
+pub(crate) fn ensure_capture_access() -> bool {
+    true
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) fn ensure_capture_access() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+const CAPTURE_ACCESS_HINT: &str = "识别二维码需要「屏幕录制」权限：请在「系统设置 → 隐私与安全性 → 屏幕录制」中允许 Bolt（修改后需重启应用）";
+
+#[cfg(not(target_os = "macos"))]
+const CAPTURE_ACCESS_HINT: &str = "当前系统没有授予 Bolt 截屏能力";
 
 /// `scanQr()`：解出第一个二维码返回 `Ok(Some(text))`，所有屏幕都没有则
 /// `Ok(None)`。

@@ -13,8 +13,9 @@ use gpui_kit::App;
 use gpui_kit::assets::IconName;
 
 use crate::app::launcher::{ItemAction, LauncherAction, LauncherItem, Module, PasteHandler};
+use crate::platform;
 use crate::ui::clipboard::PasteContent;
-use crate::ui::mac_ffi;
+use crate::ui::notify_window;
 use bolt_model::script::Language;
 use bolt_model::script_store;
 
@@ -95,13 +96,15 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
                             .unwrap_or_default();
                         move |_| {
                             let display = display.clone();
-                            mac_ffi::reveal_in_background(reveal_path.clone(), move |result| {
+                            platform::reveal_in_background(reveal_path.clone(), move |result| {
                                 match result {
-                                    Ok(()) => mac_ffi::notify(
+                                    Ok(()) => notify_window::notify(
                                         "Bolt",
                                         &format!("已在 Finder 中显示 {display}"),
                                     ),
-                                    Err(e) => mac_ffi::notify("Bolt", &format!("显示失败：{e}")),
+                                    Err(e) => {
+                                        notify_window::notify("Bolt", &format!("显示失败：{e}"))
+                                    }
                                 }
                             })
                         }
@@ -111,9 +114,9 @@ fn items_in(scripts_dir: &Path) -> Vec<LauncherItem> {
                 ItemAction {
                     title: "复制路径".to_string(),
                     shortcut: None,
-                    run: Arc::new(move |_| match mac_ffi::copy_text(&copy_path) {
-                        Ok(()) => mac_ffi::notify("Bolt", "路径已复制到剪贴板"),
-                        Err(e) => mac_ffi::notify("Bolt", &format!("复制失败：{e}")),
+                    run: Arc::new(move |_| match platform::copy_text(&copy_path) {
+                        Ok(()) => notify_window::notify("Bolt", "路径已复制到剪贴板"),
+                        Err(e) => notify_window::notify("Bolt", &format!("复制失败：{e}")),
                     }),
                     dialog: None,
                 },

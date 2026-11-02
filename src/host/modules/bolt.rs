@@ -440,9 +440,9 @@ async fn fetch_url<'js>(ctx: Ctx<'js>, url: String) -> Result<Value<'js>> {
 }
 
 async fn exec_cmd<'js>(ctx: Ctx<'js>, cmd: String) -> Result<Value<'js>> {
-    let out = tokio::process::Command::new("sh")
-        .arg("-c")
-        .arg(&cmd)
+    let (program, args) = crate::platform::shell_command(&cmd);
+    let out = tokio::process::Command::new(program)
+        .args(args)
         // 运行被中止时这个 future 会被 drop；没有 kill_on_drop 子进程会活下来
         // 变成孤儿。
         .kill_on_drop(true)

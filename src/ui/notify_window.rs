@@ -1,6 +1,6 @@
 //! 自绘通知卡片：替代 osascript 系统横幅，显示在鼠标所在屏幕的底部中间。
 //!
-//! `mac_ffi::notify` 只往 channel 推一条请求（无 gpui 依赖，调用方签名不变），
+//! `notify_window::notify` 只往 channel 推一条请求（无 gpui 依赖，调用方签名不变），
 //! boot.rs 的 app tick 每帧 [`drain_notifications`] 把请求开成窗口。多个通知
 //! 纵向堆叠（新通知追加在下），hover 暂停倒计时，点击立即关闭；任一通知关闭
 //! 后，位于其下方的通知整体上移补位（NSWindow setFrameTopLeftPoint 平移）。
@@ -25,6 +25,7 @@ use gpui_kit::{
 };
 
 use crate::app::shell::AppShell;
+use crate::platform;
 
 /// 卡片固定尺寸（正文单行截断）、堆叠间距、距屏底边距、显示时长与倒计时步长。
 const NOTIFY_W: f32 = 340.;
@@ -34,7 +35,7 @@ const BOTTOM_MARGIN: f32 = 100.;
 const SHOW_DURATION: Duration = Duration::from_secs(5);
 const TICK: Duration = Duration::from_millis(100);
 
-/// 一条待显示的通知：mac_ffi::notify 推进 channel，drain 时开窗。
+/// 一条待显示的通知：notify_window::notify 推进 channel，drain 时开窗。
 #[derive(Clone)]
 pub(crate) struct NotifyRequest {
     pub(crate) title: String,
@@ -60,6 +61,14 @@ pub(crate) fn push_notify(title: &str, body: &str) {
             body: body.to_string(),
         });
     }
+}
+
+/// 通知消息（自绘卡片）。title 加粗在顶部，body 在下方。
+///
+/// 只往 channel 推一条请求（app tick 每帧 drain 开窗），所以**任何线程**都能
+/// 调——工作线程里的结果回调用它报错，不需要碰 `App`。
+pub(crate) fn notify(title: &str, body: &str) {
+    push_notify(title, body);
 }
 
 /// app tick 每帧调用：把排队的通知逐条开窗显示。
@@ -194,7 +203,11 @@ impl Render for NotifyCard {
 
 /// 开一张通知卡片窗口：鼠标所在屏底部中间，按已有通知数向下堆叠。
 fn show_notify(cx: &mut App, req: NotifyRequest) {
-    let Some((display_id, (mx, my, mw, mh))) = cursor_screen_frame() else {
+    // macOS 能问到「光标在哪块屏」；其余平台没有跨平台的等价查询，退到主显示器
+    // （窗口仍然正常显示，只是不跟随光标所在屏）。
+    let Some((display_id, (mx, my, mw, mh))) =
+        cursor_screen_frame().or_else(|| primary_screen_frame(cx))
+    else {
         return;
     };
     let index = cx.global::<AppShell>().notify_windows.len();
@@ -202,7 +215,7 @@ fn show_notify(cx: &mut App, req: NotifyRequest) {
     let local_y =
         mh - BOTTOM_MARGIN as f64 - NOTIFY_H as f64 - index as f64 * (NOTIFY_H + STACK_GAP) as f64;
     let options = WindowOptions {
-        // origin 相对指定 display 的本地坐标（gpui 负责转 AppKit）。
+        // origin 相对指定 display 的本地坐标（gpui 负责转平台坐标）。
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
             point(px(local_x as f32), px(local_y as f32)),
             size(px(NOTIFY_W), px(NOTIFY_H)),
@@ -216,21 +229,15 @@ fn show_notify(cx: &mut App, req: NotifyRequest) {
         window_background: WindowBackgroundAppearance::Transparent,
         ..Default::default()
     };
-    let cg_top_left = (mx + local_x, my + local_y);
-    // AppKit 全局顶左点（主屏左下原点，y 向上）：顶左 y = 主屏高 - cg_y。
-    let primary_h = core_graphics::display::CGDisplay::main()
-        .bounds()
-        .size
-        .height;
-    let appkit_top_left = (cg_top_left.0, primary_h - cg_top_left.1);
+    let top_left = platform::window_top_left(mx + local_x, my + local_y);
     match cx.open_window(options, |window, cx| {
-        cx.new(|cx| NotifyCard::new(req, appkit_top_left, window, cx))
+        cx.new(|cx| NotifyCard::new(req, top_left, window, cx))
     }) {
         Ok(handle) => {
             // NSPanel 路径的 frame 兜底：转 borderless（解除 constrainFrameRect）、
             // 去系统阴影（阴影由卡片 CSS shadow_lg 提供）、按算好的位置重定位。
             handle
-                .update(cx, |_, window, _| finalize_window(window, appkit_top_left))
+                .update(cx, |_, window, _| finalize_window(window, top_left))
                 .ok();
             cx.global_mut::<AppShell>()
                 .notify_windows
@@ -329,6 +336,22 @@ fn cursor_screen_frame() -> Option<(DisplayId, (f64, f64, f64, f64))> {
 #[cfg(not(target_os = "macos"))]
 fn cursor_screen_frame() -> Option<(DisplayId, (f64, f64, f64, f64))> {
     None
+}
+
+/// 主显示器：`DisplayId` + 本地 frame（原点恒为 0）。给没有「光标所在屏」查询
+/// 的平台兜底，保证通知卡片至少能出现在主屏上。
+fn primary_screen_frame(cx: &App) -> Option<(DisplayId, (f64, f64, f64, f64))> {
+    let display = cx.primary_display()?;
+    let size = display.bounds().size;
+    Some((
+        display.id(),
+        (
+            0.0,
+            0.0,
+            f32::from(size.width) as f64,
+            f32::from(size.height) as f64,
+        ),
+    ))
 }
 
 /// 开窗收尾：borderless（解除 NSPanel 的 constrainFrameRect）、去系统阴影、

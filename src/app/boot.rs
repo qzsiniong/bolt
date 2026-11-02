@@ -132,16 +132,22 @@ pub(crate) fn run() {
                 )
             });
 
-            // Raycast 风格的全局快捷键唤起/收起 launcher；Cmd+Shift+T 把剪贴板
-            // 钉成浮动便签。
+            // Raycast 风格的全局快捷键唤起/收起 launcher；Pin 快捷键把剪贴板
+            // 钉成浮动便签。键位按平台不同（见 `hotkey.rs`），提示走同一份常量。
             let (hotkey_manager, hotkey_statuses) = hotkey::register();
             for (id, result) in hotkey_statuses {
                 match (id, result) {
                     (hotkey::HotKeyId::Launcher, Ok(_)) => {
-                        console_channel.info("全局快捷键：Alt+Space 唤起启动器");
+                        console_channel.info(format!(
+                            "全局快捷键：{} 唤起启动器",
+                            hotkey::LAUNCHER_HINT
+                        ));
                     }
                     (hotkey::HotKeyId::PinClipboard, Ok(_)) => {
-                        console_channel.info("全局快捷键：Cmd+Shift+T Pin 剪切板");
+                        console_channel.info(format!(
+                            "全局快捷键：{} Pin 剪切板",
+                            hotkey::PIN_HINT
+                        ));
                     }
                     (_, Err(e)) => console_channel.error(e),
                 }
@@ -150,7 +156,7 @@ pub(crate) fn run() {
             // Launcher 里被确认的 item 闭包经这个 channel 回到 app tick 执行。
             let (launcher_tx, launcher_rx) = crossbeam_channel::unbounded();
 
-            // 通知卡片：mac_ffi::notify 入队，app tick drain 开窗。
+            // 通知卡片：notify_window::notify 入队，app tick drain 开窗。
             crate::ui::notify_window::init_channel();
 
             let app_tick = cx.spawn(async move |cx| loop {

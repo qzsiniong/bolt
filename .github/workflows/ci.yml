@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # macOS 是主开发平台：跑完整测试 + clippy，warning 即失败。
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        # `-D warnings` 而不是只看退出码：警告在这里就该被拦住，否则会一直烂下去。
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Windows 是移植目标。这里只做编译 + clippy——没有显示器，跑不了 GUI 测试。
+  #
+  # TODO(Windows P1): 平台适配完成、本 job 转绿之后去掉 continue-on-error，
+  # 让它成为合并前的硬门槛。
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check
+        run: cargo check --workspace --all-targets
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
