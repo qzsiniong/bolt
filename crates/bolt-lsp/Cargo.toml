@@ -1,6 +1,6 @@
 [package]
 name = "bolt-lsp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "最小 LSP 客户端：stdio JSON-RPC 驱动 typescript-language-server 子进程"
 

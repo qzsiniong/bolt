@@ -1,6 +1,6 @@
 [package]
 name = "bolt-extensions"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "可复用的 JS（QuickJS）扩展运行时：注册表 + 清单解析 + 常驻引擎，不依赖任何宿主业务"
 

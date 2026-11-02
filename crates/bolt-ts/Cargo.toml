@@ -1,6 +1,6 @@
 [package]
 name = "bolt-ts"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "TypeScript → JavaScript 的剥离转换（基于 swc），供脚本与扩展运行时共用"
 

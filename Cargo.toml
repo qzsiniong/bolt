@@ -1,6 +1,6 @@
 [package]
 name = "bolt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 # 扩展运行时独立成 crate，与宿主解耦：它不依赖 gpui / bolt 的任何类型，

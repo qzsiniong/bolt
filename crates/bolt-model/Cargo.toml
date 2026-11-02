@@ -1,6 +1,6 @@
 [package]
 name = "bolt-model"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "领域数据与磁盘布局：脚本类型与脚本目录的文件操作"
 

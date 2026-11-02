@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "bolt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -928,14 +928,14 @@ dependencies = [
 
 [[package]]
 name = "bolt-console"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
 ]
 
 [[package]]
 name = "bolt-extensions"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "parking_lot",
@@ -950,7 +950,7 @@ dependencies = [
 
 [[package]]
 name = "bolt-lsp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "crossbeam-channel",
  "dirs 5.0.1",
@@ -961,14 +961,14 @@ dependencies = [
 
 [[package]]
 name = "bolt-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "dirs 5.0.1",
 ]
 
 [[package]]
 name = "bolt-ts"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "swc_common",
  "swc_ecma_ast",
