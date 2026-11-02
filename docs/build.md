@@ -68,6 +68,9 @@ scripts/
 
 - **打开启动器**：等价于 `Alt+Space`
 - **脚本管理** / **新建脚本**：打开脚本管理器窗口
+- **扩展管理** / **新建扩展**：打开扩展管理器 / 新建扩展窗口
+- **Console**：打开 Console 面板
+- **剪贴板 Pin**：把当前剪贴板内容钉成 Pin 窗口
 - **退出 Bolt**（⌘Q）
 
 实现在 [src/app/tray.rs](../src/app/tray.rs)：objc2 raw `msg_send!` 直接建 NSStatusItem + NSMenu，菜单点击经 crossbeam channel 回到 app tick 分发（ObjC 回调不直接碰 gpui）。`cargo run` 时通过 `setActivationPolicy(Accessory)` 隐藏 Dock；打包后由 `LSUIElement` 覆盖同一件事。

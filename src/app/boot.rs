@@ -174,6 +174,18 @@ pub(crate) fn run() {
                             tray::TrayCommand::NewScript => {
                                 crate::modules::scripts::window::open_manager(cx, true)
                             }
+                            tray::TrayCommand::OpenExtensionsManager => {
+                                crate::modules::extensions::manager::window::open_manager(cx)
+                            }
+                            tray::TrayCommand::NewExtension => {
+                                crate::modules::extensions::create::window::open_create(cx)
+                            }
+                            tray::TrayCommand::OpenConsole => {
+                                crate::modules::console::window::open_console(cx)
+                            }
+                            tray::TrayCommand::OpenClipboardPin => {
+                                crate::modules::pin::window::open_clipboard_pin(cx)
+                            }
                             tray::TrayCommand::Quit => cx.quit(),
                         }
                     }

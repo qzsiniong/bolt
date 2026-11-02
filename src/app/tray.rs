@@ -27,6 +27,10 @@ pub(crate) enum TrayCommand {
     ToggleLauncher,
     OpenManager,
     NewScript,
+    OpenExtensionsManager,
+    NewExtension,
+    OpenConsole,
+    OpenClipboardPin,
     Quit,
 }
 
@@ -87,13 +91,19 @@ pub(crate) fn init(console: &ConsoleChannel) {
             }
         }
 
-        // 菜单。
+        // 菜单：按功能分组，分隔线隔开（启动器 | 脚本 | 扩展 | Console/Pin | 退出）。
         let menu: *mut AnyObject = msg_send![class!(NSMenu), new];
         add_menu_item(menu, handler, "打开启动器", "showLauncher:", None);
+        add_separator(menu);
         add_menu_item(menu, handler, "脚本管理", "openManager:", None);
         add_menu_item(menu, handler, "新建脚本", "newScript:", None);
-        let sep: *mut AnyObject = msg_send![class!(NSMenuItem), separatorItem];
-        let _: () = msg_send![menu, addItem: sep];
+        add_separator(menu);
+        add_menu_item(menu, handler, "扩展管理", "openExtensions:", None);
+        add_menu_item(menu, handler, "新建扩展", "newExtension:", None);
+        add_separator(menu);
+        add_menu_item(menu, handler, "Console", "openConsole:", None);
+        add_menu_item(menu, handler, "剪贴板 Pin", "openClipboardPin:", None);
+        add_separator(menu);
         add_menu_item(
             menu,
             handler,
@@ -112,6 +122,13 @@ pub(crate) fn init(console: &ConsoleChannel) {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn init(_console: &ConsoleChannel) {}
+
+/// 追加分隔线。
+#[cfg(target_os = "macos")]
+unsafe fn add_separator(menu: *mut AnyObject) {
+    let sep: *mut AnyObject = msg_send![class!(NSMenuItem), separatorItem];
+    let _: () = msg_send![menu, addItem: sep];
+}
 
 /// 追加一个菜单项。`key` 是 (显示字符, NSEventModifierFlags)。
 #[cfg(target_os = "macos")]
@@ -139,7 +156,7 @@ unsafe fn add_menu_item(
     let _: () = msg_send![menu, addItem: item];
 }
 
-/// 注册 `BoltTrayHandler` ObjC 类，四个方法各自 post 一条 TrayCommand。
+/// 注册 `BoltTrayHandler` ObjC 类，八个方法各自 post 一条 TrayCommand。
 #[cfg(target_os = "macos")]
 fn ensure_handler_class() -> Option<&'static AnyClass> {
     use objc2::declare::ClassBuilder;
@@ -170,6 +187,34 @@ fn ensure_handler_class() -> Option<&'static AnyClass> {
     unsafe extern "C-unwind" fn new_script(_this: &AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
         post(TrayCommand::NewScript);
     }
+    unsafe extern "C-unwind" fn open_extensions(
+        _this: &AnyObject,
+        _cmd: Sel,
+        _sender: *mut AnyObject,
+    ) {
+        post(TrayCommand::OpenExtensionsManager);
+    }
+    unsafe extern "C-unwind" fn new_extension(
+        _this: &AnyObject,
+        _cmd: Sel,
+        _sender: *mut AnyObject,
+    ) {
+        post(TrayCommand::NewExtension);
+    }
+    unsafe extern "C-unwind" fn open_console(
+        _this: &AnyObject,
+        _cmd: Sel,
+        _sender: *mut AnyObject,
+    ) {
+        post(TrayCommand::OpenConsole);
+    }
+    unsafe extern "C-unwind" fn open_clipboard_pin(
+        _this: &AnyObject,
+        _cmd: Sel,
+        _sender: *mut AnyObject,
+    ) {
+        post(TrayCommand::OpenClipboardPin);
+    }
     unsafe extern "C-unwind" fn quit_app(_this: &AnyObject, _cmd: Sel, _sender: *mut AnyObject) {
         post(TrayCommand::Quit);
     }
@@ -188,6 +233,22 @@ fn ensure_handler_class() -> Option<&'static AnyClass> {
         builder.add_method(
             objc2::sel!(newScript:),
             new_script as unsafe extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            objc2::sel!(openExtensions:),
+            open_extensions as unsafe extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            objc2::sel!(newExtension:),
+            new_extension as unsafe extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            objc2::sel!(openConsole:),
+            open_console as unsafe extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            objc2::sel!(openClipboardPin:),
+            open_clipboard_pin as unsafe extern "C-unwind" fn(_, _, _),
         );
         builder.add_method(
             objc2::sel!(quitApp:),
@@ -238,15 +299,16 @@ fn make_bolt_image() -> *mut AnyObject {
         let _: () = msg_send![image, lockFocusFlipped: false];
 
         let path: *mut AnyObject = msg_send![class!(NSBezierPath), bezierPath];
-        // 闪电多边形（18×18，左下原点）：
-        //   从顶部偏右起笔 → 折到中部偏左 → 内凹 → 底部偏左 → 折回中部偏右 → 内凹闭合。
+        // 标准 Lucide `zap` 闪电多边形（24×24 网格：13,2 3,14 12,14 11,22
+        // 21,10 12,10），×0.75 缩到 18×18，再翻转 Y 到 AppKit 左下原点
+        // （y_appkit = 18 − y_lucide）。实心填充在小尺寸下辨识度最好。
         let pts = [
-            (10.4, 17.2),
-            (4.6, 9.6),
-            (8.4, 9.6),
-            (7.4, 0.8),
-            (13.4, 8.4),
-            (9.4, 8.4),
+            (9.75, 16.5),
+            (2.25, 7.5),
+            (9.0, 7.5),
+            (8.25, 1.5),
+            (15.75, 10.5),
+            (9.0, 10.5),
         ];
         let _: () = msg_send![path, moveToPoint: NSPoint { x: pts[0].0, y: pts[0].1 }];
         for p in &pts[1..] {
