@@ -100,7 +100,7 @@ Launcher 的"应用"分组会在启动时扫描 `/Applications`、`/System/Appli
 
 ## 内置 JSON 编辑器
 
-仓库自带一个用扩展机制实现的 JSON 编辑器，位于 [`extensions/json-editor-v1.0.0.js`](../extensions/json-editor-v1.0.0.js)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
+仓库自带一个用扩展机制实现的 JSON 编辑器，位于 [`extensions/json-editor`](../extensions/json-editor)，启动时同步到用户扩展目录，在 Launcher 里以「JSON 编辑器」一条命令出现。它演示了 UI 命令的完整用法（置顶窗口、剪贴板能力、`Textarea` / `TextView`、相对 `import` 分文件）。
 
 - **置顶可运行时切换**：清单默认 `ui.always_on_top: true`；点宿主标题栏右上角的图钉即可切换，窗口不关闭、内容不丢失。
 - **粘贴自动格式化**：向编辑器粘贴一段 ≥8 字符的文本时自动解析并格式化（行号 / 语法高亮由只读结果面板的 Markdown 承担）。

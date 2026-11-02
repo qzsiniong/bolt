@@ -1,7 +1,7 @@
-//! 「新建扩展」表单：id / 名称 / 版本 / 模板 / 权限，实时校验并预览目录名。
+//! 「新建扩展」表单：id / 名称 / 版本 / 模板 / 权限，实时校验并预览目录。
 //!
-//! 字段合法性由 [`scaffold::validate`] 一处定义（含"把目录名再解析回来"的权威
-//! 校验），这里只负责把错误摆到对应输入框下面；创建时同一份校验会再跑一遍，
+//! 字段合法性由 [`scaffold::validate`] 一处定义（id 规则与清单校验共用一份），
+//! 这里只负责把错误摆到对应输入框下面；创建时同一份校验会再跑一遍，
 //! 避免 UI 与落盘规则漂移。
 
 use std::path::PathBuf;
@@ -163,7 +163,6 @@ impl CreateExtensionView {
         } else {
             scaffold::conflict(&spec)
         };
-        let warning = scaffold::shadow_warning(&spec);
 
         let mut column = div()
             .flex()
@@ -241,7 +240,7 @@ impl CreateExtensionView {
                     .child("脚本权限（缺省一个都不给：没声明的危险 API 调用时抛错）"),
             );
             let mut row = div().flex().flex_wrap().gap(px(6.));
-            for (index, name) in plux_js_manager::PERMISSIONS.iter().enumerate() {
+            for (index, name) in bolt_extensions::PERMISSIONS.iter().enumerate() {
                 let selected = self.permissions.iter().any(|item| item == name);
                 let name = *name;
                 let mut button = Button::new(("permission", index))
@@ -323,9 +322,6 @@ impl CreateExtensionView {
         }
         if let Some(conflict) = conflict {
             column = column.child(line(conflict, colors.danger));
-        }
-        if let Some(warning) = warning {
-            column = column.child(line(warning, colors.muted_foreground));
         }
 
         if uses_bundled_extensions() {

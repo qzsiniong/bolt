@@ -1,6 +1,6 @@
-//! 宿主注入：把 bolt 的 console、宿主模块与交互 bridge 接进 plux 的 JS 运行时。
+//! 宿主注入：把 bolt 的 console、宿主模块与交互 bridge 接进扩展的 JS 运行时。
 //!
-//! `plux-js-manager` 不认识 bolt，它只要求实现 [`JsEnv`]：
+//! 运行时 crate 不认识 bolt，它只要求实现 [`JsEnv`]：
 //!
 //! - `install_base` 在扩展加载时调用一次（console / 定时器 / `import "bolt"`）；
 //! - `install_scope` 在**每条命令前**调用：扩展运行时是常驻的，而交互 bridge 每轮
@@ -10,7 +10,7 @@ use std::any::Any;
 use std::path::Path;
 use std::sync::Arc;
 
-use plux_js_manager::{HostModuleSpec, JsEnv, JsError, LogLevel, Scope};
+use bolt_extensions::{HostModuleSpec, JsEnv, JsError, LogLevel, Scope};
 use rquickjs::Ctx;
 
 use crate::host::HostRegistry;

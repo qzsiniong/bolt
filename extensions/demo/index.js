@@ -1,7 +1,7 @@
 // 演示扩展 —— 脚本命令入口。
 //
 // 命令 id 就是这里导出的函数名；宿主按
-// 「具名导出 → export default 对象 → globalThis.plux.commands」三档查找。
+// 「具名导出 → export default 对象 → globalThis.bolt.commands」三档查找。
 // 每个扩展一个常驻运行时：下面的模块级变量跨命令保留，单条命令 60 秒超时。
 //
 // 清单 permissions 声明了 ["fs", "net", "typeStr"]：没声明的危险 API

@@ -50,7 +50,7 @@ pub(crate) fn reload(cx: &mut App, subject: &ActionSubject) {
     let outcome = {
         let state = cx.global::<ExtensionsState>();
         let mut host = state.host.borrow_mut();
-        host.reload(&subject.bundle)
+        host.reload(&subject.extension_id)
     };
     match outcome {
         Ok(report) => {
@@ -108,17 +108,16 @@ pub(crate) fn open_data_dir(cx: &App, subject: &ActionSubject) {
 
 /// 卸载：注销 → 移进废纸篓 → 重新扫描。
 ///
-/// 顺序就是正确性：注销先于删目录，被依赖时（plux 拒绝卸载）就此打住，磁盘
-/// 一个字节都不动。
+/// 顺序就是正确性：注销先于删目录（运行时先收掉），磁盘一个字节都不动，
+/// 注销失败就不会走到 trash 那步。
 pub(crate) fn uninstall(cx: &mut App, subject: &ActionSubject) {
     let closed = ui_window::close_extension_windows(cx, &subject.root);
 
-    let unregistered = {
+    if let Err(error) = {
         let state = cx.global::<ExtensionsState>();
         let mut host = state.host.borrow_mut();
-        host.forget(&subject.bundle)
-    };
-    if let Err(error) = unregistered {
+        host.forget(&subject.extension_id)
+    } {
         console(cx).warn(format!("卸载扩展 {} 失败：{error}", subject.label()));
         return;
     }
@@ -185,17 +184,6 @@ pub(crate) fn uninstall_description(subject: &ActionSubject) -> String {
         subject.label(),
         subject.root.display()
     );
-    if !subject.dependents.is_empty() {
-        let names: Vec<String> = subject
-            .dependents
-            .iter()
-            .map(|bundle| format!("{} v{}", bundle.id, bundle.version))
-            .collect();
-        text.push_str(&format!(
-            "\n\n注意：{} 依赖它，若对方正在运行，卸载会被拒绝。",
-            names.join("、")
-        ));
-    }
     if super::manifest::uses_bundled_extensions() {
         text.push_str("\n\n开发构建：这是仓库里的扩展目录，移走后需要用 git 恢复。");
     }

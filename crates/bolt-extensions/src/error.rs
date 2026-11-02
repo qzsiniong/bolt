@@ -19,10 +19,10 @@ pub enum JsError {
     #[error("命令不存在：{0}")]
     UnknownCommand(String),
 
-    /// 三种回退方式（具名导出 / default 对象 / globalThis.plux.commands）
+    /// 三种回退方式（具名导出 / default 对象 / globalThis.bolt.commands）
     /// 都没找到命令对应的 JS 函数。
     #[error(
-        "扩展没有实现命令 `{0}`（具名导出 / default 对象 / globalThis.plux.commands 均未找到）"
+        "扩展没有实现命令 `{0}`（具名导出 / default 对象 / globalThis.bolt.commands 均未找到）"
     )]
     MissingHandler(String),
 

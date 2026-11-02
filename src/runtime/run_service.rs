@@ -18,9 +18,8 @@ use super::runner::{CancelToken, RunEnv};
 use crate::host::HostRegistry;
 use crate::ui::interaction_window::{InteractionEvent, InteractionWindow};
 use bolt_console::ConsoleChannel;
+use bolt_extensions::ExtensionStore;
 use bolt_model::script::Language;
-use plux_js_manager::ExtensionStore;
-use plux_rs::Bundle;
 
 /// 一次正在进行中的脚本运行。
 struct RunState {
@@ -45,7 +44,7 @@ pub enum RunTask {
         file_name: String,
     },
     Extension {
-        bundle: Bundle,
+        extension_id: String,
         command: String,
         /// Console 里显示的名字（`扩展名 · 命令标题`）。
         label: String,
@@ -134,14 +133,14 @@ impl RunService {
     /// 执行一条扩展命令（扩展必须已加载）。
     pub fn start_extension(
         &mut self,
-        bundle: Bundle,
+        extension_id: String,
         command: String,
         label: String,
         cx: &mut Context<Self>,
     ) {
         self.start(
             RunTask::Extension {
-                bundle,
+                extension_id,
                 command,
                 label,
             },
@@ -191,10 +190,10 @@ impl RunService {
                     file_name,
                 } => super::runner::run_script(&content, language, &file_name, env),
                 RunTask::Extension {
-                    bundle,
+                    extension_id,
                     command,
                     label,
-                } => super::runner::run_extension(bundle, &command, &label, env),
+                } => super::runner::run_extension(extension_id, &command, &label, env),
             }
             done.store(true, Ordering::SeqCst);
         });

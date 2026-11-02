@@ -4,28 +4,28 @@
 > 权限与信任边界见[信任模型](trust-model.md)。本文从 README 抽出，返回总览见
 > [README](../README.md)。
 
-## 扩展（plux-rs）
+## 扩展（bolt-extensions）
 
 扩展存放在与 `scripts` 同级的目录，扩展根就是 `extensions/` 本身：
 
 ```text
 ~/Library/Application Support/bolt/
 ├── extensions/
-│   ├── demo-v1.0.0.js/              # 目录名 = <id>-v<version>.js
+│   ├── demo/                        # 目录名 = 清单里的 id
 │   │   ├── extension.json              # 清单（必填）
 │   │   ├── index.js                 # 脚本命令入口（默认 index.js，也支持 .ts）
 │   │   ├── main.js                  # UI 命令入口（有 ui 命令时才需要）
 │   │   ├── icons/star.svg           # 扩展自己的图标资产（可被标题栏动作与 svg() 引用）
 │   │   └── jsconfig.json            # 编辑器配置（checkJs + strict）
-│   └── json-editor-v1.0.0.js/
+│   └── json-editor/
 └── extensions-data/demo/store.json  # 扩展私有数据（UI 的 localStorage 落这里）
 ```
 
-**目录名就是 bundle 标识**。plux-rs 的 `Bundle` 完全从目录名解析出 `id` / `version` / `format`，所以：
+**目录名就是扩展 id**。注册表直接以目录为扩展根、以目录名为身份，所以：
 
-- 目录名必须是 `<id>-v<version>.js`（`v` 前缀、语义化版本、`.js` 后缀，缺一不可，如 `demo-v1.0.0.js`）；
-- 清单里的 `id` 与 `version` **可以省略**——目录名已经写着它们，再抄一遍只是冗余；写了就必须与目录名**逐字一致**，两边漂移的扩展会被拒绝加载并在 Console 报错（这是作者改目录名时最容易漏的一步，所以保留这道检查）；
-- `format` 后缀目前只认 `.js`，它是宿主挑 manager 的依据，与入口文件的扩展名不是一回事。
+- 目录名必须与清单里的 `id` 一致（推荐直接用 id 命名目录，如 `demo`）；
+- `id` 是**必填**字段，白名单 `[a-z0-9][a-z0-9-]*`（≤64 字符，不能以 `-` 结尾）；两个目录写了同一个 id 会被拒绝注册并在 Console 报错；
+- `version` 可省略，缺省 `1.0.0`；写了必须是合法语义化版本。
 
 ## `extension.json`
 
@@ -50,17 +50,16 @@
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `id` | | 扩展标识；**省略时取目录名里的 id**，写了必须一致 |
-| `version` | | 语义化版本；**省略时取目录名里的版本**，写了必须一致 |
+| `id` | ✅ | 扩展标识，白名单 `[a-z0-9][a-z0-9-]*`；**目录名就是 id** |
+| `version` | | 语义化版本；**缺省 `1.0.0`** |
 | `name` | | 展示名，省略时退回 `id` |
 | `icon` | | 扩展图标：Lucide 图标名（`puzzle`）或扩展目录内的资产路径（`icons/logo.svg`，带 `/` 或以 `.svg` 结尾即按路径处理；不能含 `..`）。显示在扩展管理与 Launcher，命令没写自己的 `icon` 时也用它兜底；都省略时用宿主默认 |
 | `description` | | 扩展说明 |
 | `entry` | | 脚本命令入口，默认 `index.js`，只接受 `.js` / `.ts`。**纯 UI 扩展不需要**：没有脚本命令时这个字段根本不读，也不用在目录里放 `index.js` |
-| `depends` / `optional_depends` | | `["base@^1.0"]` 形式的依赖声明，映射到 plux 的 `Depend`（不带 `@` 表示任意版本） |
 | `permissions` | | 脚本命令要用的权限名，如 `["fs", "net"]`。**缺省一个都不给（fail-closed）**：没声明的危险 API 在调用时抛错，报错里会写明缺哪个权限。详见[信任模型](trust-model.md) |
 | `commands` | | 命令数组；**省略时会自动补一条 id 为 `run`、标题为扩展展示名的命令** |
 
-`id` / `version` 是**唯一可以整行删掉**的字段：目录名 `<id>-v<version>.js` 是 plux bundle 的唯一定义处（`Loader` 只拿到路径，manager 没有覆盖 bundle 的机会）。因此最小清单就是一个 `{ }`——不过通常至少要写 `commands`，否则只有一条以扩展名为标题的命令。
+`id` 是唯一必填字段（目录名跟着它走），`version` 缺省 `1.0.0`。最小清单就是 `{ "id": "my-ext" }`——不过通常至少要写 `commands`，否则只有一条以扩展名为标题的命令。**扩展之间没有依赖机制**：每个扩展都是独立的，互不感知。
 
 `commands[*]` 的字段：
 
@@ -123,7 +122,7 @@
 - 枚举都是逐字对齐的：`permissions` 的五项、`actions[*].builtin` 的四种（各带标题与说明）、`capabilities` 的开关；`actions` 还强制「`builtin` / `command` 恰好写一个」；
 - 只有 `actions[*].icon` 没法把 1.9k+ 个 Lucide 名枚举进去，只校验「不含 `..`」：名字写错时按钮的图标会缺失（资产源解析不到，不会回退内置图标），这一点得靠肉眼或者试跑。
 
-`schema` 与解析器的一致性由测试盯着（`plux-js-manager` 的枚举对齐测试、`extensions/schema_tests.rs` 用脚手架输出与示例扩展反查 schema），改清单结构时不会只改一边。
+`schema` 与解析器的一致性由测试盯着（`bolt-extensions` 的枚举对齐测试、`extensions/schema_tests.rs` 用脚手架输出与示例扩展反查 schema），改清单结构时不会只改一边。
 
 ## 脚本命令怎么执行
 
@@ -131,7 +130,7 @@ Launcher 里每条命令一条 item（id 是 `ext.<扩展id>.<命令id>`，分�
 
 1. **具名导出**：`export function hello(ctx) { … }`（推荐）
 2. **`export default` 对象**：`export default { hello(ctx) { … } }`
-3. **全局挂载**：`globalThis.plux.commands.hello = (ctx) => …`
+3. **全局挂载**：`globalThis.bolt.commands.hello = (ctx) => …`
 
 处理函数收到一个对象，返回的字符串会输出到 Console：
 
@@ -144,21 +143,20 @@ export async function hello({ command, extension, root, argv }) {
 ```
 
 - **每个扩展一个常驻运行时**：第一条命令执行时才加载（扩展顶层的副作用不会在启动时跑），之后一直活着，因此模块级状态跨命令保留——计数器、缓存、已经建好的连接都算。**加载不阻塞主线程**：主线程只把工人线程拉起来就返回，引擎构建与入口求值都在扩展线程里进行，等待就绪发生在命令执行线程上（算进该次命令的超时预算）。
-- **每扩展一条专用线程**：plux 的 `Manager` / 函数调用是同步的，而宿主 API（定时器、`fetch`、`Async(...)`）依赖 tokio 反应堆，所以扩展线程自带一个 current-thread 运行时，两者在同一线程里待着。GPUI 主线程只做「安排加载 + 投递命令」，从不等待引擎就绪，命令执行也从不占主线程。
+- **每扩展一条专用线程**：宿主 API（定时器、`fetch`、`Async(...)`）依赖 tokio 反应堆，所以扩展线程自带一个 current-thread 运行时，与 QuickJS 引擎在同一线程里待着。GPUI 主线程只做「安排加载 + 投递命令」，从不等待引擎就绪，命令执行也从不占主线程。
 - **单条命令超时 60 秒**。超时或用户点交互窗的「中止」都靠 QuickJS 的 interrupt handler 抛不可捕获异常，扩展线程随后回到消息循环——`while (true) {}` 卡死不会拖垮应用，下一条命令照常能跑。
 - **资源上限**：栈 8 MiB、堆 64 MiB；入口模块加载超时 30 秒。
 - 命令返回后宿主给残留的定时器 / 未决 Promise 200 ms 预算跑完，不会因为一个没清掉的 `setInterval` 卡住下一次调用。
-- **运行时死了会自动重建**：加载失败或线程退出后，下一次执行该命令时宿主先复位 plux 的 `is_load` 再重新安排（同一扩展 3 秒冷却，防连点）。加载失败的原因经 `console` 落到面板，每次调用都会原样复述，不会退化成"线程已退出"这种含糊话。
+- **运行时死了会自动重建**：加载失败或线程退出后，运行时状态标记为 dead，下一次执行该命令时宿主先卸掉旧运行时再重建（同一扩展 3 秒冷却，防连点）。加载失败的原因经 `console` 落到面板，每次调用都会原样复述，不会退化成"线程已退出"这种含糊话。
 - 扩展命令里的 `exit(code)` 与脚本同义：`✔ Finished … (exit N)`，不是错误。
 
 扩展脚本与普通脚本的能力来源相同：`console`、定时器、`bolt` 内置模块以及全部宿主交互 API（`typeStr` / `requestFocus` / `confirm` / `pickPath` / `scanQr`）。差别在权限：**普通脚本全权**（脚本编辑器里看得见全部代码，等同你自己写的）；**扩展脚本命令受清单 `permissions` 约束**，未声明的危险 API（`readFile` / `writeFile` / `listDir` / `fetch` / `exec` / `env` / `typeStr`）调用时抛错。交互 API 挂在常驻上下文上，每轮执行前用当轮的交互桥覆盖一次，所以进度窗、确认框、中止按钮都跟着当次命令走。
 
 ## 错误隔离与生效时机
 
-- 清单解析失败、目录名不合约定、入口缺失、`id`/`version` 与目录名不一致 —— 该扩展被跳过，原因写进 Console（`warn` 等级），其他扩展不受影响。
+- 清单解析失败、`id` 非法、入口缺失 —— 该扩展被跳过，原因写进 Console（`warn` 等级），其他扩展不受影响。
 - 每次唤出 Launcher 都重新扫描磁盘：**新增的扩展目录下次唤出即可用**，不必重启应用；已注册的扩展不会重复注册。**删掉的扩展目录会在下次唤出时注销**，运行时随之下线。
-- 同一个 id 装了多个版本时只保留**最高版本**的运行时与命令（item id 是 `ext.<id>.<command>`，不含版本）；低版本的注册保留给 plux 的依赖解析。
-- **同 id 同版本但目录内容变了**（开发期最容易踩的坑：改完代码忘了升版本号）会被识别并自动重新注册：清单重读、运行时按新代码重建，Console 里留一条 info 提示“内容已变更”。判断依据是目录指纹（相对路径 + 大小 + 修改时间，跳过 `node_modules` 与生成的 `.d.ts`），内容没变就完全不动运行时——所以反复唤出 Launcher 不会打断正在用的扩展。被已加载扩展依赖着的扩展不能这样重载，此时报 warn，升版本号才能生效。
+- **同 id 但目录内容变了**（开发期最容易踩的坑：改完代码忘了升版本号）会被识别并自动重载：清单重读、运行时按新代码重建，Console 里留一条 info 提示“内容已变更”。判断依据是目录指纹（相对路径 + 大小 + 修改时间，跳过 `node_modules` 与生成的 `.d.ts`），内容没变就完全不动运行时——所以反复唤出 Launcher 不会打断正在用的扩展。
 - 加载失败（入口语法错误等）后修好文件，再执行一次命令即可重建运行时。
 - 两种目录会被跳过：没有 `extension.json` 的目录（作者的草稿等）静默忽略；扩展目录里出现 `gpui-shell.json` 会报错——它会让 gpui-shell 走严格清单路径，与宿主按 `extension.json` 安装的能力冲突。
 
@@ -166,7 +164,7 @@ export async function hello({ command, extension, root, argv }) {
 
 两个内置命令在 Launcher 里搜得到（分组「内置」）：**扩展管理**（`extensions.open-manager`）与**新建扩展**（`extensions.new`）。另外每条扩展命令的 Cmd+K 动作面板里都带同一套**扩展级动作**，不必先开管理窗口。
 
-**管理窗口**（单例，960×640）：左侧列表显示展示名、版本与状态徽标（`已禁用` / `异常` / `被遮蔽` / `运行中` / `已退出`）；右侧详情是只读快照——注册状态、命令条数（其中 UI 命令几条）、声明了哪些权限、扩展目录、数据目录、被谁依赖、清单错误、最近一次运行错误；底部操作条就是那套扩展级动作。
+**管理窗口**（单例，960×640）：左侧列表显示展示名、版本与状态徽标（`已禁用` / `异常` / `运行中` / `已退出`）；右侧详情是只读快照——注册状态、命令条数（其中 UI 命令几条）、声明了哪些权限、扩展目录、数据目录、清单错误、最近一次运行错误；底部操作条就是那套扩展级动作。
 
 渲染期**不扫盘**：`inventory()` 只遍历内存（上一次 `refresh` 的结果），所以窗口每帧重绘也不会碰磁盘；磁盘扫描和 Console 报告只发生在开窗、点「刷新」以及每次操作之后。
 
@@ -180,26 +178,21 @@ export async function hello({ command, extension, root, argv }) {
 | 打开数据目录 | 打开 `extensions-data/<id>/`（不存在就建） |
 | 卸载扩展… | 确认框 → 关窗 → 注销 → **移到废纸篓** → 重新扫描 |
 
-**禁用是真不加载**，不是把命令藏起来：禁用列表按扩展 **id** 持久化在 `~/Library/Application Support/bolt/extensions-disabled.json`（`{ "disabled": ["demo"] }`），所以重装或升版本之后禁用状态仍然沿用。扫描时被禁用的扩展**不注册**，`commands()` 与 `ensure_loaded()` 也各兜一道底——命令从 Launcher 消失，运行时不创建（已加载的靠注销顺带卸掉）。重新启用不需要重启，也不会多出一条「内容已变更」提示。
+**禁用是真不加载**，不是把命令藏起来：禁用列表按扩展 **id** 持久化在 `~/Library/Application Support/bolt/extensions-disabled.json`（`{ "disabled": ["demo"] }`），所以重装之后禁用状态仍然沿用。扫描时被禁用的扩展**不注册**，`commands()` 与 `ensure_loaded()` 也各兜一道底——命令从 Launcher 消失，运行时不创建（已加载的靠注销顺带卸掉）。重新启用不需要重启，也不会多出一条「内容已变更」提示。
 
-**被依赖时的两种处理，都不做半成功**：
-
-- 禁用：注销时若 plux 拒绝（`CurrentlyUsesDepend`，说明有**已加载**的扩展正依赖它），本次运行仍会注册，Console 说明「重启后不再加载」；命令照样从 Launcher 隐藏。
-- 卸载：`forget` 先做（不碰磁盘），被依赖就直接报错中止——目录一个字节都不动，提示先卸依赖方。
-
-**卸载走系统废纸篓**：`NSFileManager.trashItemAtURL:` 走 macOS 正统入口（可撤销、Finder 里能看到）；失败时（远程卷、权限）退回 `~/.Trash` 重命名，重名追加时间戳后缀；两条都失败就**不删**，只报错并保留原目录。确认框里会写清依赖方、以及 debug 构建下"仓库目录会出现在 git status 里"。
+**卸载走系统废纸篓**：`NSFileManager.trashItemAtURL:` 走 macOS 正统入口（可撤销、Finder 里能看到）；失败时（远程卷、权限）退回 `~/.Trash` 重命名，重名追加时间戳后缀；两条都失败就**不删**，只报错并保留原目录。确认框里会写清目标目录，以及 debug 构建下"仓库目录会出现在 git status 里"。
 
 ## 新建扩展
 
 「新建扩展」是独立窗口（单例，640×560），填完直接落盘成一个可用的扩展目录，**不需要重启也不需要再手写清单**：
 
-- **id / 展示名 / 版本**：id 会被当作目录名，所以白名单是 `[a-z0-9][a-z0-9-]*`（≤64 字符、不能以 `-` 结尾）。校验的最后一步是把 `<id>-v<version>.js` 用 `Bundle` 解析回来**逐字比对**——`-v`、`.`、大写、空格这些会拆坏 bundle 的输入在这里就被挡住，而不是等下次扫描时在 Console 报错。
+- **id / 展示名 / 版本**：id 会被当作目录名，所以白名单是 `[a-z0-9][a-z0-9-]*`（≤64 字符、不能以 `-` 结尾），创建前就地校验——大写、空格、下划线这些不合规范的输入在这里就被挡住，而不是等下次扫描时在 Console 报错；版本必须是合法语义化版本，缺省 `1.0.0`。
 - **模板三选一**：脚本命令（`index.js` + 一条脚本命令）、UI 窗口（`main.js` + 一条 `ui` 命令）、两者都要（两个入口 + 两条命令）。
 - **权限勾选**（脚本模板）：`fs` / `net` / `exec` / `env` / `typeStr`，不勾就是 fail-closed。
 - **剪贴板授权**（UI 模板）：写进 `ui.capabilities.clipboard`。
-- 表单实时显示目标目录、目录已存在的冲突，以及「同 id 已有版本」的提醒（多版本可以共存，但 Launcher 只显示最高版本）。
+- 表单实时显示目标目录与目录已存在的冲突。
 - **「创建」只在真能建的时候可点**：字段不合法、目标目录被占、或刚建完同一个目录时按钮置灰。创建成功后那行「目录已存在」不会留下来——刚建的那个目录不算冲突，否则成功提示旁边会挂一条红字，看着像失败。改 id 或版本号即恢复可点。
-- 落盘中途失败（写文件/写声明出错）会把刚建的目录整个删掉，不留半成品占着名字，改完再点就能重试。
+- 落盘中途失败（写文件/写声明出错）会把刚建的目录整个删掉，不留半成品占着名字，改完再点就能重试。**目录已存在就是冲突**（请换一个 id，或先卸载旧扩展）。
 - **debug 构建下目标目录就是仓库 `extensions/`**：与宿主扫描的是同一份（`scaffold::target_dir` 跟着 `active_extensions_dir()` 走），建完立刻出现在 Launcher 与管理窗口里，界面同时提示它会出现在 `git status` 里；release 构建写用户数据目录 `~/Library/Application Support/bolt/extensions/`。
 
 生成物自带类型提示，编辑器开箱即用（`.gitignore` 里也列了这三样，因为它们是生成物）：
@@ -226,7 +219,7 @@ export async function hello({ command, extension, root, argv }) {
 命令带 `ui` 块就是 **UI 命令**：`main.js` 只描述界面，宿主在 GPUI 主线程把它渲染成真实原生窗口（没有 WebView、没有 DOM/CSS/HTML）。
 
 ```text
-extensions/demo-v1.0.0.js/
+extensions/demo/
 ├── extension.json    # 清单
 ├── index.js       # 脚本命令入口
 └── main.js        # UI 命令入口：export default class extends View
@@ -288,5 +281,5 @@ export default class DemoPanel extends View {
 - **debug 构建**下保存 `main.js` 即热重载；加载失败会在窗口里显示可选中复制的错误面，同时把原因写进 Console 面板。
 - `svg("icons/x.svg")` 相对**扩展目录**解析（不是相对当前文件），扩展目录里的同名文件会遮蔽内置 Lucide 图标。
 - 一个扩展只保留一个 UI 窗口：再次执行同一条 UI 命令只是激活已有窗口。
-- 首次启动（用数据目录的形态，即 release 构建）会落盘 `demo-v1.0.0.js` 示例：五条脚本命令（上下文 / 模块状态 / fs、net 权限 / 交互 API）+ 一条 UI 命令（控件、剪贴板、localStorage 与标题栏动作），目录已存在则不动，可直接在 Launcher 里跑通全链路。
+- 首次启动（用数据目录的形态，即 release 构建）会落盘 `demo` 示例：五条脚本命令（上下文 / 模块状态 / fs、net 权限 / 交互 API）+ 一条 UI 命令（控件、剪贴板、localStorage 与标题栏动作），目录已存在则不动，可直接在 Launcher 里跑通全链路。
 - **尚未桥接**：UI 命令目前不能调用普通脚本的宿主 API（`bolt` 模块的 `typeStr` / `confirm` / `pickPath` / `scanQr`）——两套运行时的桥接尚未实现。它们各自可用的能力（文件读写、`fetch`、WebSocket、`localStorage`、定时器）不受影响。

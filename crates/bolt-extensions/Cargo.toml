@@ -1,12 +1,10 @@
 [package]
-name = "plux-js-manager"
+name = "bolt-extensions"
 version = "0.1.0"
 edition = "2024"
-description = "QuickJS/JavaScript plugin manager adapter for plux-rs"
+description = "可复用的 JS（QuickJS）扩展运行时：注册表 + 清单解析 + 常驻引擎，不依赖任何宿主业务"
 
 [dependencies]
-# 只要核心：derive(codegen) 与 archive(zip/walkdir) 在本项目用不到。
-plux-rs = { version = "1.1", default-features = false }
 # 引擎由根 manifest 的 [patch.crates-io] 改道到 gpui-kit 的 quickjs-jit 兼容
 # facade，与 gpui-shell 共用同一份 QuickJS，避免两套 C 静态库的重复符号冲突。
 rquickjs = { version = "0.12", features = ["loader", "macro", "futures"] }

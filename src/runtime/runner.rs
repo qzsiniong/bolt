@@ -14,13 +14,12 @@ use crate::host::modules::bolt;
 use crate::host::{HostLoader, HostRegistry, HostResolver};
 use crate::modules::extensions::js_env::ExtensionRunScope;
 use bolt_console::ConsoleChannel;
+use bolt_extensions::{ExtensionStore, InvokeRequest, JsError};
 use bolt_model::script::Language;
 use bolt_ts::strip_typescript;
-use plux_js_manager::{ExtensionStore, InvokeRequest, JsError};
-use plux_rs::Bundle;
 
 /// 取消令牌由扩展运行时 crate 提供：命令执行与脚本执行共用同一个语义。
-pub use plux_js_manager::CancelToken;
+pub use bolt_extensions::CancelToken;
 
 /// 一次脚本或扩展命令执行所需的宿主侧环境。打包成结构体，免得运行入口
 /// 拖一长串位置参数。
@@ -106,7 +105,7 @@ pub fn run_script(code: &str, language: Language, file_name: &str, env: RunEnv) 
 
 /// 执行一条扩展命令。日志格式与脚本一致（▶ / ✔ / ⏹）；超时与取消共用同一个
 /// `CancelToken`：用户中止后命令里的 `while(true)` 会被 QuickJS 中断。
-pub fn run_extension(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
+pub fn run_extension(extension_id: String, command: &str, label: &str, env: RunEnv) {
     let RunEnv {
         console,
         cancel,
@@ -128,7 +127,7 @@ pub fn run_extension(bundle: Bundle, command: &str, label: &str, env: RunEnv) {
     });
     let request = InvokeRequest::new(command, cancel.clone()).with_scope(scope);
 
-    match extensions.invoke(&bundle, request) {
+    match extensions.invoke(&extension_id, request) {
         Ok(Some(output)) => {
             if !output.trim().is_empty() {
                 console.info(output);
@@ -479,21 +478,21 @@ mod tests {
         registry: Arc<HostRegistry>,
         channel: &ConsoleChannel,
         cancel: &CancelToken,
-    ) -> (RunEnv, Arc<plux_js_manager::ExtensionStore>) {
+    ) -> (RunEnv, Arc<bolt_extensions::ExtensionStore>) {
         let root = tmp.0.join(dir);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join(plux_js_manager::MANIFEST_FILE), manifest).unwrap();
+        std::fs::write(root.join(bolt_extensions::MANIFEST_FILE), manifest).unwrap();
         std::fs::write(root.join("index.js"), entry).unwrap();
 
         let env = Arc::new(crate::modules::extensions::js_env::BoltJsEnv {
             registry: registry.clone(),
             console: channel.clone(),
         });
-        let store = plux_js_manager::ExtensionStore::new(env);
-        // 目录名就是 bundle（`{id}-v{version}.js`）：身份只在一处解析。
-        let bundle = plux_rs::Bundle::from_filename(dir).expect("valid bundle");
+        let store = bolt_extensions::ExtensionStore::new(env);
+        // 目录名就是扩展 id：身份只在一处解析。
+        let id = dir.to_string();
         store
-            .ensure_loaded(&bundle, &root, &root.join("index.js"), &[])
+            .ensure_loaded(&id, "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
 
         let env = RunEnv {
@@ -514,7 +513,7 @@ mod tests {
         let cancel = CancelToken::new();
         let (env, _store) = extension_env(
             &tmp,
-            "quit-v1.0.0.js",
+            "quit",
             r#"{ "id": "quit", "version": "1.0.0", "commands": [{ "id": "quit", "title": "Quit" }] }"#,
             "import { exit } from 'bolt';\nexport function quit() { exit(2); }",
             registry,
@@ -522,12 +521,7 @@ mod tests {
             &cancel,
         );
 
-        run_extension(
-            Bundle::from_filename("quit-v1.0.0.js").unwrap(),
-            "quit",
-            "Quit · Quit",
-            env,
-        );
+        run_extension("quit".to_string(), "quit", "Quit · Quit", env);
 
         let lines = drain(&channel);
         assert!(
@@ -549,7 +543,7 @@ mod tests {
         let cancel = CancelToken::new();
         let (env, _store) = extension_env(
             &tmp,
-            "dead-v1.0.0.js",
+            "dead",
             r#"{ "id": "dead", "version": "1.0.0", "commands": [{ "id": "go", "title": "Go" }] }"#,
             "throw new Error('top-level boom');",
             registry,
@@ -557,12 +551,7 @@ mod tests {
             &cancel,
         );
 
-        run_extension(
-            Bundle::from_filename("dead-v1.0.0.js").unwrap(),
-            "go",
-            "Dead · Go",
-            env,
-        );
+        run_extension("dead".to_string(), "go", "Dead · Go", env);
 
         let lines = drain(&channel);
         assert!(

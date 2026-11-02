@@ -109,7 +109,7 @@ pub(crate) fn run() {
                 }
             }
 
-            // plux 扩展宿主：Loader 管生命周期与元数据，ExtensionStore 管执行。
+            // 扩展宿主：注册表管生命周期与元数据，ExtensionStore 管执行。
             // 必须在 RunService 之前就位——命令要在工作线程里跑，RunService 需要
             // 拿到 store 才能投递。
             let js_env = Arc::new(BoltJsEnv {

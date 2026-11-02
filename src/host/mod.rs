@@ -27,7 +27,7 @@ pub struct HostModule {
     pub name: String,
     declaration: String,
     exports: Vec<String>,
-    /// 导出名 → 所需权限（见 `plux_js_manager::PERMISSIONS`）。没登记的导出
+    /// 导出名 → 所需权限（见 `bolt_extensions::PERMISSIONS`）。没登记的导出
     /// 不需要声明。扩展运行时用它把导出拆成"允许 / 拒绝"两半；普通脚本链路
     /// 不看它（脚本 = 用户自己写的代码，全权）。
     required: HashMap<String, String>,
@@ -174,19 +174,19 @@ impl Loader for HostLoader {
         _attrs: Option<ImportAttributes<'js>>,
     ) -> Result<Module<'js>> {
         // 1. 已注册的宿主模块 → 转发到全局命名空间。
-        //    转发源码由 plux-js-manager 统一生成（转发函数每次调用都现取
+        //    转发源码由 bolt-extensions 统一生成（转发函数每次调用都现取
         //    `globalThis.__<name>`，扩展与脚本两条链路行为一致）。脚本链路
         //    是用户自己写的代码，全权：denied 恒为空。
         if let Some(module) = self.registry.modules.get(name) {
             let source =
-                plux_js_manager::forwarding_module_source(&module.name, &module.exports, &[]);
+                bolt_extensions::forwarding_module_source(&module.name, &module.exports, &[]);
             return Module::declare(ctx.clone(), name, source);
         }
 
         // 2. 文件模块（相对路径或裸路径）。
         //    单文件脚本没有"导入方"概念，`base` 传空串：相对说明符以脚本
         //    目录为基准。解析逻辑与扩展运行时共用同一份。
-        let path = plux_js_manager::resolve_file(&self.scripts_dir, "", name)
+        let path = bolt_extensions::resolve_file(&self.scripts_dir, "", name)
             .ok_or_else(|| Error::new_loading_message(name, "module not found"))?;
         let source = std::fs::read_to_string(&path)
             .map_err(|e| Error::new_loading_message(name, e.to_string()))?;

@@ -1,8 +1,8 @@
-//! 扩展运行时注册表：宿主拿到的唯一跨线程调用入口。
+//! 扩展运行时表：宿主拿到的唯一跨线程调用入口。
 //!
-//! plux 的 `Loader` 是 `&mut` 单线程的，命令却要在工作线程里跑（不能卡住 GPUI
-//! 主线程）。所以 [`crate::JsManager`] 只持有本表的 `Arc`，宿主也从这里调
-//! [`ExtensionStore::invoke`]：`Loader` 负责生命周期与元数据，本表负责执行。
+//! 命令要在工作线程里跑（不能卡住宿主主线程），而注册表 [`crate::ExtensionRegistry`]
+//! 是 `&mut` 单线程的：它只持本表的 `Arc`，宿主也从这里调 [`ExtensionStore::invoke`]
+//! ——注册表负责生命周期与元数据，本表负责执行。
 //!
 //! [`ExtensionStore::ensure_loaded`] **不阻塞**：它只把工人线程拉起来就返回，引擎构建
 //! 与入口求值发生在扩展线程上；等待就绪统一压到 [`ExtensionStore::invoke`] 里，那里
@@ -15,8 +15,6 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{RecvTimeoutError, bounded};
 use parking_lot::Mutex;
-use plux_rs::Bundle;
-use semver::Version;
 
 use crate::cancel::CancelToken;
 use crate::env::{JsEnv, Scope};
@@ -91,19 +89,8 @@ impl InvokeRequest {
     }
 }
 
-/// 运行时表的键：plux 的扩展身份就是 `(id, version)`。
-///
-/// 收 `Version` 而不是 `String`：`(id, version)` 两个裸字符串在调用点可以无声
-/// 互换（`unload("1.0.0", "demo")` 照样编译），而 `&Bundle` 把两者绑成一个
-/// 已经校验过的对象，调用方也不必每处手写 `version.to_string()`——那正是宿主
-/// 里满地 `("demo", "1.0.0")` 字面量的来源。
-///
-/// `format` 不参与比较：plux 自己的 `Plugin::eq` 也只比 id 与 version。
-type Key = (String, Version);
-
-fn key_of(bundle: &Bundle) -> Key {
-    (bundle.id.clone(), bundle.version.clone())
-}
+/// 运行时表的键：扩展身份就是清单里的 `id`。
+type Key = String;
 
 /// 已注册的扩展运行时。可通过 `Arc` 跨线程共享。
 pub struct ExtensionStore {
@@ -128,58 +115,54 @@ impl ExtensionStore {
     /// 过滤宿主模块的导出。
     pub fn ensure_loaded(
         &self,
-        bundle: &Bundle,
+        id: &str,
+        version: &str,
         root: &Path,
         entry: &Path,
         permissions: &[String],
     ) -> Result<(), JsError> {
-        let key = key_of(bundle);
         // 查表与 spawn 在同一把锁内完成：spawn 现在只建线程（微秒级），可以持锁。
         // 这样彻底消掉了原来"锁外 spawn、锁内复查、败者回收"的路径——败者的 Drop
         // 现在会 join 一个正在加载的线程，而且两个引擎会各跑一遍扩展顶层副作用。
         let mut workers = self.workers.lock();
-        if workers.contains_key(&key) {
+        if workers.contains_key(id) {
             return Ok(());
         }
         let spec = WorkerSpec {
-            id: bundle.id.clone(),
-            version: bundle.version.to_string(),
+            id: id.to_string(),
+            version: version.to_string(),
             root: root.to_path_buf(),
             entry: entry.to_path_buf(),
             permissions: permissions.to_vec(),
         };
-        workers.insert(key, ExtensionWorker::spawn(spec, self.env.clone())?);
+        workers.insert(
+            id.to_string(),
+            ExtensionWorker::spawn(spec, self.env.clone())?,
+        );
         Ok(())
     }
 
     /// 运行时状态；`None` 表示从未加载或已经卸载。
-    pub fn state(&self, bundle: &Bundle) -> Option<RuntimeState> {
-        self.workers
-            .lock()
-            .get(&key_of(bundle))
-            .map(|worker| worker.state())
+    pub fn state(&self, id: &str) -> Option<RuntimeState> {
+        self.workers.lock().get(id).map(|worker| worker.state())
     }
 
     /// 上一次加载 / 运行失败的原因，供宿主展示"为什么死了"。
-    pub fn last_error(&self, bundle: &Bundle) -> Option<JsError> {
+    pub fn last_error(&self, id: &str) -> Option<JsError> {
         self.workers
             .lock()
-            .get(&key_of(bundle))
+            .get(id)
             .and_then(|worker| worker.last_error())
     }
 
     /// 执行一条命令。阻塞到扩展返回、超时或用户取消。
-    pub fn invoke(
-        &self,
-        bundle: &Bundle,
-        request: InvokeRequest,
-    ) -> Result<Option<String>, JsError> {
+    pub fn invoke(&self, id: &str, request: InvokeRequest) -> Result<Option<String>, JsError> {
         let worker = self
             .workers
             .lock()
-            .get(&key_of(bundle))
+            .get(id)
             .cloned()
-            .ok_or_else(|| JsError::NotLoaded(bundle.to_string()))?;
+            .ok_or_else(|| JsError::NotLoaded(id.to_string()))?;
 
         let InvokeRequest {
             command,
@@ -240,15 +223,15 @@ impl ExtensionStore {
 
     /// 停止并卸载扩展运行时。先摘表（此后 `invoke` 得 `NotLoaded`），再让线程收尾；
     /// 收尾有界，卡住的加载最多耽误 [`UNLOAD_GRACE`]。
-    pub fn unload(&self, bundle: &Bundle) {
-        let worker = self.workers.lock().remove(&key_of(bundle));
+    pub fn unload(&self, id: &str) {
+        let worker = self.workers.lock().remove(id);
         if let Some(worker) = worker {
             let _ = worker.shutdown(UNLOAD_GRACE);
         }
     }
 
-    pub fn is_loaded(&self, bundle: &Bundle) -> bool {
-        self.workers.lock().contains_key(&key_of(bundle))
+    pub fn is_loaded(&self, id: &str) -> bool {
+        self.workers.lock().contains_key(id)
     }
 
     pub fn loaded_count(&self) -> usize {
@@ -257,8 +240,8 @@ impl ExtensionStore {
 
     /// 测试专用：拿到工人线程句柄，用来模拟「运行时意外死亡」。
     #[cfg(test)]
-    pub(crate) fn worker_for_test(&self, bundle: &Bundle) -> Option<Arc<ExtensionWorker>> {
-        self.workers.lock().get(&key_of(bundle)).cloned()
+    pub(crate) fn worker_for_test(&self, id: &str) -> Option<Arc<ExtensionWorker>> {
+        self.workers.lock().get(id).cloned()
     }
 }
 
@@ -268,11 +251,6 @@ impl Drop for ExtensionStore {
             let _ = worker.shutdown(UNLOAD_GRACE);
         }
     }
-}
-
-/// bundle → `(id, version)`，与 [`ExtensionStore`] 的键一致。
-pub fn bundle_key(bundle: &Bundle) -> (String, Version) {
-    key_of(bundle)
 }
 
 #[cfg(test)]
@@ -330,16 +308,15 @@ mod tests {
         format!(r#"{{ "id": "{id}", "name": "Demo", "version": "1.0.0", "entry": "index.js" }}"#)
     }
 
-    /// 测试里唯一的扩展身份。旧签名到处写 `("demo", "1.0.0")` 两个字面量，
-    /// 现在一个 bundle 说明全部。
-    fn demo() -> Bundle {
-        Bundle::from_filename("demo-v1.0.0.js").expect("valid bundle")
+    /// 测试里唯一的扩展身份：一个字符串说明全部。
+    fn demo() -> &'static str {
+        "demo"
     }
 
-    /// 建一个 `demo-v1.0.0.js/` 扩展目录并返回 `(root, entry, store)`。
+    /// 建一个 `demo/` 扩展目录并返回 `(root, entry, store)`。
     fn extension(entry: &str) -> (TempDir, Arc<ExtensionStore>, Arc<TestEnv>) {
         let tmp = TempDir::new("store");
-        let dir = "demo-v1.0.0.js";
+        let dir = "demo";
         tmp.write(&format!("{dir}/{MANIFEST_FILE}"), &manifest("demo"));
         tmp.write(&format!("{dir}/index.js"), entry);
         tmp.write(&format!("{dir}/{UI_ENTRY}"), "");
@@ -348,13 +325,13 @@ mod tests {
         let store = ExtensionStore::new(env.clone());
         let root = tmp.0.join(dir);
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .expect("extension should load");
         (tmp, store, env)
     }
 
     fn call(store: &ExtensionStore, command: &str) -> Result<Option<String>, JsError> {
-        store.invoke(&demo(), InvokeRequest::new(command, CancelToken::new()))
+        store.invoke(demo(), InvokeRequest::new(command, CancelToken::new()))
     }
 
     #[test]
@@ -382,7 +359,7 @@ mod tests {
     #[test]
     fn global_commands_fallback_works() {
         let (_tmp, store, _env) =
-            extension("globalThis.plux = { commands: { hello() { return 'glob'; } } };");
+            extension("globalThis.bolt = { commands: { hello() { return 'glob'; } } };");
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("glob"));
     }
 
@@ -412,21 +389,18 @@ mod tests {
     #[test]
     fn module_imports_resolve_inside_the_extension() {
         let tmp = TempDir::new("store-import");
-        tmp.write("demo-v1.0.0.js/extension.json", &manifest("demo"));
+        tmp.write("demo/extension.json", &manifest("demo"));
+        tmp.write("demo/index.js", "export { hello } from './lib/hello.js';");
         tmp.write(
-            "demo-v1.0.0.js/index.js",
-            "export { hello } from './lib/hello.js';",
-        );
-        tmp.write(
-            "demo-v1.0.0.js/lib/hello.js",
+            "demo/lib/hello.js",
             "export function hello() { return 'nested'; }",
         );
 
         let env = Arc::new(TestEnv::default());
         let store = ExtensionStore::new(env);
-        let root = tmp.0.join("demo-v1.0.0.js");
+        let root = tmp.0.join("demo");
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .expect("extension should load");
 
         assert_eq!(call(&store, "hello").unwrap().as_deref(), Some("nested"));
@@ -463,7 +437,7 @@ mod tests {
 
         let timeout = store
             .invoke(
-                &demo(),
+                demo(),
                 InvokeRequest::new("spin", CancelToken::new())
                     .with_timeout(Duration::from_millis(300)),
             )
@@ -489,7 +463,7 @@ mod tests {
         let started = std::time::Instant::now();
         let error = store
             .invoke(
-                &demo(),
+                demo(),
                 InvokeRequest::new("spin", cancel).with_timeout(Duration::from_secs(30)),
             )
             .unwrap_err();
@@ -500,9 +474,9 @@ mod tests {
     #[test]
     fn unload_stops_the_worker() {
         let (_tmp, store, _env) = extension("export function hello() { return 'hi'; }");
-        assert!(store.is_loaded(&demo()));
-        store.unload(&demo());
-        assert!(!store.is_loaded(&demo()));
+        assert!(store.is_loaded(demo()));
+        store.unload(demo());
+        assert!(!store.is_loaded(demo()));
         assert!(matches!(call(&store, "hello"), Err(JsError::NotLoaded(_))));
     }
 
@@ -577,7 +551,7 @@ mod tests {
     #[test]
     fn host_module_exports_track_apis_installed_after_load() {
         let tmp = TempDir::new("store-scope-module");
-        let dir = "demo-v1.0.0.js";
+        let dir = "demo";
         // 声明 typeStr 权限：转发模块里 typeStr 是真转发。
         tmp.write(
             &format!("{dir}/{MANIFEST_FILE}"),
@@ -593,7 +567,8 @@ mod tests {
         let root = tmp.0.join(dir);
         store
             .ensure_loaded(
-                &demo(),
+                demo(),
+                "1.0.0",
                 &root,
                 &root.join("index.js"),
                 &["typeStr".to_string()],
@@ -604,7 +579,7 @@ mod tests {
         let request = InvokeRequest::new("hello", CancelToken::new())
             .with_scope(Arc::new(TestScope) as Arc<dyn Scope>);
         assert_eq!(
-            store.invoke(&demo(), request).unwrap().as_deref(),
+            store.invoke(demo(), request).unwrap().as_deref(),
             Some("function|hi")
         );
     }
@@ -613,7 +588,7 @@ mod tests {
     fn undeclared_permission_throws_a_naming_error_at_call_time() {
         // fail-closed：清单不声明 typeStr，import 不炸，调用时抛出点名报错。
         let tmp = TempDir::new("store-perm-denied");
-        let dir = "demo-v1.0.0.js";
+        let dir = "demo";
         tmp.write(&format!("{dir}/{MANIFEST_FILE}"), &manifest("demo"));
         tmp.write(
             &format!("{dir}/index.js"),
@@ -624,7 +599,7 @@ mod tests {
         let store = ExtensionStore::new(env);
         let root = tmp.0.join(dir);
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .expect("extension should load");
 
         let error = call(&store, "hello").unwrap_err();
@@ -698,23 +673,23 @@ mod tests {
         }
     }
 
-    /// 建一个 `demo-v1.0.0.js` 扩展目录并返回根路径。
+    /// 建一个 `demo` 扩展目录并返回根路径。
     fn write_demo(tmp: &TempDir, entry: &str) -> std::path::PathBuf {
-        tmp.write("demo-v1.0.0.js/extension.json", &manifest("demo"));
-        tmp.write("demo-v1.0.0.js/index.js", entry);
-        tmp.0.join("demo-v1.0.0.js")
+        tmp.write("demo/extension.json", &manifest("demo"));
+        tmp.write("demo/index.js", entry);
+        tmp.0.join("demo")
     }
 
     fn wait_for_state(store: &ExtensionStore, want: RuntimeState) {
         for _ in 0..500 {
-            if store.state(&demo()) == Some(want) {
+            if store.state(demo()) == Some(want) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!(
             "state never became {want:?} (last: {:?})",
-            store.state(&demo())
+            store.state(demo())
         );
     }
 
@@ -726,10 +701,10 @@ mod tests {
         let store = ExtensionStore::new(env);
 
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .expect("spawn must not wait for the engine");
         // 关键断言：返回时引擎还没建好。
-        assert_eq!(store.state(&demo()), Some(RuntimeState::Loading));
+        assert_eq!(store.state(demo()), Some(RuntimeState::Loading));
 
         started
             .recv_timeout(Duration::from_secs(5))
@@ -738,7 +713,7 @@ mod tests {
 
         let output = call(&store, "hello").expect("hello should run");
         assert_eq!(output.as_deref(), Some("hi"));
-        assert_eq!(store.state(&demo()), Some(RuntimeState::Ready));
+        assert_eq!(store.state(demo()), Some(RuntimeState::Ready));
     }
 
     #[test]
@@ -753,7 +728,7 @@ mod tests {
         let store = ExtensionStore::new(env);
 
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
 
         let unlocked = release.clone();
@@ -782,7 +757,7 @@ mod tests {
         let store = ExtensionStore::new(env);
 
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .expect("spawn itself succeeds; the failure is asynchronous");
         wait_for_state(&store, RuntimeState::Dead);
 
@@ -818,7 +793,7 @@ mod tests {
                 let root = root.clone();
                 std::thread::spawn(move || {
                     store
-                        .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+                        .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
                         .expect("ensure_loaded");
                 })
             })
@@ -842,18 +817,18 @@ mod tests {
         let store = ExtensionStore::new(env);
 
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
         started.recv_timeout(Duration::from_secs(5)).unwrap();
 
         let started_at = Instant::now();
-        store.unload(&demo());
+        store.unload(demo());
         assert!(
             started_at.elapsed() < Duration::from_millis(900),
             "unload must not wait for a stuck load (took {:?})",
             started_at.elapsed()
         );
-        assert!(!store.is_loaded(&demo()));
+        assert!(!store.is_loaded(demo()));
         assert!(matches!(call(&store, "hello"), Err(JsError::NotLoaded(_))));
 
         // 放行，让被放手的线程自己退出，别留给别的测试。
@@ -869,19 +844,19 @@ mod tests {
         let _ = _release.send(());
         let store = ExtensionStore::new(env);
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
         wait_for_state(&store, RuntimeState::Ready);
 
         // 只让线程退出，不摘表：模拟运行时意外死亡。
         store
-            .worker_for_test(&demo())
+            .worker_for_test(demo())
             .expect("worker")
             .exit_for_test();
         wait_for_state(&store, RuntimeState::Dead);
         assert!(
             store
-                .last_error(&demo())
+                .last_error(demo())
                 .is_some_and(|error| error.to_string().contains("运行时已退出")),
             "death must carry a reason"
         );
@@ -929,7 +904,7 @@ mod tests {
         );
         let store = ExtensionStore::new(Arc::new(SentryEnv));
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
 
         assert_eq!(call(&store, "quit").unwrap_err(), JsError::Exit(7));
@@ -947,13 +922,13 @@ mod tests {
         let _ = release.send(());
         let store = ExtensionStore::new(env);
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
 
         let request = InvokeRequest::new("echo", CancelToken::new())
             .with_args(vec![serde_json::json!(1), serde_json::json!("a")]);
         assert_eq!(
-            store.invoke(&demo(), request).unwrap().as_deref(),
+            store.invoke(demo(), request).unwrap().as_deref(),
             Some(r#"[1,"a"]"#)
         );
     }
@@ -969,7 +944,7 @@ mod tests {
         let _ = release.send(());
         let store = ExtensionStore::new(env);
         store
-            .ensure_loaded(&demo(), &root, &root.join("index.js"), &[])
+            .ensure_loaded(demo(), "1.0.0", &root, &root.join("index.js"), &[])
             .unwrap();
 
         assert_eq!(call(&store, "size").unwrap().as_deref(), Some("0"));

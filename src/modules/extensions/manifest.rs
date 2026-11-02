@@ -1,15 +1,14 @@
 //! 扩展目录的定位、播种与扫描。
 //!
-//! 目录约定（plux 的 bundle 命名）：`<extensions>/<id>-v<version>.js/`，
-//! 目录里放 `extension.json` 与入口脚本。清单本身的解析与校验在
-//! `plux_js_manager::manifest` 里，本模块只管"文件在哪、怎么播种、哪些目录
-//! 看起来是扩展但已经不可用"。
+//! 目录约定：`<extensions>/<id>/`，目录里放 `extension.json` 与入口脚本。
+//! 清单本身的解析与校验在 `bolt_extensions::manifest` 里，本模块只管
+//! "文件在哪、怎么播种、哪些目录看起来是扩展但已经不可用"。
 //!
 //! 没有 `extension.json` 的目录一律忽略——作者的草稿不该刷一屏错误。
 
 use std::path::{Path, PathBuf};
 
-pub use plux_js_manager::{
+pub use bolt_extensions::{
     EXTENSION_SCHEMA, MANIFEST_FILE, SCHEMA_FILE, UI_ENTRY, UiActionKind, UiBuiltin,
 };
 
@@ -18,32 +17,28 @@ pub const SHELL_MANIFEST_FILE: &str = "gpui-shell.json";
 
 /// 首次启动时落盘的示例扩展目录（脚本命令 + UI 命令 + 标题栏动作）。
 ///
-/// 内容的唯一事实来源是仓库的 `extensions/demo-v1.0.0.js/`：用 `include_str!`
+/// 内容的唯一事实来源是仓库的 `extensions/demo/`：用 `include_str!`
 /// 在编译期嵌进来，release 二进制找不到仓库也能写出同一样的一份；改示例后
 /// 重编译即同步。仓库形态（debug 构建）不落盘——仓库目录本身就是扩展目录。
-pub const DEMO_DIR: &str = "demo-v1.0.0.js";
+pub const DEMO_DIR: &str = "demo";
 
-pub(super) const DEMO_MANIFEST: &str =
-    include_str!("../../../extensions/demo-v1.0.0.js/extension.json");
+pub(super) const DEMO_MANIFEST: &str = include_str!("../../../extensions/demo/extension.json");
 
 /// 示例扩展的全部文件：`(扩展目录内的相对路径, 内容)`。
 const DEMO_FILES: &[(&str, &str)] = &[
     (MANIFEST_FILE, DEMO_MANIFEST),
     (
         "index.js",
-        include_str!("../../../extensions/demo-v1.0.0.js/index.js"),
+        include_str!("../../../extensions/demo/index.js"),
     ),
-    (
-        UI_ENTRY,
-        include_str!("../../../extensions/demo-v1.0.0.js/main.js"),
-    ),
+    (UI_ENTRY, include_str!("../../../extensions/demo/main.js")),
     (
         "jsconfig.json",
-        include_str!("../../../extensions/demo-v1.0.0.js/jsconfig.json"),
+        include_str!("../../../extensions/demo/jsconfig.json"),
     ),
     (
         "icons/star.svg",
-        include_str!("../../../extensions/demo-v1.0.0.js/icons/star.svg"),
+        include_str!("../../../extensions/demo/icons/star.svg"),
     ),
 ];
 
@@ -106,7 +101,7 @@ pub fn ensure_schema(dir: &Path) -> Result<(), String> {
 
 /// 扫描扩展根，返回可注册的扩展目录与错误消息。
 ///
-/// - 有 `extension.json` → 收集（是否合法交给 plux manager 判断）。
+/// - 有 `extension.json` → 收集（是否合法交给注册表判断）。
 /// - 没有 → 忽略（作者的草稿目录不该刷一屏错误）。
 /// - 同时有 `gpui-shell.json` → 报错，因为 gpui-shell 会走严格清单路径。
 pub fn scan(extensions: &Path) -> (Vec<PathBuf>, Vec<String>) {
@@ -248,7 +243,7 @@ mod tests {
     #[test]
     fn scans_extension_dirs_and_skips_drafts() {
         let tmp = TempDir::new("ext-scan-ok");
-        tmp.write(&format!("demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
+        tmp.write(&format!("demo/{MANIFEST_FILE}"), "{}");
         tmp.write("scratch/notes.txt", "draft");
 
         let (extensions, errors) = scan(&tmp.0);
@@ -260,8 +255,8 @@ mod tests {
     #[test]
     fn gpui_shell_manifest_is_rejected() {
         let tmp = TempDir::new("ext-shell-manifest");
-        tmp.write(&format!("demo-v1.0.0.js/{MANIFEST_FILE}"), "{}");
-        tmp.write(&format!("demo-v1.0.0.js/{SHELL_MANIFEST_FILE}"), "{}");
+        tmp.write(&format!("demo/{MANIFEST_FILE}"), "{}");
+        tmp.write(&format!("demo/{SHELL_MANIFEST_FILE}"), "{}");
 
         let (extensions, errors) = scan(&tmp.0);
         assert!(extensions.is_empty());
@@ -294,24 +289,24 @@ mod tests {
     #[test]
     fn bundled_extension_copy_only_missing() {
         let source = TempDir::new("ext-bundled-src");
-        source.write(&format!("a-v1.0.0.js/{MANIFEST_FILE}"), "{}");
-        source.write("a-v1.0.0.js/index.js", "export function run() {}");
-        source.write(&format!("b-v1.0.0.js/{MANIFEST_FILE}"), "{}");
+        source.write(&format!("a/{MANIFEST_FILE}"), "{}");
+        source.write("a/index.js", "export function run() {}");
+        source.write(&format!("b/{MANIFEST_FILE}"), "{}");
 
         let target = TempDir::new("ext-bundled-dst");
         let copied = sync_extensions(&source.0, &target.0).expect("first sync");
         assert_eq!(copied, 2);
-        assert!(target.0.join("a-v1.0.0.js/index.js").is_file());
+        assert!(target.0.join("a/index.js").is_file());
 
         std::fs::write(
-            target.0.join("a-v1.0.0.js/index.js"),
+            target.0.join("a/index.js"),
             "export function run() { /* local */ }",
         )
         .unwrap();
         let copied = sync_extensions(&source.0, &target.0).expect("second sync");
         assert_eq!(copied, 0);
         assert!(
-            std::fs::read_to_string(target.0.join("a-v1.0.0.js/index.js"))
+            std::fs::read_to_string(target.0.join("a/index.js"))
                 .unwrap()
                 .contains("local")
         );

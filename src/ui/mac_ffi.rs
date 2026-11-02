@@ -256,7 +256,7 @@ mod tests {
     fn move_to_trash_moves_and_suffixes_on_conflict() {
         let tmp = TempDir::new("mac-ffi-trash");
         let trash = tmp.0.join("Trash");
-        let extension = tmp.0.join("demo-v1.0.0.js");
+        let extension = tmp.0.join("demo");
         std::fs::create_dir_all(&extension).unwrap();
         std::fs::write(extension.join("extension.json"), "{}").unwrap();
 

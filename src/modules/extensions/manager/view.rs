@@ -4,6 +4,7 @@
 //! 点「刷新」、以及任何一次操作之后。状态变化（禁用/卸载/新建）通过
 //! `AppShell::items_revision` 传进来，这时也只重取一次内存快照。
 
+use bolt_extensions::RuntimeState;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable};
 use gpui_kit::{
@@ -11,8 +12,6 @@ use gpui_kit::{
     IntoElement, ParentElement as _, Render, StatefulInteractiveElement as _, Styled as _, Window,
     div, px,
 };
-use plux_js_manager::RuntimeState;
-use plux_rs::Bundle;
 
 use super::super::actions::{ActionSubject, extension_actions};
 use super::super::host::ExtensionEntry;
@@ -24,7 +23,7 @@ use crate::ui::window::{WindowPin, WindowTitleBar};
 
 pub(crate) struct ExtensionManagerView {
     entries: Vec<ExtensionEntry>,
-    selected: Option<Bundle>,
+    selected: Option<String>,
     status: String,
     /// 标题栏右上角的置顶图钉（公共控件，读窗口真实层级）。
     pin: Entity<WindowPin>,
@@ -76,19 +75,19 @@ impl ExtensionManagerView {
         let alive = self
             .selected
             .as_ref()
-            .is_some_and(|bundle| self.entries.iter().any(|entry| &entry.bundle == bundle));
+            .is_some_and(|id| self.entries.iter().any(|entry| entry.id == *id));
         if !alive {
-            self.selected = self.entries.first().map(|entry| entry.bundle.clone());
+            self.selected = self.entries.first().map(|entry| entry.id.clone());
         }
     }
 
     fn selected_entry(&self) -> Option<&ExtensionEntry> {
         let selected = self.selected.as_ref()?;
-        self.entries.iter().find(|entry| &entry.bundle == selected)
+        self.entries.iter().find(|entry| entry.id == *selected)
     }
 
-    fn select(&mut self, bundle: Bundle, cx: &mut Context<Self>) {
-        self.selected = Some(bundle);
+    fn select(&mut self, id: String, cx: &mut Context<Self>) {
+        self.selected = Some(id);
         cx.notify();
     }
 
@@ -148,8 +147,8 @@ impl ExtensionManagerView {
         }
 
         for (index, entry) in self.entries.iter().enumerate() {
-            let selected = self.selected.as_ref() == Some(&entry.bundle);
-            let bundle = entry.bundle.clone();
+            let selected = self.selected.as_ref() == Some(&entry.id);
+            let id = entry.id.clone();
             let row_bg = if selected {
                 colors.accent
             } else {
@@ -165,7 +164,7 @@ impl ExtensionManagerView {
                     .py(px(7.))
                     .bg(row_bg)
                     .hover(|style| style.bg(colors.muted.opacity(0.5)).cursor_pointer())
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(bundle.clone(), cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.select(id.clone(), cx)))
                     .child(
                         div()
                             .flex()
@@ -193,7 +192,7 @@ impl ExtensionManagerView {
                                 div()
                                     .text_size(px(10.))
                                     .text_color(colors.muted_foreground)
-                                    .child(format!("v{}", entry.bundle.version)),
+                                    .child(format!("v{}", entry.version)),
                             ),
                     )
                     .child(
@@ -201,7 +200,7 @@ impl ExtensionManagerView {
                             .flex()
                             .items_center()
                             .gap(px(4.))
-                            .child(badge(&entry.bundle.id, colors.muted_foreground))
+                            .child(badge(&entry.id, colors.muted_foreground))
                             .children(self.badges(
                                 entry,
                                 colors.muted_foreground,
@@ -228,9 +227,6 @@ impl ExtensionManagerView {
         }
         if entry.manifest_error.is_some() {
             badges.push(badge("异常", destructive));
-        }
-        if entry.shadowed {
-            badges.push(badge("被遮蔽", muted));
         }
         match entry.runtime {
             Some(RuntimeState::Ready) => badges.push(badge("运行中", primary)),
@@ -276,7 +272,7 @@ impl ExtensionManagerView {
                     div()
                         .text_size(px(11.))
                         .text_color(colors.muted_foreground)
-                        .child(format!("v{}", entry.bundle.version)),
+                        .child(format!("v{}", entry.version)),
                 ),
         );
 
@@ -326,24 +322,10 @@ impl ExtensionManagerView {
             ))
             .child(field_row(
                 "数据目录",
-                &extension_data_dir(&entry.bundle.id).display().to_string(),
+                &extension_data_dir(&entry.id).display().to_string(),
                 colors.muted_foreground,
                 colors.foreground,
             ));
-
-        if !entry.dependents.is_empty() {
-            let names: Vec<String> = entry
-                .dependents
-                .iter()
-                .map(|bundle| format!("{} v{}", bundle.id, bundle.version))
-                .collect();
-            column = column.child(field_row(
-                "被依赖",
-                &names.join("、"),
-                colors.muted_foreground,
-                colors.foreground,
-            ));
-        }
 
         if let Some(error) = &entry.manifest_error {
             column = column.child(field_block("清单错误", error, colors.danger));

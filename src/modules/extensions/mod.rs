@@ -1,4 +1,4 @@
-//! Extensions 模块：把 `extensions/` 下的 plux 扩展变成 Launcher item。
+//! Extensions 模块：把 `extensions/` 下的扩展变成 Launcher item。
 //!
 //! 一个扩展贡献若干命令，一条命令一条 item：
 //!
@@ -49,7 +49,7 @@ impl Module for ExtensionsModule {
     fn collect_items(&self, cx: &App) -> Vec<LauncherItem> {
         let (targets, report) = {
             let state = cx.global::<ExtensionsState>();
-            // `collect_items` 只拿到 `&App`，而注册扩展要 `&mut Loader`：
+            // `collect_items` 只拿到 `&App`，而注册扩展要 `&mut registry`：
             // 宿主因此放在 RefCell 里（GPUI 是单线程的，不存在并发借用）。
             let mut host = state.host.borrow_mut();
             let report = host.refresh();
@@ -144,7 +144,7 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
                 subtitle: target.description.clone().or_else(|| {
                     Some(format!(
                         "{} v{}",
-                        target.extension_name, target.bundle.version
+                        target.extension_name, target.extension_version
                     ))
                 }),
                 // 清单写了图标（命令级覆盖扩展级）就用它；否则按命令类型给默认。
@@ -172,16 +172,15 @@ fn items_in(targets: &[CommandTarget]) -> Vec<LauncherItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plux_js_manager::{ExtensionManifest, UiCapabilities, UiSpec};
-    use plux_rs::Bundle;
+    use bolt_extensions::{ExtensionManifest, UiCapabilities, UiSpec};
     use std::path::PathBuf;
 
     fn target(command: &str, ui: Option<UiSpec>) -> CommandTarget {
         CommandTarget {
-            bundle: Bundle::from_filename("demo-v1.0.0.js").expect("valid bundle"),
             extension_id: "demo".to_string(),
+            extension_version: "1.0.0".to_string(),
             extension_name: "演示扩展".to_string(),
-            root: PathBuf::from("/tmp/demo-v1.0.0.js"),
+            root: PathBuf::from("/tmp/demo"),
             command_id: command.to_string(),
             title: format!("命令 {command}"),
             description: None,
@@ -296,8 +295,6 @@ mod tests {
             description: None,
             version: "1.0.0".into(),
             entry: "index.js".into(),
-            depends: Vec::new(),
-            optional_depends: Vec::new(),
             permissions: Vec::new(),
             icon: None,
             commands: Vec::new(),

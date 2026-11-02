@@ -1,10 +1,10 @@
 //! 每扩展一个专用线程，线程里跑一个常驻的 QuickJS 运行时。
 //!
-//! 为什么是线程 + 消息而不是 `AsyncRuntime::spawn`：plux 的 `Function::call` 与
-//! `Manager` 的方法都是同步的，而宿主的定时器、`fetch`、`Async(...)` 宿主函数又都
-//! 依赖 tokio 反应堆。给每个扩展一条线程、线程内自带一个 current-thread 运行时，
-//! 让同步的 `invoke` 与异步的引擎能干净地待在一起，也顺带把"引擎不跨线程"这条
-//! QuickJS 约束变成了结构性保证。
+//! 为什么是线程 + 消息而不是 `AsyncRuntime::spawn`：宿主调 `invoke` 是同步的，
+//! 而定时器、`fetch`、`Async(...)` 宿主函数又都依赖 tokio 反应堆。给每个扩展
+//! 一条线程、线程内自带一个 current-thread 运行时，让同步的 `invoke` 与异步的
+//! 引擎能干净地待在一起，也顺带把"引擎不跨线程"这条 QuickJS 约束变成了
+//! 结构性保证。
 //!
 //! **加载是非阻塞的**：`spawn` 只起线程就返回，引擎构建与入口求值都在工人线程里
 //! 跑。就绪与否由 `LoadState` 记录——它在 gpui 主线程上被 `ensure_loaded` 调用，
@@ -48,31 +48,31 @@ pub(crate) const POLL: Duration = Duration::from_millis(100);
 /// 丢给 `Drop` 的宽限：正常停在消息循环里的线程毫秒级退出。
 const DROP_GRACE: Duration = Duration::from_millis(500);
 
-/// 命令派发脚本。三档回退顺序：具名导出 → default 对象 → `globalThis.plux.commands`。
+/// 命令派发脚本。三档回退顺序：具名导出 → default 对象 → `globalThis.bolt.commands`。
 const DISPATCH: &str = r#"
-globalThis.__plux_result = undefined;
-globalThis.__plux_missing = undefined;
-const call = globalThis.__plux_call || {};
+globalThis.__bolt_result = undefined;
+globalThis.__bolt_missing = undefined;
+const call = globalThis.__bolt_call || {};
 const name = call.command;
-const ns = globalThis.__plux_ns || {};
-const fallback = globalThis.__plux_default;
+const ns = globalThis.__bolt_ns || {};
+const fallback = globalThis.__bolt_default;
 let handler = (typeof ns[name] === "function") ? ns[name] : undefined;
 if (!handler && fallback && typeof fallback[name] === "function") {
   handler = fallback[name].bind(fallback);
 }
 if (!handler) {
-  const root = globalThis.plux;
+  const root = globalThis.bolt;
   if (root && root.commands && typeof root.commands[name] === "function") {
     handler = root.commands[name];
   }
 }
 if (!handler) {
-  globalThis.__plux_missing = name;
+  globalThis.__bolt_missing = name;
 } else {
   const argv = Array.isArray(call.argv) ? call.argv : [];
-  globalThis.__plux_result = await handler({
+  globalThis.__bolt_result = await handler({
     command: name,
-    extension: { id: globalThis.__plux_plugin_id, version: globalThis.__plux_plugin_version },
+    extension: { id: globalThis.__bolt_extension_id, version: globalThis.__bolt_extension_version },
     root: call.root,
     argv,
   });
@@ -180,7 +180,7 @@ impl ExtensionWorker {
         let thread_shared = shared.clone();
 
         let join = std::thread::Builder::new()
-            .name(format!("plux-js:{}", spec.id))
+            .name(format!("bolt-ext:{}", spec.id))
             .spawn(move || worker_main(spec, env, thread_abort, rx, thread_shared))
             .map_err(|e| JsError::Runtime(format!("无法启动扩展线程：{e}")))?;
 
@@ -465,20 +465,20 @@ async fn build_engine(
                 .map_err(|e| JsError::Script(format!("宿主注入失败：{e}")))?;
 
             ctx.globals()
-                .set("__plux_plugin_id", spec_id)
+                .set("__bolt_extension_id", spec_id)
                 .map_err(runtime_error)?;
             ctx.globals()
-                .set("__plux_plugin_version", spec_version)
+                .set("__bolt_extension_version", spec_version)
                 .map_err(runtime_error)?;
             ctx.globals()
-                .set("__plux_root", root)
+                .set("__bolt_root", root)
                 .map_err(runtime_error)?;
 
             // 把入口模块的命名空间挂到全局，供后续每条命令的派发脚本读取。
             let bridge = format!(
-                "import * as ns from {entry:?};\nglobalThis.__plux_ns = ns;\nglobalThis.__plux_default = (ns && ns.default) || undefined;\n",
+                "import * as ns from {entry:?};\nglobalThis.__bolt_ns = ns;\nglobalThis.__bolt_default = (ns && ns.default) || undefined;\n",
             );
-            let promise = Module::evaluate(ctx.clone(), "<plux:entry>", bridge)
+            let promise = Module::evaluate(ctx.clone(), "<bolt:entry>", bridge)
                 .map_err(|e| caught(env, rquickjs::CaughtError::from_error(&ctx, e)))?;
             promise
                 .into_future::<()>()
@@ -510,14 +510,14 @@ async fn invoke(
                 "command": request.command,
                 // 缺省给空数组：DISPATCH 里 `Array.isArray(call.argv)` 必须成立。
                 "argv": request.args.clone().unwrap_or_default(),
-                "root": ctx.globals().get::<_, String>("__plux_root").unwrap_or_default(),
+                "root": ctx.globals().get::<_, String>("__bolt_root").unwrap_or_default(),
             });
             let call = ctx.json_parse(payload.to_string()).map_err(runtime_error)?;
             ctx.globals()
-                .set("__plux_call", call)
+                .set("__bolt_call", call)
                 .map_err(runtime_error)?;
 
-            let name = format!("<plux:call:{seq}>");
+            let name = format!("<bolt:call:{seq}>");
             let promise = Module::evaluate(ctx.clone(), name.as_str(), DISPATCH)
                 .map_err(|e| caught(env, rquickjs::CaughtError::from_error(&ctx, e)))?;
             promise
@@ -526,10 +526,10 @@ async fn invoke(
                 .catch(&ctx)
                 .map_err(|e| caught(env, e))?;
 
-            if let Some(missing) = read_string(&ctx, "__plux_missing")? {
+            if let Some(missing) = read_string(&ctx, "__bolt_missing")? {
                 return Err(JsError::MissingHandler(missing));
             }
-            let value: Value = ctx.globals().get("__plux_result").map_err(runtime_error)?;
+            let value: Value = ctx.globals().get("__bolt_result").map_err(runtime_error)?;
             value_to_json(&ctx, &value).map_err(|e| JsError::Script(e.to_string()))
         })
         .await

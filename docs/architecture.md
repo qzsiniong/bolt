@@ -14,7 +14,7 @@
 | ① 入口 | 用户以三种方式唤起命令：全局热键、Cmd+K 二级动作、Cmd+V 粘贴识别 | `app/hotkey`、`app/launcher` |
 | ② 命令面板 | Launcher 收集 items、过滤、排序、键盘分流；对具体模块一无所知 | `app/launcher/` |
 | ③ 内容模块 | 各自实现 `Module` trait，向 Launcher 贡献 items，自管窗口与状态 | `modules/` |
-| ④ 执行层 | 脚本与扩展命令在两个不同的运行时里执行；UI 命令交给 gpui-shell 原生渲染 | `runtime/`、`host/`、`crates/plux-js-manager` |
+| ④ 执行层 | 脚本与扩展命令在两个不同的运行时里执行；UI 命令交给 gpui-shell 原生渲染 | `runtime/`、`host/`、`crates/bolt-extensions` |
 | ⑤ 基础设施 | 领域数据、Console 缓冲、语言服务、跨模块 UI 件 | `crates/bolt-model`、`crates/bolt-console`、`crates/bolt-lsp`、`core/`、`ui/` |
 
 图只画主链路。几条贯穿性约束值得先记住：
@@ -54,7 +54,7 @@
 | `json_editor/` | 原生 JSON 编辑器窗口（严格校验、折叠、高亮） |
 | `pin/` | 「Pin 剪贴板」便签：把剪贴板图片/文本固定成桌面悬浮窗口，支持置顶、缩放、另存、复制回剪贴板。`clipboard.rs` 只做 pin 专属的一层转换（宿主公共 `PasteContent` → 便签展示类型，并给出便签尺寸） |
 | `console/` | `panel` 是 Console 视图（管理器的 dock 面板与独立窗口共用同一个组件）、`chrome` 决定要不要自绘标题栏、`window` 是独立窗口单例开窗逻辑 |
-| `extensions/` | 扩展：`manifest` 目录扫描与播种、`host` 与 plux 的 `Loader` 对接 + 清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表、`actions` 扩展级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载、`manager/` 管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘 |
+| `extensions/` | 扩展：`manifest` 目录扫描与播种、`host` 与注册表对接 + 清单快照 `inventory()`、`js_env` 宿主注入、`exec` 脚本命令、`ui_window` UI 命令窗口、`prefs` 禁用列表、`actions` 扩展级动作（Launcher 与管理窗口共用）、`ops` 重载/禁用/卸载、`manager/` 管理窗口、`create/` 新建扩展窗口、`scaffold` 模板生成与 `.d.ts` 落盘 |
 | `color_picker/` | 屏幕取色：覆盖鼠标所在显示器的透明浮窗 + 全屏放大镜拾色，复制 HEX 色值 |
 
 ### 跨模块 UI
@@ -76,8 +76,8 @@
 
 ### 扩展框架
 
-- [src/host/](../src/host) — 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）+ 内置模块 `modules/{bolt,typer,qr}`。模块转发源码生成与文件解析复用 `plux-js-manager` 的导出，与扩展侧是同一份实现。
-- [crates/plux-js-manager/](../crates/plux-js-manager) — 独立的 JS 扩展 manager crate，**不依赖 gpui，可单独测试**：`manifest`（`extension.json` 解析校验）、`meta`（`plux_rs::Info` 实现）、`manager`（`Manager` trait）、`worker`（每扩展一条线程 + 常驻 QuickJS，四态就绪状态机）、`store`（跨线程执行入口 + 运行时健康状态）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）、`schema`（清单 schema 的极简校验器，供测试用）。
+- [src/host/](../src/host) — 宿主扩展框架（`HostModule` / `HostLoader` / `HostResolver`）+ 内置模块 `modules/{bolt,typer,qr}`。模块转发源码生成复用 `bolt-extensions` 的导出，与扩展侧是同一份实现。
+- [crates/bolt-extensions/](../crates/bolt-extensions) — 独立的 JS 扩展注册表 crate，**不依赖 gpui、不含宿主业务逻辑，可单独测试**：`manifest`（`extension.json` 解析校验，id 必填、version 缺省 1.0.0）、`registry`（注册表 + 目录指纹重载，三态 Added/Unchanged/Reloaded）、`worker`（每扩展一条线程 + 常驻 QuickJS，四态就绪状态机）、`store`（跨线程执行入口 + 运行时健康状态）、`loader`（模块解析）、`env`（宿主注入点 `JsEnv`）、`schema`（清单 schema 的极简校验器，供测试用）、`fingerprint`（目录内容指纹）、`cancel` / `value`（取消令牌与 JS 值桥接）。
 - [schemas/extension.schema.json](../schemas/extension.schema.json) — 清单的 JSON Schema（手写，`include_str!` 进二进制）：给编辑器补全/校验用，宿主启动时复制到扩展根，运行时不读。
 
 ### 语言服务与通用基础设施
@@ -93,7 +93,7 @@
 
 | crate | 职责 | 依赖要点 |
 | --- | --- | --- |
-| [plux-js-manager](../crates/plux-js-manager) | JS 扩展 manager（清单/生命周期/每扩展常驻 QuickJS 线程），细节见「扩展框架」 | rquickjs、plux-rs，无 gpui |
+| [bolt-extensions](../crates/bolt-extensions) | JS 扩展注册表与运行时（清单/注册与指纹重载/每扩展常驻 QuickJS 线程），通用可复用、不含宿主业务逻辑，细节见「扩展框架」 | rquickjs、serde、semver，无 gpui |
 | [bolt-console](../crates/bolt-console) | Console 输出通道（共享缓冲 + 读者游标 + Error 落盘） | 仅 chrono |
 | [bolt-ts](../crates/bolt-ts) | swc 的 TypeScript 类型擦除（`strip_typescript`），脚本与扩展运行时共用 | 仅 swc 全家桶，单独编译收益最大 |
 | [bolt-lsp](../crates/bolt-lsp) | typescript-language-server 的 stdio JSON-RPC 客户端 | crossbeam-channel、lsp-types，无 gpui |
@@ -114,13 +114,13 @@
 
 ### 扩展系统
 
-- **生命周期与执行分离**：plux 的 `Loader` 是 `&mut` 单线程的，只在主线程做「注册 / 安排加载 / 读元数据」；命令执行交给 `ExtensionStore`（`Arc` 可跨线程）。`ensure_loaded` 只起线程不等待，等就绪发生在执行线程上，所以打开 Launcher 与第一次执行命令都不会卡 UI。
-- **健康检查兜底**：`extension.is_load` 说已加载、`ExtensionStore` 却说运行时已死时，先 `unload` 复位再重新安排——plux 的 `load_plugin` 对已加载扩展是 no-op，少了这一步永远不会重建。
-- **模块加载一份实现**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；扩展侧由 `ExtensionResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才落到正确目录。两侧「说明符 → 磁盘文件」与「宿主模块转发源码生成」是同一份代码（`plux_js_manager::{resolve_file, forwarding_module_source}`）。
+- **生命周期与执行分离**：注册表（`ExtensionRegistry`）是 `&mut` 单线程的，只在主线程做「扫描注册 / 读元数据」；命令执行交给 `ExtensionStore`（`Arc` 可跨线程）。`ensure_loaded` 只起线程不等待，等就绪发生在执行线程上，所以打开 Launcher 与第一次执行命令都不会卡 UI。
+- **健康检查兜底**：注册表说已注册、`ExtensionStore` 却说运行时已死时，先 `unload` 复位再重新 `load`，少了这一步永远不会重建。
+- **模块加载一份实现**：`HostLoader` 优先匹配已注册的 HostModule，其次按路径从磁盘加载（`.ts` 自动类型擦除）；扩展侧由 `ExtensionResolver` 把相对说明符解析成绝对路径，`lib/a.js` 里的 `import "./b.js"` 才落到正确目录。两侧「说明符 → 磁盘文件」与「宿主模块转发源码生成」是同一份代码（`bolt_extensions::{resolve_file, forwarding_module_source}`）。
 - **转发模块是转发函数而不是解构**：宿主 API 分两批安装（加载时装基础函数、每轮命令前装交互 API），解构会把加载时的 `undefined` 固化进 const 绑定。
 - **权限的落点**：`HostModule::export_guarded` 登记每个导出所需的权限；`JsEnv::host_modules(permissions)` 按清单把导出拆成「允许 / 拒绝」两半，拒绝项在转发模块里生成抛错桩（`import` 不炸，调用时点名缺哪个权限）。脚本链路不经过这道过滤——用户脚本全权。
-- **禁用是数据层过滤，不是 UI 遮掩**：禁用集合在 `refresh` 里生效（被禁用的扩展整条跳过注册），`commands()` 与 `ensure_loaded()` 再各兜一道底。Launcher、管理窗口、RunService 三条路径自动一致。
-- **卸载顺序就是正确性**：先注销（plux 在被依赖时拒绝）再动磁盘，被依赖时磁盘一个字节都不会变。
+- **禁用是数据层过滤，不是 UI 遮掩**：禁用集合在 `refresh` 里生效（被禁用的扩展注册后立即注销），`commands()` 与 `ensure_loaded()` 再各兜一道底。Launcher、管理窗口、RunService 三条路径自动一致。
+- **卸载就是注销 + 移废纸篓**：先注销运行时再动磁盘，没有扩展间依赖需要考虑。
 
 ### 窗口与系统集成
 

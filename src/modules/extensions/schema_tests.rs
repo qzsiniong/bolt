@@ -2,7 +2,7 @@
 //!
 //! `schemas/extension.schema.json` 是**手写**的（编译期嵌进
 //! [`EXTENSION_SCHEMA`]）：它既给编辑器做补全，也等于一份「清单说明书」。
-//! 手写的东西会漂移，所以这里用 `plux_js_manager::schema::problems` 反查三件事：
+//! 手写的东西会漂移，所以这里用 `bolt_extensions::schema::problems` 反查三件事：
 //!
 //! 1. 脚手架生成的每种模板都符合 schema；
 //! 2. 仓库里的示例扩展都符合 schema（文档里的写法必须本身合法）；
@@ -12,7 +12,7 @@ use std::path::Path;
 
 use super::manifest::{DEMO_MANIFEST, EXTENSION_SCHEMA, MANIFEST_FILE};
 use super::scaffold::{ExtensionSpec, Template, files};
-use plux_js_manager::schema::problems;
+use bolt_extensions::schema::problems;
 
 fn schema() -> serde_json::Value {
     serde_json::from_str(EXTENSION_SCHEMA).expect("嵌入的 schema 必须是合法 JSON")

@@ -8,7 +8,7 @@
 
 - **全局快捷键 Launcher**：`Alt + Space` 唤起 Raycast 风格命令面板，搜索并运行脚本、扩展命令或打开管理器。
 - **剪贴板粘贴识别**：Launcher 里 `Cmd + V` 自动识别剪贴板内容（图片 / 文件 / JSON / 链接 / 文本），搜索框出现带图标的类型 token，列表立即过滤为能处理该内容的命令；识别零转码、不读字节，毫秒级跟手。
-- **扩展（plux-rs）**：`extensions/<id>-v<version>.js/` 目录就是一个扩展，清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
+- **扩展（bolt-extensions）**：`extensions/<id>/` 目录就是一个扩展（目录名 = 清单里的 `id`），清单是一份 `extension.json`；`commands` 里每条命令变成 Launcher 里的一条命令，磁盘改动下次唤出 Launcher 即生效。
 - **两类命令一套清单**：命令带 `ui` 块 → gpui-shell 在原生窗口里渲染（入口固定 `main.js`，脚本用 `export default class extends View` 描述界面，无 WebView）；不带 → 在扩展自己的**常驻** QuickJS 运行时里执行同名导出函数，模块级状态跨命令保留。
 - **fail-closed 扩展权限**：脚本命令要用的危险 API（文件读写、网络、exec、env、输入注入）必须在清单 `permissions` 里声明，缺省一个都不给；普通脚本全权（等同自己写的代码）。详见[信任模型](docs/trust-model.md)。
 - **扩展管理与新建**：管理窗口一个列表看全扩展（版本、状态徽标、声明权限、被谁依赖、清单/运行错误），每个扩展可重载 / 禁用（**真不加载**）/ 在 Finder 中显示 / 打开数据目录 / 卸载（移到废纸篓）；「新建扩展」选模板（脚本 / UI / 两者）即生成带 `bolt.d.ts`、`gpui-kit.d.ts` 的可运行扩展目录，IDE 直接补全。

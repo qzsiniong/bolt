@@ -872,6 +872,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bolt-console",
+ "bolt-extensions",
  "bolt-lsp",
  "bolt-model",
  "bolt-ts",
@@ -889,12 +890,11 @@ dependencies = [
  "lsp-types",
  "objc2 0.6.5",
  "parking_lot",
- "plux-js-manager",
- "plux-rs",
  "raw-window-handle",
  "reqwest",
  "rqrr",
  "rquickjs",
+ "semver",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -908,6 +908,21 @@ name = "bolt-console"
 version = "0.1.0"
 dependencies = [
  "chrono",
+]
+
+[[package]]
+name = "bolt-extensions"
+version = "0.1.0"
+dependencies = [
+ "crossbeam-channel",
+ "parking_lot",
+ "rquickjs",
+ "semver",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -6655,34 +6670,6 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
-name = "plux-js-manager"
-version = "0.1.0"
-dependencies = [
- "crossbeam-channel",
- "parking_lot",
- "plux-rs",
- "rquickjs",
- "semver",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "plux-rs"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0407b917df54993f095cfd521cfc10b0f6427eda62888f6bb0877f8c0cacee5"
-dependencies = [
- "rayon",
- "semver",
- "serde",
- "thiserror 2.0.21",
-]
 
 [[package]]
 name = "png"

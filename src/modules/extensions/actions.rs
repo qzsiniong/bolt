@@ -6,8 +6,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use plux_rs::Bundle;
-
 use super::host::{CommandTarget, ExtensionEntry};
 use super::ops;
 use crate::app::launcher::{DialogSpec, ItemAction};
@@ -15,41 +13,37 @@ use crate::app::launcher::{DialogSpec, ItemAction};
 /// 一次管理动作作用的对象：全是快照值，可以 move 进闭包。
 #[derive(Clone)]
 pub(crate) struct ActionSubject {
-    pub(crate) bundle: Bundle,
     pub(crate) extension_id: String,
+    pub(crate) extension_version: String,
     pub(crate) extension_name: String,
     pub(crate) root: PathBuf,
     pub(crate) enabled: bool,
-    /// 声明依赖它的已注册扩展（只有管理窗口能算出来；Launcher 侧为空）。
-    pub(crate) dependents: Vec<Bundle>,
 }
 
 impl ActionSubject {
     pub(crate) fn from_target(target: &CommandTarget) -> Self {
         Self {
-            bundle: target.bundle.clone(),
             extension_id: target.extension_id.clone(),
+            extension_version: target.extension_version.clone(),
             extension_name: target.extension_name.clone(),
             root: target.root.clone(),
             // 能出现在 Launcher 里的扩展一定是启用的（禁用项被 commands() 过滤）。
             enabled: true,
-            dependents: Vec::new(),
         }
     }
 
     pub(crate) fn from_entry(entry: &ExtensionEntry) -> Self {
         Self {
-            bundle: entry.bundle.clone(),
-            extension_id: entry.bundle.id.clone(),
+            extension_id: entry.id.clone(),
+            extension_version: entry.version.clone(),
             extension_name: entry.name.clone(),
             root: entry.root.clone(),
             enabled: entry.enabled,
-            dependents: entry.dependents.clone(),
         }
     }
 
     pub(crate) fn label(&self) -> String {
-        format!("{} v{}", self.extension_name, self.bundle.version)
+        format!("{} v{}", self.extension_name, self.extension_version)
     }
 }
 
@@ -131,12 +125,11 @@ mod tests {
 
     fn subject(enabled: bool) -> ActionSubject {
         ActionSubject {
-            bundle: Bundle::from_filename("demo-v1.0.0.js").expect("valid bundle"),
             extension_id: "demo".to_string(),
+            extension_version: "1.0.0".to_string(),
             extension_name: "Demo".to_string(),
-            root: PathBuf::from("/tmp/demo-v1.0.0.js"),
+            root: PathBuf::from("/tmp/demo"),
             enabled,
-            dependents: Vec::new(),
         }
     }
 
@@ -174,11 +167,9 @@ mod tests {
     }
 
     #[test]
-    fn uninstall_description_mentions_dependents() {
-        let mut subject = subject(true);
-        subject.dependents = vec![Bundle::from_filename("app-v1.0.0.js").unwrap()];
+    fn uninstall_description_mentions_data_recovery() {
+        let subject = subject(true);
         let text = ops::uninstall_description(&subject);
-        assert!(text.contains("依赖"), "{text}");
-        assert!(text.contains("app v1.0.0"), "{text}");
+        assert!(text.contains("废纸篓"), "{text}");
     }
 }

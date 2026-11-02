@@ -21,14 +21,14 @@ npm i -g typescript-language-server typescript
 cargo run                        # 调试运行
 cargo build                      # 仅构建
 cargo test --workspace           # 运行全部测试（bolt + crates/ 下全部 crate）
-cargo test -p plux-js-manager    # 只跑扩展运行时那部分
+cargo test -p bolt-extensions    # 只跑扩展运行时那部分
 cargo test -p bolt-lsp           # 只跑 LSP 客户端
 ./scripts/build-macos-app.sh          # 打包成 target/release/Bolt.app
 ./scripts/build-macos-app.sh --sign   # 打包 + ad-hoc 签名（绕过 Gatekeeper）
 ./scripts/build-macos-app.sh --clean  # 先 cargo clean 再完整打包
 ```
 
-工程是 cargo workspace：根包 `bolt` 是应用本体，[crates/](../crates) 下是脱离 gpui 可独立编译、单独测试的组件（切分标准与清单见 [architecture.md](architecture.md)）：[plux-js-manager](../crates/plux-js-manager)（JS 扩展 manager）、`bolt-console`（Console 输出通道）、`bolt-ts`（swc 类型擦除）、`bolt-lsp`（LSP 客户端）、`bolt-model`（脚本领域模型与数据目录）。`[patch]` / `[profile]` 只在 workspace 根生效。
+工程是 cargo workspace：根包 `bolt` 是应用本体，[crates/](../crates) 下是脱离 gpui 可独立编译、单独测试的组件（切分标准与清单见 [architecture.md](architecture.md)）：[bolt-extensions](../crates/bolt-extensions)（JS 扩展注册表与运行时，通用可复用、不含宿主业务逻辑）、`bolt-console`（Console 输出通道）、`bolt-ts`（swc 类型擦除）、`bolt-lsp`（LSP 客户端）、`bolt-model`（脚本领域模型与数据目录）。`[patch]` / `[profile]` 只在 workspace 根生效。
 
 ### 依赖说明（无本地补丁）
 

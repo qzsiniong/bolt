@@ -1,15 +1,12 @@
 //! 「新建扩展」的文件生成：校验 → 模板 → 写盘 → 类型声明。
 //!
-//! 目录名是 plux 的 bundle 唯一事实来源（`<id>-v<version>.js`），所以校验的最
-//! 后一步是**把目录名再解析回来**比对：字符白名单挡不住 `-v` / `.` 这类会让
-//! `Bundle::from_filename` 拆错的情况。
+//! 扩展目录就是 `<id>/`（目录名 = 扩展 id），id 规则与清单校验共用
+//! `bolt_extensions::manifest::valid_id` 这一份。
 //!
 //! 生成物自带类型提示：脚本模板写 `bolt.d.ts`（宿主模块的 `declare module`），
 //! UI 模板写 `gpui-kit.d.ts` + `jsconfig.json`（gpui-shell 的编辑器配置）。
 
 use std::path::{Path, PathBuf};
-
-use plux_rs::Bundle;
 
 use super::manifest::{MANIFEST_FILE, active_extensions_dir};
 use crate::host::HostRegistry;
@@ -54,10 +51,6 @@ pub(crate) struct ExtensionSpec {
 }
 
 impl ExtensionSpec {
-    pub(crate) fn dir_name(&self) -> String {
-        dir_name(self.id.trim(), self.version.trim())
-    }
-
     fn display_name(&self) -> String {
         let name = self.name.trim();
         if name.is_empty() {
@@ -81,43 +74,19 @@ pub(crate) struct SpecError {
     pub(crate) message: String,
 }
 
-/// `<id>-v<version>.js`：plux 的 bundle 约定，别处不要再拼一遍。
-pub(crate) fn dir_name(id: &str, version: &str) -> String {
-    format!("{id}-v{version}.js")
-}
-
-/// 校验并返回解析好的 bundle。字段级错误一次全给，表单可以标出每一行。
-pub(crate) fn validate(spec: &ExtensionSpec) -> Result<Bundle, Vec<SpecError>> {
+/// 校验表单输入。字段级错误一次全给，表单可以标出每一行。
+///
+/// id 规则与清单校验共用 `valid_id`；version 非空时必须是合法语义化版本，
+/// 留空则清单侧按缺省 `1.0.0` 处理。
+pub(crate) fn validate(spec: &ExtensionSpec) -> Result<(), Vec<SpecError>> {
     let mut errors = Vec::new();
     let id = spec.id.trim();
     let version = spec.version.trim();
 
-    if id.is_empty() {
+    if let Err(message) = bolt_extensions::manifest::valid_id(id) {
         errors.push(SpecError {
             field: Field::Id,
-            message: "id 不能为空".to_string(),
-        });
-    } else if id.len() > 64 {
-        errors.push(SpecError {
-            field: Field::Id,
-            message: "id 最长 64 个字符".to_string(),
-        });
-    } else if !id
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        errors.push(SpecError {
-            field: Field::Id,
-            message: "id 只能用小写字母、数字和连字符，且以字母或数字开头".to_string(),
-        });
-    } else if id.ends_with('-') {
-        errors.push(SpecError {
-            field: Field::Id,
-            message: "id 不能以连字符结尾".to_string(),
+            message,
         });
     }
 
@@ -129,60 +98,29 @@ pub(crate) fn validate(spec: &ExtensionSpec) -> Result<Bundle, Vec<SpecError>> {
         });
     }
 
-    if version.is_empty() {
-        errors.push(SpecError {
-            field: Field::Version,
-            message: "版本不能为空".to_string(),
-        });
-    }
-
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-
-    let file = dir_name(id, version);
-    let bundle = match Bundle::from_filename(&file) {
-        Ok(bundle) => bundle,
-        Err(_) => {
-            return Err(vec![SpecError {
-                field: Field::Version,
-                message: format!("`{version}` 不是合法语义化版本（示例：1.0.0）"),
-            }]);
-        }
-    };
-
-    // 回读校验：目录名解析回来的 id / 版本必须与输入一致。
-    if bundle.id != id {
-        errors.push(SpecError {
-            field: Field::Id,
-            message: format!(
-                "`{id}` 拼成目录名 `{file}` 后会被解析成 id `{}`，请换一个 id",
-                bundle.id
-            ),
-        });
-    }
-    if bundle.version.to_string() != version {
+    if !version.is_empty() && semver::Version::parse(version).is_err() {
         errors.push(SpecError {
             field: Field::Version,
             message: format!("`{version}` 不是合法语义化版本（示例：1.0.0）"),
         });
     }
-    if !errors.is_empty() {
-        return Err(errors);
-    }
 
-    Ok(bundle)
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
-/// 目标目录（[`active_extensions_dir`] 下）。
+/// 目标目录（[`active_extensions_dir`] 下）：目录名就是扩展 id。
 ///
 /// 必须跟着**实际生效**的目录走：debug 构建下宿主扫的是仓库 `extensions/`，
 /// 若写到用户数据目录，扩展建完永远不会被扫描到（Launcher 里也没有命令）。
 pub(crate) fn target_dir(spec: &ExtensionSpec) -> PathBuf {
-    active_extensions_dir().join(spec.dir_name())
+    active_extensions_dir().join(spec.id.trim())
 }
 
-/// 目录已存在时不允许覆盖：同 id 换版本请改版本号，否则改 id。
+/// 目录已存在时不允许覆盖：请换一个 id，或先卸载旧扩展。
 pub(crate) fn conflict(spec: &ExtensionSpec) -> Option<String> {
     conflict_in(&target_dir(spec))
 }
@@ -191,28 +129,8 @@ pub(crate) fn conflict(spec: &ExtensionSpec) -> Option<String> {
 fn conflict_in(root: &Path) -> Option<String> {
     root.exists().then(|| {
         format!(
-            "目录已存在：{}\n同一个 id 想装第二个版本请改版本号；否则换一个 id。",
+            "目录已存在：{}\n请换一个 id，或先卸载旧扩展。",
             root.display()
-        )
-    })
-}
-
-/// 同 id 的其他版本：合法（最高版本生效），但值得提醒一句。
-pub(crate) fn shadow_warning(spec: &ExtensionSpec) -> Option<String> {
-    let dir = active_extensions_dir();
-    let prefix = format!("{}-v", spec.id.trim());
-    let others: Vec<String> = std::fs::read_dir(&dir)
-        .ok()?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-        .filter(|name| name.starts_with(&prefix) && name.ends_with(".js"))
-        .filter(|name| name != &spec.dir_name())
-        .collect();
-    (!others.is_empty()).then(|| {
-        format!(
-            "同 id 已有版本：{}。多版本可以共存，Launcher 只显示最高版本。",
-            others.join("、")
         )
     })
 }
@@ -375,14 +293,14 @@ pub(crate) struct ScaffoldOutcome {
 /// 顺序有讲究：`jsconfig.json` 不被 `dir_fingerprint` 忽略，必须和清单、入口
 /// 一次性写完，否则第一次 refresh 就会把新扩展判成"内容已变更"。
 ///
-/// 写盘失败会把刚建的目录整个删掉：否则半成品一直占着这个 `<id>-v<ver>.js`，
+/// 写盘失败会把刚建的目录整个删掉：否则半成品一直占着这个 `<id>/`，
 /// 用户修好问题再点「创建」只会得到「目录已存在」，再也无法重试。
 pub(crate) fn scaffold(
     dir: &Path,
     spec: &ExtensionSpec,
     registry: &HostRegistry,
 ) -> Result<ScaffoldOutcome, String> {
-    let bundle = validate(spec).map_err(|errors| {
+    validate(spec).map_err(|errors| {
         errors
             .into_iter()
             .map(|error| error.message)
@@ -390,7 +308,7 @@ pub(crate) fn scaffold(
             .join("；")
     })?;
 
-    let root = dir.join(dir_name(bundle.id.as_str(), &bundle.version.to_string()));
+    let root = dir.join(spec.id.trim());
     if let Some(conflict) = conflict_in(&root) {
         return Err(conflict);
     }
@@ -418,7 +336,7 @@ mod tests {
     use super::*;
     use crate::modules::extensions::manifest::{bundled_extensions_dir, uses_bundled_extensions};
     use crate::test_support::TempDir;
-    use plux_js_manager::MANIFEST_FILE;
+    use bolt_extensions::MANIFEST_FILE;
 
     fn spec(id: &str, template: Template) -> ExtensionSpec {
         ExtensionSpec {
@@ -446,8 +364,8 @@ mod tests {
         let tmp = TempDir::new("scaffold-script");
         let outcome = scaffold_into(&tmp, &spec("hello", Template::Script));
 
-        // 最有价值的一条：生成物本身就是 plux 能读的扩展。
-        let package = plux_js_manager::manifest::read(&outcome.root).expect("valid manifest");
+        // 最有价值的一条：生成物本身就是运行时能读的扩展。
+        let package = bolt_extensions::manifest::read(&outcome.root).expect("valid manifest");
         assert_eq!(package.manifest.id, "hello");
         assert_eq!(package.manifest.commands.len(), 1);
         assert!(package.entry.is_some());
@@ -460,7 +378,7 @@ mod tests {
         let tmp = TempDir::new("scaffold-ui");
         let outcome = scaffold_into(&tmp, &spec("panel", Template::Ui));
 
-        let package = plux_js_manager::manifest::read(&outcome.root).expect("valid manifest");
+        let package = bolt_extensions::manifest::read(&outcome.root).expect("valid manifest");
         assert!(package.entry.is_none(), "纯 UI 扩展不该有脚本入口");
         assert!(package.main.is_some());
         assert!(outcome.root.join("main.js").is_file());
@@ -475,7 +393,7 @@ mod tests {
         let tmp = TempDir::new("scaffold-both");
         let outcome = scaffold_into(&tmp, &spec("combo", Template::Both));
 
-        let package = plux_js_manager::manifest::read(&outcome.root).expect("valid manifest");
+        let package = bolt_extensions::manifest::read(&outcome.root).expect("valid manifest");
         assert_eq!(package.manifest.commands.len(), 2);
         assert!(outcome.root.join("index.js").is_file());
         assert!(outcome.root.join("main.js").is_file());
@@ -529,7 +447,7 @@ mod tests {
     fn the_form_preview_and_the_refusal_use_the_same_words() {
         let tmp = TempDir::new("scaffold-conflict-text");
         let spec = spec("demo", Template::Script);
-        let root = tmp.0.join(spec.dir_name());
+        let root = tmp.0.join(spec.id.trim());
         assert_eq!(conflict_in(&root), None, "还没建的时候不该报冲突");
 
         scaffold_into(&tmp, &spec);

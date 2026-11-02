@@ -1,5 +1,5 @@
 //! Extensions 模块的应用级状态：UI 命令窗口单例、扩展资源源、gpui-shell 运行时、
-//! plux 扩展宿主。
+//! 扩展宿主。
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ pub(crate) struct ExtensionsState {
     /// UI 命令运行的 gpui-shell 运行时。`None` 表示初始化失败，打开 UI 命令时报错
     /// 而不是拖垮整个应用。
     pub(crate) shell_runtime: Option<Rc<gpui_shell::ShellRuntime>>,
-    /// plux 扩展宿主。`collect_items` 只拿到 `&App`，而注册扩展要 `&mut Loader`，
+    /// 扩展宿主。`collect_items` 只拿到 `&App`，而注册扩展要 `&mut` 注册表，
     /// 故用 `RefCell`（GPUI 单线程，不会并发借用）。
     pub(crate) host: RefCell<ExtensionsHost>,
     /// 「扩展管理」窗口单例。

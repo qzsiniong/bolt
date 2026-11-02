@@ -1,9 +1,9 @@
-//! 扩展目录指纹：判断「同一 id、同一版本」的目录内容有没有被改过。
+//! 扩展目录指纹：判断「同一 id」的目录内容有没有被改过。
 //!
-//! plux 的扩展身份只有 `(id, version)`：对已存在的键，`register_plugin` 直接回
-//! `AlreadyExistsIDAndVersion`，既不重读清单、也不碰运行时。而开发期最常见的
-//! 动作恰恰是「改完代码忘了升版本号」——磁盘变了，注册表里的元数据和跑着的引擎
-//! 却都停在旧内容上，宿主还以为一切正常。指纹就是让宿主自己发现这件事的依据。
+//! 注册表对已存在的 id 只在内容变化时才重新登记（见
+//! [`crate::registry::ExtensionRegistry::register`]）；而开发期最常见的动作恰恰
+//! 是「改完代码就期待生效」——磁盘变了，注册表里的元数据和跑着的引擎却都停在
+//! 旧内容上。指纹就是发现这件事的依据。
 //!
 //! 取 `(相对路径, 大小, mtime)` 的哈希而不是文件内容哈希：扩展目录里可能躺着
 //! 整包前端资源，逐字节读会把"打开一次 Launcher"变成一次全目录 IO。代价是
@@ -99,7 +99,7 @@ mod tests {
     use crate::test_support::TempDir;
 
     fn extension_dir(tmp: &TempDir) -> PathBuf {
-        let root = tmp.0.join("demo-v1.0.0.js");
+        let root = tmp.0.join("demo");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("extension.json"), "{}").unwrap();
         std::fs::write(root.join("index.js"), "export function a() {}").unwrap();

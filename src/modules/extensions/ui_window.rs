@@ -87,7 +87,7 @@ struct ChromeAction {
 #[derive(Clone, Debug)]
 enum ChromeKind {
     Builtin(UiBuiltin),
-    /// 点击执行该脚本命令（走 plux 运行时；输出进 Console，无法回写本窗口 UI）。
+    /// 点击执行该脚本命令（走扩展运行时；输出进 Console，无法回写本窗口 UI）。
     Command(Box<CommandTarget>),
 }
 
@@ -523,8 +523,7 @@ mod tests {
     /// 模块/组件/样式方法都会让它失败。
     #[gpui_kit::test]
     fn json_editor_extension_ui_loads(cx: &mut gpui_kit::TestAppContext) {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("extensions/json-editor-v1.0.0.js");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/json-editor");
         assert!(dir.is_dir(), "缺少仓库扩展目录 {}", dir.display());
         check_loads(&dir, cx);
     }

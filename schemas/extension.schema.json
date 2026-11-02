@@ -1,9 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "bolt 扩展清单（extension.json）",
-  "description": "扩展目录里的清单。目录名 `<id>-v<version>.js` 是 plux bundle 的唯一事实来源：id / version 可以整行省略（省略即取目录名），写了就必须与目录名逐字一致。宿主对未知字段宽容（忽略），本 schema 用 additionalProperties: false 把拼错的字段名标出来。",
+  "description": "扩展目录里的清单。清单是元数据的唯一事实来源：id 必填（扩展身份），version 缺省 1.0.0；目录名只是文件夹名，不参与身份。宿主对未知字段宽容（忽略），本 schema 用 additionalProperties: false 把拼错的字段名标出来。",
   "type": "object",
   "additionalProperties": false,
+  "required": ["id"],
   "properties": {
     "$schema": {
       "type": "string",
@@ -13,12 +14,12 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "maxLength": 64,
-      "markdownDescription": "扩展标识。**省略时取目录名里的 id**，写了必须一致。只能用小写字母、数字和连字符，且以字母或数字开头。"
+      "markdownDescription": "扩展标识（**必填**）。扩展的身份，同一时刻同 id 只能注册一份；也是扩展数据目录的名字。只能用小写字母、数字和连字符，且以字母或数字开头、结尾。"
     },
     "version": {
       "type": "string",
       "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$",
-      "description": "语义化版本。省略时取目录名里的版本，写了必须一致。"
+      "description": "语义化版本。缺省 1.0.0。"
     },
     "name": {
       "type": "string",
@@ -40,26 +41,6 @@
       "pattern": "\\.(js|ts)$",
       "default": "index.js",
       "description": "脚本命令入口，默认 index.js，只接受 .js / .ts。纯 UI 扩展（没有脚本命令）不需要它，也不用在目录里放 index.js。"
-    },
-    "depends": {
-      "type": "array",
-      "uniqueItems": true,
-      "description": "必装依赖，每项形如 \"other@^1.0\"；不带 @ 表示任意版本。",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9-]*(@.+)?$",
-        "description": "依赖的扩展 id，可带 @版本要求。"
-      }
-    },
-    "optional_depends": {
-      "type": "array",
-      "uniqueItems": true,
-      "description": "可选依赖：装了才用，没装也能跑。",
-      "items": {
-        "type": "string",
-        "pattern": "^[a-z0-9][a-z0-9-]*(@.+)?$",
-        "description": "依赖的扩展 id，可带 @版本要求。"
-      }
     },
     "permissions": {
       "type": "array",
@@ -87,7 +68,7 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "description": "命令标识，扩展内唯一。脚本命令里它就是入口模块要导出的函数名（也支持 export default 对象 / globalThis.plux.commands 挂载）。"
+          "description": "命令标识，扩展内唯一。脚本命令里它就是入口模块要导出的函数名（也支持 export default 对象 / globalThis.bolt.commands 挂载）。"
         },
         "title": {
           "type": "string",
