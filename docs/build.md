@@ -82,6 +82,16 @@ scripts/
 
 [.github/workflows/release.yml](../.github/workflows/release.yml)：打 `v*` tag（如 `v0.1.0`）自动打包发布；`workflow_dispatch` 手动触发只出 artifact、不发 Release（先试跑流水线用）。
 
+日常发版用 [scripts/release.sh](../scripts/release.sh)：
+
+```bash
+scripts/release.sh patch            # 0.1.0 → 0.1.1：改版本号、跑门禁，交互问是否提交/打 tag/推送
+scripts/release.sh minor --commit   # 只提交不打扰
+scripts/release.sh 0.2.0 -y         # 改版本 → 门禁 → 提交 → tag → 推送，全自动（触发发版）
+```
+
+脚本会把根 `Cargo.toml` 与 5 个成员 crate 的版本一起改、`cargo update -w` 同步 Cargo.lock、跑与 CI 相同的门禁（`cargo test` + `clippy -D warnings`，`--no-check` 跳过）。推送 tag 即触发下面的流水线。
+
 流水线：复用 `ci.yml` 全量检查 → 校验 tag 与根 `Cargo.toml` 的 version 一致 → 双平台打包：
 
 - **macOS**：`build-macos-app.sh --universal --sign` → dmg（`Bolt_<版本>_macos_universal.dmg`）。
